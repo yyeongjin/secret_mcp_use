@@ -45,6 +45,145 @@
 - `main`, `auto/<target>/<section>/<fingerprint>`, `validation-state`와 모든 자동 PR은 `secret_mcp_use` 저장소에만 존재한다.
 - 문서에서 별도 저장소 표기가 없는 `저장소`, `main`, `프론트엔드`, `target repository`는 모두 `secret_mcp_use`를 뜻한다.
 
+## 실행 기준 명세서
+
+이 파이프라인의 실제 구현 기준은 `secret_mcp_use/trigger/` 아래에 커밋된 작품별 `DESIGN_INDEX` 문서다.
+
+현재 예시 target의 기준 문서:
+
+```text
+trigger/DESIGN_INDEX_gdweb-26357.md
+```
+
+문서별 역할은 다음과 같이 구분한다.
+
+| 입력 | 역할 | 코드 patch 값의 출처가 될 수 있는가? |
+| --- | --- | --- |
+| `trigger/DESIGN_INDEX_gdweb-<id>.md` | 작품별 페이지, 좌표, 색상, 타이포그래피, 레이아웃, 반응형과 상호작용의 실행 계약 | 예. 코드에 넣을 실제 값의 최우선 출처 |
+| `DESIGN_INDEX_SPECIFICATION.md` | 작품별 문서가 반드시 가져야 할 19개 구조와 검증 규칙 | 아니요. 필수 항목과 형식만 정의 |
+| 작품별 Request Contract | 요청 경계, reference ID, Evidence 목록과 생성 조건 | 직접 값이 명시된 경우에만 보조 근거 |
+| Evidence | trigger 문서의 측정값과 관찰값을 검증하는 원본 근거 | trigger와 일치할 때만 사용 |
+| 현재 frontend 코드 | 명세와 비교할 실제 구현 상태 | 기대값이 아니라 검사 대상 |
+
+### 기준 우선순위
+
+1. 오케스트레이터는 공통 Specification으로 필수 Requirement ID와 입력 형식을 결정한다.
+2. 각 Requirement의 기대값은 `trigger/DESIGN_INDEX_gdweb-<id>.md`의 같은 번호 Section에서 읽는다.
+3. Evidence는 trigger 값의 출처와 신뢰 수준을 확인하는 데 사용한다.
+4. frontend 코드는 기대값과 비교할 observed implementation으로만 읽는다.
+5. 공통 Specification의 예시 수치나 다른 작품의 trigger 값은 현재 작품 patch에 사용할 수 없다.
+
+Specification, trigger, Request Contract와 Evidence가 서로 충돌하면 어느 하나를 LLM이 임의로 선택하지 않는다. 해당 Requirement를 `BLOCKED_CONTRACT_CONFLICT`로 표시하고 PR을 만들지 않는다.
+
+### S01-S19 추출 규칙
+
+한 작품의 trigger 문서를 Markdown AST로 파싱해 다음처럼 정확히 19개의 입력 fragment를 만든다.
+
+```text
+S01 = trigger 문서의 "## 1. ..." 전체
+S02 = trigger 문서의 "## 2. ..." 전체
+...
+S19 = trigger 문서의 "## 19. ..." 전체
+```
+
+각 Section의 모든 하위 heading, 표, code block과 페이지별 하위 내용은 해당 fragment에 포함한다. 다음 번호의 `## N.` heading이 시작되는 지점에서 fragment를 종료한다.
+
+강제 규칙:
+
+- trigger 문서 하나는 작품 하나만 나타낸다.
+- 작품 하나당 S01-S19 NVIDIA audit 요청 19개를 만든다.
+- 여러 trigger 문서를 한 target이나 한 요청에 합치지 않는다.
+- trigger 문서가 두 개면 작품별 run 두 개와 최대 38개의 독립 audit 요청으로 분리한다.
+- 1~19번 중 하나가 없거나 중복되면 NVIDIA 호출 전에 `FAILED_TRIGGER_STRUCTURE`로 중단한다.
+- 빠진 trigger Section을 공통 Specification 본문으로 대신 채우지 않는다.
+- Section fragment가 비어 있으면 코드 patch를 만들지 않고 먼저 DESIGN_INDEX 문서 누락으로 보고한다.
+- audit와 patch prompt에는 현재 Section의 trigger fragment만 전달한다.
+
+### trigger 고정 manifest
+
+모든 run은 분석한 trigger 파일과 hash를 고정한다.
+
+```json
+{
+  "schemaVersion": "design-validation/trigger-source/v2",
+  "repository": "yyeongjin/secret_mcp_use",
+  "path": "trigger/DESIGN_INDEX_gdweb-26357.md",
+  "referenceId": "gdweb-26357",
+  "contentHash": "sha256:...",
+  "specificationPath": "DESIGN_INDEX_SPECIFICATION.md",
+  "specificationHash": "sha256:...",
+  "sectionMap": {
+    "S01": "heading:1",
+    "S02": "heading:2",
+    "S03": "heading:3",
+    "S04": "heading:4",
+    "S05": "heading:5",
+    "S06": "heading:6",
+    "S07": "heading:7",
+    "S08": "heading:8",
+    "S09": "heading:9",
+    "S10": "heading:10",
+    "S11": "heading:11",
+    "S12": "heading:12",
+    "S13": "heading:13",
+    "S14": "heading:14",
+    "S15": "heading:15",
+    "S16": "heading:16",
+    "S17": "heading:17",
+    "S18": "heading:18",
+    "S19": "heading:19"
+  }
+}
+```
+
+run 도중 trigger 파일 hash가 바뀌면 실행을 계속하지 않는다. 현재 run을 `STALE_TRIGGER`로 종료하고 새 hash로 S01-S19 입력을 다시 만든다.
+
+### trigger 불변 입력 규칙
+
+`trigger/DESIGN_INDEX_gdweb-*`는 이 파이프라인의 read-only input이다. 파이프라인은 어떤 단계에서도 이 경로를 생성, 수정, 삭제, rename, format 또는 자동 보정할 수 없다.
+
+```yaml
+immutableInputGlobs:
+  - trigger/DESIGN_INDEX_gdweb-*.md
+
+allowedWriteGlobs:
+  - frontend/**
+  - validation/**
+
+forbiddenWriteGlobs:
+  - trigger/**
+  - DESIGN_INDEX_SPECIFICATION.md
+  - DESIGN_INDEX_SPECIFICATION.ko.md
+```
+
+강제 규칙:
+
+- `secret_mcp` 또는 사람이 trigger 파일을 `secret_mcp_use`에 넣는 행위는 upstream 입력 공급이다.
+- 이 DAG 파이프라인의 GitHub token에는 trigger 경로를 수정하는 권한을 주지 않는다.
+- 모든 NVIDIA patch output의 write-set에서 `trigger/**`를 무조건 거부한다.
+- 자동 PR에 trigger 파일 diff가 한 줄이라도 있으면 PR 생성 전에 전체 patch를 폐기한다.
+- trigger 구조나 내용에 누락이 있어도 이 파이프라인은 문서를 고치지 않는다.
+- 문서 오류는 Requirement ID와 위치만 보고하고 새로운 입력 버전을 기다린다.
+- trigger가 외부 commit으로 변경되면 기존 파일을 이어서 수정한 것으로 처리하지 않고 새로운 content hash의 불변 입력 버전으로 처리한다.
+
+### trigger 유입 이벤트
+
+다음 경로가 GitHub push에서 `added`, `modified` 또는 `renamed` target으로 감지되면 작품별 full audit를 시작한다.
+
+```text
+trigger/DESIGN_INDEX_gdweb-*.md
+```
+
+trigger 유입 이벤트는 부분 증분 검증을 사용하지 않는다.
+
+```text
+trigger file 1개 유입 또는 새 버전 -> S01-S19 독립 NVIDIA audit 19개
+trigger file 2개 유입 또는 새 버전 -> 작품별 run 2개, 독립 NVIDIA audit 총 38개
+frontend code만 변경              -> 영향받은 Section만 증분 audit
+```
+
+trigger 문서에서 실제로 바뀐 줄이 S05뿐이어도 새 trigger content hash가 들어온 것이므로 S01-S19 전체를 다시 각각 호출한다. 이는 한 작품 명세서 전체를 하나의 versioned input contract로 취급하기 때문이다.
+
 ## 절대 규칙
 
 ### 요청 독립성
@@ -76,9 +215,13 @@
 - `PASS`
 - `CACHED_PASS`
 - `BLOCKED_MISSING_EVIDENCE`
+- `BLOCKED_CONTRACT_CONFLICT`
 - `BLOCKED_DEPENDENCY`
 - `BLOCKED_PATCH_TOO_LARGE`
 - `BLOCKED_CONFLICT`
+- `BLOCKED_IMMUTABLE_INPUT_WRITE`
+- `FAILED_TRIGGER_STRUCTURE`
+- `STALE_TRIGGER`
 - `ERROR`
 - diff가 비어 있는 경우
 - 애플리케이션 코드 변경 없이 검증 기록만 있는 경우
@@ -89,9 +232,9 @@ PASS 기록을 남기기 위해 빈 PR이나 report-only PR을 만드는 방식�
 
 ```mermaid
 flowchart TD
-    Producer["secret_mcp: DESIGN_INDEX 입력 묶음 생성"] --> Import["secret_mcp_use: 읽기 전용 입력으로 가져오기"]
+    Producer["secret_mcp: DESIGN_INDEX 입력 묶음 생성"] --> Trigger["외부 입력: secret_mcp_use/trigger에 작품별 명세서 유입"]
     Push["secret_mcp_use main push 또는 수동 실행"] --> Snapshot["입력 스냅샷과 영향 범위 계산"]
-    Import --> Snapshot
+    Trigger --> Snapshot
     Snapshot --> Fingerprint["S01-S19 fingerprint 계산"]
     Fingerprint --> Fanout["오케스트레이터가 S01-S19 입력 19개 생성"]
     Fanout --> Cache{"노드별 동일 PASS 증명서가 있는가?"}
@@ -170,6 +313,10 @@ merge                  = LLM 호출 0개, 오케스트레이터 코드만 사용
   "runId": "run-2026-08-20-001",
   "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
   "mode": "full",
+  "triggerSource": {
+    "path": "trigger/DESIGN_INDEX_gdweb-26357.md",
+    "documentHash": "sha256:..."
+  },
   "expectedSections": [
     "S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08", "S09", "S10",
     "S11", "S12", "S13", "S14", "S15", "S16", "S17", "S18", "S19"
@@ -294,6 +441,8 @@ yyeongjin-secret-mcp-use--gdweb-26357
   "schemaVersion": "design-validation/v2",
   "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
   "sectionId": "S12",
+  "triggerPath": "trigger/DESIGN_INDEX_gdweb-26357.md",
+  "triggerDocumentHash": "sha256:...",
   "specificationFragmentHash": "sha256:...",
   "designIndexFragmentHash": "sha256:...",
   "evidenceSubsetHash": "sha256:...",
@@ -339,6 +488,12 @@ interface NodeAuditInput<TPayload> {
   contract: {
     specificationVersion: string;
     specificationFragment: string;
+    designIndexSource: {
+      path: `trigger/DESIGN_INDEX_gdweb-${string}.md`;
+      referenceId: `gdweb-${string}`;
+      documentHash: `sha256:${string}`;
+      sectionHeading: string;
+    };
     designIndexFragment: string;
   };
   evidence: Array<{
@@ -359,6 +514,7 @@ interface NodeAuditInput<TPayload> {
   policy: {
     allowedReadGlobs: string[];
     allowedWriteGlobs: string[];
+    immutableInputGlobs: ['trigger/**'];
     forbiddenOperations: string[];
     maxChangedFiles: number;
     maxChangedLines: number;
@@ -376,7 +532,7 @@ interface NodeAuditOutput {
   schemaVersion: 'design-validation/audit-output/v2';
   sectionId: SectionId;
   fingerprint: `sha256:${string}`;
-  status: 'PASS' | 'PATCH_REQUIRED' | 'BLOCKED_MISSING_EVIDENCE' | 'UNKNOWN';
+  status: 'PASS' | 'PATCH_REQUIRED' | 'BLOCKED_MISSING_EVIDENCE' | 'BLOCKED_CONTRACT_CONFLICT' | 'UNKNOWN';
   findings: Array<{
     requirementId: string;
     pageId: string | null;
@@ -412,6 +568,7 @@ interface NodePatchInput<TPayload> {
   fingerprint: `sha256:${string}`;
   baseCommit: string;
   findings: NodeAuditOutput['findings'];
+  designIndexSource: NodeAuditInput<unknown>['contract']['designIndexSource'];
   specificationFragment: string;
   designIndexFragment: string;
   evidence: NodeAuditInput<unknown>['evidence'];
@@ -509,7 +666,7 @@ patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제
 
 **출력 `publicOutput`:** `evidenceIds`, `coordinateSystemDigest`, `pageEvidenceMap`, `unusableEvidenceIds`.
 
-**자동 수정 범위:** Evidence manifest 파일만 허용한다. 원본 이미지 픽셀을 추정해서 수정하지 않는다.
+**자동 수정 범위:** frontend가 별도로 소유한 Evidence adapter metadata만 허용한다. `trigger/**`의 문서, 표와 Evidence manifest는 수정하지 않으며 원본 이미지 픽셀도 추정해서 바꾸지 않는다.
 
 ### S03 사이트 맵과 라우트
 
@@ -695,6 +852,11 @@ PASS와 병합 완료는 다음 정적 증명서로 남긴다.
   "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
   "sectionId": "S12",
   "fingerprint": "sha256:...",
+  "triggerSource": {
+    "path": "trigger/DESIGN_INDEX_gdweb-26357.md",
+    "documentHash": "sha256:...",
+    "fragmentHash": "sha256:..."
+  },
   "status": "PASS",
   "baseCommit": "<main-sha>",
   "source": "fresh-audit",
@@ -804,7 +966,9 @@ interface ChangeEvent {
 | 들어온 변경 | 최초 dirty Section | NVIDIA audit 호출 | PR 동작 |
 | --- | --- | --- | --- |
 | `README.md`, 일반 문서만 변경 | 없음 | 0개 | PR 없음, 기존 PASS 유지 |
-| `trigger/DESIGN_INDEX_*.md`의 S05 조각 변경 | S05 | S05 1개, `publicDigest` 변경 시 후행 노드를 각자 호출 | 실제 frontend 누락이 검증된 노드만 PR |
+| 새 `trigger/DESIGN_INDEX_gdweb-<id>.md` 추가 | S01-S19 | 새 작품 run에서 정확히 19개 독립 호출 | trigger는 수정하지 않고 frontend 누락만 PR |
+| 기존 `trigger/DESIGN_INDEX_gdweb-<id>.md`에 새 버전 유입 | S01-S19 | 변경 Section 수와 무관하게 정확히 19개 독립 호출 | trigger는 수정하지 않고 새 hash 기준 frontend 누락만 PR |
+| trigger 문서의 번호 Section 누락·중복 | 실행 전 구조 오류 | 0개 | `FAILED_TRIGGER_STRUCTURE`, PR 없음 |
 | Request Contract 변경 | contract가 소유한 Section | 해당 Section별 독립 호출 | 코드 patch가 필요한 Section만 PR |
 | Evidence 이미지 또는 crop metadata 변경 | S02와 Evidence를 직접 읽는 노드 | S02부터 DAG를 따라 별도 호출 | 새 근거로 기존 값이 무효화되면 patch PR |
 | route 파일 추가·수정 | S03 | S03 1개 후 digest 변경 시 S04, S05, S06, S11, S15, S16 등 후행 호출 | 누락 route 구현만 S03 PR |
@@ -1059,6 +1223,31 @@ NVIDIA diff           = src/components/navigation/Nav.tsx + src/pages/Home.tsx
 3. 이번 실행은 S01-S19 전체 독립 audit 19개로 전환한다.
 4. 실행 후 새 파일을 어느 노드가 읽고 쓸지 `impact-manifest.yml` 보정 작업을 만든다.
 
+### 사례 S: `secret_mcp`에서 새 작품 명세서를 trigger에 넣은 경우
+
+입력:
+
+```text
+trigger/DESIGN_INDEX_gdweb-30000.md added
+```
+
+동작:
+
+1. 파일 이름과 문서 reference ID가 일치하는지 확인한다.
+2. Markdown AST로 `## 1`부터 `## 19`까지 정확히 한 번씩 존재하는지 검사한다.
+3. gdweb-30000을 기존 작품과 분리된 새 target ID로 만든다.
+4. 해당 trigger 문서의 S01-S19 fragment로 NVIDIA audit 요청 19개를 만든다.
+5. 기존 gdweb-26357의 문서, Evidence, 응답과 PASS 증명서는 어느 요청에도 넣지 않는다.
+6. 코드 patch는 gdweb-30000 trigger의 값과 Evidence로 증명되는 누락에 대해서만 생성한다.
+
+### 사례 T: trigger 명세서에 S12가 빠진 경우
+
+1. 오케스트레이터의 1~19 heading 검사가 S12 부재를 발견한다.
+2. 공통 Specification의 S12 본문을 대신 NVIDIA에 보내지 않는다.
+3. frontend 코드를 보고 반응형 값을 추정하지 않는다.
+4. NVIDIA audit 호출을 시작하지 않고 전체 run을 `FAILED_TRIGGER_STRUCTURE`로 종료한다.
+5. 파이프라인은 trigger를 수정하지 않는다. `secret_mcp` 또는 사람이 완전한 새 입력 버전을 넣었을 때 새 content hash로 다시 실행한다.
+
 ## DAG 스케줄러
 
 audit queue와 patch queue의 준비 조건을 분리한다.
@@ -1129,6 +1318,7 @@ patch.diff != ""
 schema validation == PASS
 base hashes == current hashes
 allowed write paths == PASS
+immutable trigger paths untouched == PASS
 git apply --check == PASS
 scope guard == PASS
 build/lint/test == PASS
@@ -1161,6 +1351,11 @@ PR을 만들기 전에 branch 이름, PR label, PR body의 hidden marker를 검�
   "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
   "sectionId": "S12",
   "fingerprint": "sha256:...",
+  "triggerSource": {
+    "path": "trigger/DESIGN_INDEX_gdweb-26357.md",
+    "documentHash": "sha256:...",
+    "sectionHeading": "12. Responsive Behavior Matrix"
+  },
   "baseCommit": "<main-sha>",
   "requirementIds": ["S12-BREAKPOINT-390-001"],
   "patchHash": "sha256:...",
@@ -1170,6 +1365,7 @@ PR을 만들기 전에 branch 이름, PR label, PR body의 hidden marker를 검�
   "checks": {
     "schema": "PASS",
     "scope": "PASS",
+    "immutableInputs": "PASS",
     "build": "PASS",
     "test": "PASS",
     "regression": "PASS"
@@ -1223,6 +1419,8 @@ awaiting-review
 
 - Requirement: `S09-COLOR-SURFACE-004`
 - Evidence: `E-D01`
+- Trigger source: `trigger/DESIGN_INDEX_gdweb-26357.md` section 9
+- Trigger document hash: `sha256:...`
 - DESIGN_INDEX value: `#F5F7FA`, `rgb(245 247 250)`, `hsl(216 33% 97%)`
 
 ## Independent NVIDIA Requests
@@ -1459,16 +1657,20 @@ DISCOVERED
 
 - `BLOCKED_MISSING_EVIDENCE`
 - `BLOCKED_MISSING_VALUE`
+- `BLOCKED_CONTRACT_CONFLICT`
 - `BLOCKED_DEPENDENCY`
 - `BLOCKED_CONFLICT`
 - `BLOCKED_CROSS_OWNER_CHANGE`
+- `BLOCKED_IMMUTABLE_INPUT_WRITE`
 - `BLOCKED_PATCH_TOO_LARGE`
 - `FAILED_SCHEMA`
+- `FAILED_TRIGGER_STRUCTURE`
 - `FAILED_SCOPE_GUARD`
 - `FAILED_BUILD`
 - `FAILED_TEST`
 - `FAILED_REGRESSION`
 - `STALE_BASE`
+- `STALE_TRIGGER`
 
 중단된 노드는 PR을 만들지 않고 GitHub Check에 정확한 Requirement ID와 재개 조건만 표시한다.
 
