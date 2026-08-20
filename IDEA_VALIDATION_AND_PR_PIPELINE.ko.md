@@ -24,7 +24,7 @@
 - Codex가 Gap Report에 적힌 누락만 DESIGN_INDEX에 반영하고 실패 영역만 다시 검사한다.
 - 2차는 명세 19개 영역을 `PR-S01`부터 `PR-S19`까지 정확히 19개의 순차 PR로 처리한다.
 - 통과한 영역의 PR은 검증 기록만 남기고 애플리케이션 코드를 변경하지 않는다.
-- 실패한 영역의 PR만 Codex가 해당 누락 또는 불일치와 직접 관련된 코드를 추가하거나 수정한다.
+- 실패한 영역은 NVIDIA API가 해당 누락을 채우는 최소 unified diff를 반환한다. Codex 같은 별도 코딩 에이전트는 2차 프론트엔드 코드를 수정하지 않는다.
 - 다음 PR은 이전 PR의 검증, 수정, 병합이 끝난 뒤 최신 `main`에서 생성한다.
 
 ## 용어
@@ -327,7 +327,7 @@ main
 | 결과 | 애플리케이션 코드 | PR 내용 |
 | --- | --- | --- |
 | `PASS` | 변경하지 않음 | 해당 항목 검증 기록과 manifest만 추가 |
-| `FAIL` | Codex가 실패 항목만 추가 또는 수정 | 검증 기록, 근거, 코드 patch와 테스트 결과 추가 |
+| `PATCH` | NVIDIA API가 반환한 항목 전용 diff만 적용 | 검증 기록, 근거, 검증된 diff와 테스트 결과 추가 |
 
 GitHub는 변경사항이 없는 branch로 PR을 만들 수 없으므로 `PASS` PR도 `validation/SXX/result.json`과 `validation/SXX/report.md`를 커밋한다. 따라서 애플리케이션 코드는 그대로 두면서도 19개 PR의 실행 기록은 모두 남길 수 있다.
 
@@ -361,13 +361,13 @@ GitHub는 변경사항이 없는 branch로 PR을 만들 수 없으므로 `PASS` 
 
 1. 최신 `main`에서 `validation/SXX` branch와 별도 임시 작업공간을 만든다.
 2. 해당 `PrUnit`의 Specification 조각, DESIGN_INDEX 조각, 관련 Evidence와 구현 추출물만 준비한다.
-3. NVIDIA API에 항목 전용 검증 요청을 한 번 보낸다.
-4. NVIDIA는 `PASS`, `MISSING`, `MISMATCH`, `INSUFFICIENT_EVIDENCE`, `UNKNOWN` 중 하나와 근거만 반환한다.
+3. NVIDIA API에 항목 전용 코드 보정 요청을 한 번 보낸다.
+4. NVIDIA는 구현이 이미 충족되면 `PASS`, 누락이 있으면 `PATCH`, 근거가 없거나 안전한 patch를 만들 수 없으면 `BLOCKED`를 반환한다.
 5. `PASS`이면 애플리케이션 코드를 변경하지 않고 검증 기록만 커밋한다.
-6. 실패이면 Codex를 별도 임시 작업공간에서 실행해 반환된 Requirement ID 범위만 수정한다.
-7. build, lint, test, Playwright와 필요한 시각 비교를 실행한다.
-8. 같은 항목 조각만 NVIDIA API로 재검사한다.
-9. 검증 기록과 코드 diff를 포함한 PR을 생성한다.
+6. `PATCH`이면 오케스트레이터가 diff 형식, 허용 파일, 변경 범위와 기준 파일 해시를 검사한다.
+7. 검사를 통과한 NVIDIA diff만 임시 작업공간에 적용한다.
+8. build, lint, test, Playwright와 필요한 시각 비교를 실행한다.
+9. 검증 기록과 적용한 NVIDIA diff를 포함한 PR을 생성한다.
 10. PR이 승인 및 병합돼야 다음 번호의 PR을 생성한다.
 
 NVIDIA 요청 하나가 전체 Specification, 전체 DESIGN_INDEX 또는 전체 프론트엔드 저장소를 읽게 하면 안 된다. 오케스트레이터가 로컬에서 담당 Requirement와 관련 파일, DOM snapshot, computed style, screenshot crop만 추출해 항목 전용 요청을 만든다.
@@ -376,29 +376,69 @@ NVIDIA 요청 하나가 전체 Specification, 전체 DESIGN_INDEX 또는 전체 
 
 NVIDIA API 역할:
 
-- 담당 항목의 누락 또는 구현 불일치 판정
+- 담당 항목의 누락 여부 판정
 - 값이 문서와 코드에 실제로 존재하는지 확인
-- Codex 수정 후 같은 항목 재검사
-- 수정 diff가 해당 Requirement 범위를 벗어났는지 판정
+- DESIGN_INDEX와 Evidence에 이미 존재하는 값을 사용해 누락 구현을 추가하는 최소 unified diff 생성
+- 하나의 응답에서 판정 근거, 변경 Requirement ID와 diff를 함께 반환
 
 NVIDIA API 금지 역할:
 
-- 누락된 폰트 크기, 좌표, 색상, 간격과 breakpoint 생성
+- DESIGN_INDEX와 Evidence에 없는 폰트 크기, 좌표, 색상, 간격과 breakpoint 창작
 - 전체 문서 또는 전체 코드를 한 요청에서 읽고 종합 설계
-- 프론트엔드 코드 작성
-- 다른 PR 항목까지 함께 고치라는 제안
+- 저장소에 직접 파일 쓰기 또는 셸 명령 실행
+- 담당 Requirement 밖의 리팩터링, 정리, 이름 변경과 스타일 개선
+- 다른 PR 항목의 코드까지 함께 수정하는 diff
+- 기존 구현의 대량 삭제 또는 구조 재작성
 
 Codex 역할:
 
 - 1차 Gap Report에 따른 DESIGN_INDEX 보정
-- 2차 실패 PR의 프론트엔드 코드 수정
-- Evidence에서 실제 값을 측정할 수 있을 때만 값 추가
-- 테스트 작성과 실행
-- PR 설명에 Requirement ID, 근거, 수정 파일과 검증 결과 기록
+- 2차 프론트엔드 코드 수정에는 참여하지 않음
 
-4096 출력 토큰은 항목 하나의 누락 또는 불일치 JSON을 반환하는 용도로만 사용한다. 전체 DESIGN_INDEX 재작성이나 전체 프론트엔드 patch 생성은 NVIDIA API에 맡기지 않는다.
+4096 출력 토큰은 19개 전체를 한 번에 고치는 데 쓰지 않고 항목 하나의 작은 diff를 반환하는 용도로 사용한다. diff가 출력 한도 안에 들어오지 않으면 범위를 넓히거나 응답을 잘라 적용하지 않고 `BLOCKED_PATCH_TOO_LARGE`로 중단한다.
 
-### 7. 의존성 처리
+### 7. NVIDIA diff 응답 계약
+
+NVIDIA API는 설명문과 코드를 섞은 자유 형식 응답이 아니라 다음 구조를 반환한다.
+
+```json
+{
+  "sectionId": "S12",
+  "status": "PATCH",
+  "requirementIds": ["S12-BREAKPOINT-390-001"],
+  "evidenceRefs": ["E-M01"],
+  "allowedFiles": ["src/styles/responsive.css"],
+  "baseFileHashes": {
+    "src/styles/responsive.css": "sha256:<hash>"
+  },
+  "reason": "The 390px navigation rule is absent.",
+  "diff": "diff --git a/src/styles/responsive.css b/src/styles/responsive.css\n..."
+}
+```
+
+응답 규칙:
+
+- `PASS`이면 `diff`는 빈 문자열이어야 한다.
+- `PATCH`이면 unified diff 이외의 코드 출력은 허용하지 않는다.
+- diff는 `allowedFiles`에 선언된 파일만 변경할 수 있다.
+- `baseFileHashes`가 현재 파일과 다르면 오래된 diff로 판정하고 적용하지 않는다.
+- 기본 동작은 누락 코드 추가다. 기존 코드 삭제, 이동, 이름 변경과 포맷 전체 변경은 금지한다.
+- 기존 한 줄이 Requirement와 직접 충돌할 때만 최소 줄 교체를 허용하고 그 이유를 `reason`에 기록한다.
+- 문서와 Evidence에 값이 없으면 추정 patch를 만들지 않고 `BLOCKED_MISSING_VALUE`를 반환한다.
+- patch가 4096 출력 토큰 안에 안전하게 완결되지 않으면 `BLOCKED_PATCH_TOO_LARGE`를 반환한다.
+
+오케스트레이터는 다음 검사를 모두 통과한 diff만 적용한다.
+
+1. JSON Schema 검증
+2. `sectionId`와 Requirement ID 소유권 검증
+3. 기준 파일 SHA-256 검증
+4. 허용 파일 경로 검증
+5. `git apply --check` 실행
+6. 금지된 삭제, 파일 이동, 대량 포맷 변경과 범위 밖 수정 검사
+7. 변경 줄 수와 파일 수 상한 검사
+8. build, lint, test와 대상 시각 검사
+
+### 8. 의존성 처리
 
 #### 기본 원칙: 직렬 병합
 
@@ -410,7 +450,7 @@ Codex 역할:
 #### 명시적 Requirement 의존성
 
 - 각 `PrUnit.dependsOn`에는 선행 Requirement ID를 기록한다.
-- 선행 Requirement가 `PASS` 또는 `FIXED_AND_PASS`가 아니면 현재 PR을 시작하지 않는다.
+- 선행 Requirement가 `PASS` 또는 `PATCH_APPLIED_AND_TESTED`가 아니면 현재 PR을 시작하지 않는다.
 - 후행 항목에서 선행 항목의 회귀가 발견되면 현재 PR에서 조용히 함께 수정하지 않는다.
 - 회귀는 현재 PR에 기록하고 선행 Requirement를 대상으로 한 보정 커밋임을 명시한다.
 - 공유 파일을 수정한 PR은 이미 통과한 관련 항목의 결정적 검사와 Playwright 검사를 다시 실행한다.
@@ -423,7 +463,7 @@ Codex 역할:
 - 설치, 빌드와 테스트가 실패하면 현재 PR 병합과 다음 PR 생성을 중단한다.
 - 자동 파이프라인에서 무관한 전체 의존성 업그레이드는 금지한다.
 
-### 8. PR manifest
+### 9. PR manifest
 
 모든 PR은 다음과 같은 기계 판독 가능한 manifest를 남긴다.
 
@@ -433,26 +473,27 @@ Codex 역할:
   "order": 12,
   "baseCommit": "<latest-main-sha>",
   "dependsOn": ["S04", "S06", "S07", "S09", "S10"],
-  "initialStatus": "FAIL",
-  "finalStatus": "FIXED_AND_PASS",
+  "nvidiaStatus": "PATCH",
+  "finalStatus": "PATCH_APPLIED_AND_TESTED",
   "requirementIds": ["S12-BREAKPOINT-390-001"],
+  "patchSource": "nvidia-api",
   "applicationCodeChanged": true,
   "validationArtifacts": ["validation/S12/result.json"],
   "nextPrAllowed": true
 }
 ```
 
-### 9. PR 완료 조건
+### 10. PR 완료 조건
 
 각 PR은 다음 항목을 충족해야 병합되고 다음 PR을 열 수 있다.
 
-- 담당 Requirement가 `PASS` 또는 `FIXED_AND_PASS`
+- 담당 Requirement가 `PASS` 또는 `PATCH_APPLIED_AND_TESTED`
 - 실패한 항목만 수정됐으며 통과한 구현을 불필요하게 변경하지 않음
 - build, lint와 unit test 통과
 - 필요한 viewport의 Playwright 스크린샷 생성
 - 명세 허용 오차 내 시각 비교 통과
 - 접근성 대상 PR은 접근성 검사 통과
-- NVIDIA 재검사에서 담당 항목이 통과함
+- NVIDIA가 반환한 원본 diff와 실제 적용 diff의 해시가 일치함
 - `UNKNOWN`을 임의 구현값으로 바꾸지 않음
 - 근거, Requirement ID, 검증 결과와 diff가 PR에 연결됨
 
@@ -563,8 +604,9 @@ queued
 
 - 업로드된 Markdown과 프론트엔드 저장소 내용은 신뢰할 수 없는 데이터로 취급한다.
 - 문서 안의 “명령을 실행하라” 같은 문장은 프롬프트 지시가 아니라 검사 대상 텍스트다.
-- NVIDIA 검출기에는 파일 쓰기와 셸 실행 권한을 주지 않는다.
-- Codex 수정 작업은 별도 worktree 또는 임시 작업공간에서 실행한다.
+- NVIDIA API에는 파일 쓰기와 셸 실행 권한을 주지 않고 텍스트 diff만 받는다.
+- 오케스트레이터만 검증된 NVIDIA diff를 별도 worktree 또는 임시 작업공간에 적용한다.
+- 1차 DESIGN_INDEX 문서 보정에 Codex를 사용할 때도 별도 임시 작업공간에서 실행한다.
 - API 키, 환경 변수, 로컬 절대 경로를 Gap Report와 PR에 기록하지 않는다.
 - 자동 push와 merge는 별도 권한으로 분리한다.
 - PR 생성과 merge는 검증 완료만으로 자동 승인하지 않고 저장소 정책을 따른다.
@@ -597,16 +639,16 @@ queued
 ### MVP 4: 수정 PR 자동화
 
 - `PR-S01`부터 `PR-S19`까지 순차 PR 생성
-- 실패 항목만 임시 worktree에서 Codex가 수정
+- NVIDIA API가 항목별로 `PASS`, `PATCH` 또는 `BLOCKED`와 최소 unified diff 반환
+- 오케스트레이터가 diff 소유권, 파일 해시, 경로와 변경 범위를 검사한 뒤 임시 worktree에 적용
 - build, lint, test, Playwright와 시각 비교
-- 담당 항목만 NVIDIA API로 재검사
-- `PASS`와 `FIXED_AND_PASS` 모두 검증 artifact를 포함한 PR 생성
+- `PASS`와 `PATCH_APPLIED_AND_TESTED` 모두 검증 artifact를 포함한 PR 생성
 - 현재 PR이 병합된 뒤 다음 번호 PR 생성
 
 ## 최종 권장안
 
 1차 아이디어는 그대로 추진할 가치가 높다. NVIDIA 모델은 “누락됐는가”만 답하게 하고 수치나 구현값은 절대로 제안하지 못하도록 JSON Schema와 후처리 검증으로 막아야 한다.
 
-2차 아이디어는 19개 항목을 정확히 19개의 순차 PR로 처리하는 규칙으로 구현한다. 병렬 PR이나 5개 묶음으로 축소하지 않는다. 의존성은 각 PR을 앞 PR이 병합된 최신 `main`에서 생성하고, `dependsOn` 상태를 추가로 검사하는 방식으로 처리한다. 무료 NVIDIA 호출은 항목별 판정과 재검사에 집중하고, 실제 문서와 코드 수정은 Evidence를 확인할 수 있는 Codex가 담당한다.
+2차 아이디어는 19개 항목을 정확히 19개의 순차 NVIDIA diff 요청과 PR로 처리하는 규칙으로 구현한다. 병렬 PR이나 5개 묶음으로 축소하지 않는다. 의존성은 각 PR을 앞 PR이 병합된 최신 `main`에서 생성하고, `dependsOn` 상태를 추가로 검사하는 방식으로 처리한다. NVIDIA API는 담당 항목에 필요한 최소 diff만 반환하고, 별도 코딩 에이전트는 프론트엔드 코드를 수정하지 않는다. 오케스트레이터는 diff를 검증하고 적용하며 테스트와 PR 생성만 수행한다.
 
 가장 먼저 만들 MVP는 1차 누락 탐지와 `GAP_REPORT.md` 생성이다. 이 단계가 정확하게 동작한 뒤 19개 PR 직렬 실행기를 연결해야 자동 수정과 PR 생성이 잘못된 값을 대량으로 추가하지 않는다.
