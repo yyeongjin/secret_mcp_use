@@ -15,14 +15,17 @@
 
 여기서 독립 검사는 단순히 프롬프트만 19개로 나눈다는 뜻이 아니다. NVIDIA 요청 하나가 전체 DESIGN_INDEX와 Specification 전체를 읽게 하면 독립 검사의 의미가 약해진다. 오케스트레이터만 전체 문서를 구조적으로 파싱하고, 각 API 요청에는 19개 중 담당 영역 하나의 규칙과 문서 조각, 관련 Evidence만 전달해야 한다. 다른 18개 영역의 본문과 이전 검사 응답은 전달하지 않는다.
 
-2차 단계에서 명세와 프론트엔드 구현을 비교해 통과한 부분은 그대로 두고 실패한 부분만 수정하는 접근도 타당하다. 다만 19개 명세 영역을 곧바로 19개 PR로 만들면 공통 토큰, 내비게이션, 컴포넌트, 페이지 레이아웃 사이의 의존성 때문에 충돌이 커질 가능성이 높다.
+2차 단계도 사용자가 제안한 방식 그대로 구현할 수 있다. 명세의 19개 영역을 19개의 PR 실행 단위로 만들고 `S01`부터 `S19`까지 순차 처리한다. 각 PR은 바로 앞 PR이 병합된 최신 기준 커밋에서 시작하므로 공통 토큰, 내비게이션, 컴포넌트와 페이지 레이아웃 사이의 의존성을 자연스럽게 이어받는다.
 
-권장 구조는 다음과 같다.
+이 문서에서 확정하는 구조는 다음과 같다.
 
-- 검증 단위는 19개로 유지한다.
-- GitHub 상태 체크도 19개로 유지할 수 있다.
-- 수정 작업은 의존성 그래프에 따라 4개에서 6개 정도의 PR 묶음으로 만든다.
-- 반드시 19개 PR이 필요하면 일반 PR이 아니라 선행 PR을 명시한 stacked PR로 운영한다.
+- 1차는 19개의 독립 NVIDIA API 요청으로 누락만 검출한다.
+- 19개 응답을 코드로 병합해 하나의 Gap Report를 만든다.
+- Codex가 Gap Report에 적힌 누락만 DESIGN_INDEX에 반영하고 실패 영역만 다시 검사한다.
+- 2차는 명세 19개 영역을 `PR-S01`부터 `PR-S19`까지 정확히 19개의 순차 PR로 처리한다.
+- 통과한 영역의 PR은 검증 기록만 남기고 애플리케이션 코드를 변경하지 않는다.
+- 실패한 영역의 PR만 Codex가 해당 누락 또는 불일치와 직접 관련된 코드를 추가하거나 수정한다.
+- 다음 PR은 이전 PR의 검증, 수정, 병합이 끝난 뒤 최신 `main`에서 생성한다.
 
 ## 용어
 
@@ -49,12 +52,12 @@ flowchart TD
     Empty -->|아니요| Repair["Codex가 근거가 있는 누락만 보정"]
     Repair --> Reaudit["실패 영역만 재검사"]
     Reaudit --> Empty
-    Ready --> Parse["DESIGN_INDEX를 정규화된 Requirement Graph로 변환"]
-    Frontend["프론트엔드 저장소"] --> Checks["19개 구현 적합성 체크"]
-    Parse --> Checks
-    Checks --> Plan["실패 항목을 의존성별 수정 묶음으로 계획"]
-    Plan --> PR["Codex 수정 + 테스트 + 시각 검증 + PR"]
-    PR --> Review["NVIDIA 재검사 + CI + 사람 검토"]
+    Ready --> Parse["DESIGN_INDEX를 19개 PR 입력으로 정규화"]
+    Frontend["프론트엔드 저장소"] --> PR01["PR-S01 생성 및 검증"]
+    Parse --> PR01
+    PR01 --> Serial["앞 PR 병합 후 다음 PR 생성"]
+    Serial --> PR19["PR-S19까지 순차 반복"]
+    PR19 --> Complete["19개 PR 파이프라인 완료"]
 ```
 
 ## 1차: DESIGN_INDEX 누락 검증
@@ -272,155 +275,186 @@ Codex 수정 규칙:
 - `UNKNOWN`과 `INSUFFICIENT_EVIDENCE`만 남으면 사람 또는 Evidence 추가 대기 상태로 전환
 - 새 누락 수가 이전 반복보다 증가하면 회귀로 판정하고 마지막 patch를 되돌리지 말고 검토 대기 상태로 전환
 
-## 2차: DESIGN_INDEX와 프론트엔드 구현 검증
+## 2차: 19개 순차 PR 프론트엔드 보정
 
 ### 1. 입력
 
 - 1차 검증을 통과한 DESIGN_INDEX
-- Specification 버전과 해시
+- DESIGN_INDEX Specification 버전과 해시
 - 프론트엔드 저장소와 기준 커밋
-- 실행 명령, 빌드 명령, 테스트 명령
+- 실행, 빌드, lint, 테스트 명령
 - 대상 viewport와 스크린샷 규칙
 - Evidence 이미지와 허용 오차
+- GitHub 저장소, 기본 브랜치와 PR 생성 권한
 
-### 2. 정규화된 Requirement Graph
+### 2. Specification을 19개 PR 변수로 변환
 
-DESIGN_INDEX의 값을 바로 자연어 프롬프트로만 사용하지 않고 중간 표현으로 변환한다.
+Specification과 DESIGN_INDEX를 구조화 파서로 읽고 19개의 실행 단위로 변환한다. Markdown 구조는 AST로 파싱하고, 정규식은 HEX, RGB, HSL, px, viewport, Requirement ID처럼 형식이 고정된 값 추출에만 사용한다.
 
 ```ts
-interface RequirementNode {
-  id: string;
-  specificationSection: number;
+interface PrUnit {
+  id: `S${string}`;
+  order: number;
+  requirementIds: string[];
   pageIds: string[];
   componentIds: string[];
-  sourceLocation: string;
+  specificationFragment: string;
+  designIndexFragment: string;
   evidenceRefs: string[];
   dependsOn: string[];
-  verification: 'static' | 'runtime' | 'visual' | 'manual';
+  verification: Array<'static' | 'runtime' | 'visual' | 'manual'>;
 }
 ```
 
-이 그래프가 있어야 어떤 실패가 다른 실패보다 먼저 수정돼야 하는지 계산할 수 있다.
+생성 결과는 `pr-input/S01.json`부터 `pr-input/S19.json`까지 저장한다. 각 입력에는 담당 항목만 들어가며 다른 18개 항목의 명세 본문, 검사 응답 또는 코드 수정 지시는 포함하지 않는다.
 
-### 3. 19개 검증 체크
+### 3. 정확히 19개의 순차 PR
 
-19개 영역은 각각 독립된 GitHub Check로 표현할 수 있다.
+파이프라인은 `PR-S01`부터 `PR-S19`까지 정확히 19개의 PR을 순서대로 처리한다. 19개 branch를 한꺼번에 만들지 않는다.
 
-| Check | 주요 검증 방식 |
-| --- | --- |
-| S01 Scope | 라우트와 구현 범위 비교 |
-| S02 Evidence | Requirement와 Evidence 연결 검사 |
-| S03 Site Map | 실제 라우터와 페이지 파일 검사 |
-| S04 Shell | DOM, 컨테이너, 전역 레이아웃 검사 |
-| S05 Navigation | DOM, 상태, 키보드, 좌표, 시각 비교 |
-| S06 Page Specs | 페이지별 섹션 순서와 bounds 비교 |
-| S07 Layout | CSS Grid/Flex, gap, overflow 검사 |
-| S08 Components | 컴포넌트 경계, props, 상태 검사 |
-| S09 Tokens | CSS 변수와 색상 형식 검사 |
-| S10 Typography | computed style과 매트릭스 비교 |
-| S11 Assets | 파일, 비율, object-fit, alt 검사 |
-| S12 Responsive | viewport별 Playwright 검사 |
-| S13 Interaction | 상태 전이와 reduced-motion 검사 |
-| S14 Accessibility | axe, 키보드, focus, landmarks 검사 |
-| S15 Data Model | 타입, fixture, empty/error 상태 검사 |
-| S16 Architecture | 라우트와 모듈 경계 검사 |
-| S17 Task Graph | 구현 완료 Requirement 추적 |
-| S18 Acceptance | 스크린샷과 허용 오차 검사 |
-| S19 Uncertainties | UNKNOWN 결정과 구현값 추적 |
+```text
+main
+  -> PR-S01 생성 -> 검증/필요 시 수정 -> 병합
+  -> PR-S02를 최신 main에서 생성 -> 검증/필요 시 수정 -> 병합
+  -> ...
+  -> PR-S19를 최신 main에서 생성 -> 검증/필요 시 수정 -> 병합
+```
 
-통과한 Check는 수정 작업을 만들지 않는다. 실패한 Check만 Gap Finding을 생성한다.
+이 직렬 방식이 기본 의존성 처리다. `PR-S02`는 병합된 `PR-S01`의 결과를 포함하고, `PR-S19`는 앞선 18개 PR의 결과를 모두 포함한 최신 `main`에서 시작한다.
 
-### 4. 19개 PR보다 권장하는 구조
+각 PR은 다음 두 결과 중 하나를 갖는다.
 
-19개 PR을 완전히 독립적으로 만들면 다음 문제가 생긴다.
-
-- S09 토큰 수정과 S10 타이포그래피 수정이 같은 CSS 파일을 건드림
-- S04 Shell과 S05 Navigation이 같은 Header 컴포넌트를 건드림
-- S06 Page와 S07 Layout이 같은 페이지 파일을 건드림
-- S12 Responsive가 앞선 레이아웃 수정에 의존함
-- S18 Acceptance가 거의 모든 앞선 변경에 의존함
-
-권장 PR 묶음:
-
-| PR 단계 | 포함 영역 | 주요 선행 조건 |
+| 결과 | 애플리케이션 코드 | PR 내용 |
 | --- | --- | --- |
-| PR-A Scope and Evidence | S01, S02, S03 | 없음 |
-| PR-B Foundations | S09, S10, S11, S15 | PR-A |
-| PR-C Shell and Architecture | S04, S05, S08, S16 | PR-B |
-| PR-D Pages and Layout | S06, S07 | PR-C |
-| PR-E Behavior and Quality | S12, S13, S14, S17, S18, S19 | PR-D |
+| `PASS` | 변경하지 않음 | 해당 항목 검증 기록과 manifest만 추가 |
+| `FAIL` | Codex가 실패 항목만 추가 또는 수정 | 검증 기록, 근거, 코드 patch와 테스트 결과 추가 |
 
-검증 결과는 19개로 유지되지만 실제 코드 수정은 5개 stacked PR로 관리한다.
+GitHub는 변경사항이 없는 branch로 PR을 만들 수 없으므로 `PASS` PR도 `validation/SXX/result.json`과 `validation/SXX/report.md`를 커밋한다. 따라서 애플리케이션 코드는 그대로 두면서도 19개 PR의 실행 기록은 모두 남길 수 있다.
 
-19개 PR을 반드시 유지해야 한다면 각 PR manifest에 다음 필드를 둔다.
+### 4. 19개 PR 항목
 
-```json
-{
-  "prUnit": "S12",
-  "dependsOn": ["S04", "S06", "S07", "S09", "S10"],
-  "baseMode": "stacked",
-  "status": "blocked"
-}
-```
+| PR | 주요 검증 및 보정 범위 |
+| --- | --- |
+| PR-S01 Scope | 라우트와 구현 범위 |
+| PR-S02 Evidence | Requirement와 Evidence 연결 |
+| PR-S03 Site Map | 실제 라우터와 페이지 파일 |
+| PR-S04 Shell | DOM, 컨테이너, 전역 레이아웃 |
+| PR-S05 Navigation | 내비게이션 DOM, 상태, 키보드, 좌표와 시각 결과 |
+| PR-S06 Page Specs | 페이지별 섹션 순서와 bounds |
+| PR-S07 Layout | CSS Grid/Flex, gap과 overflow |
+| PR-S08 Components | 컴포넌트 경계, props와 상태 |
+| PR-S09 Tokens | CSS 변수와 색상 형식 |
+| PR-S10 Typography | computed style과 타이포그래피 값 |
+| PR-S11 Assets | 파일, 비율, object-fit과 alt |
+| PR-S12 Responsive | viewport별 Playwright 결과 |
+| PR-S13 Interaction | 상태 전이와 reduced-motion |
+| PR-S14 Accessibility | axe, 키보드, focus와 landmarks |
+| PR-S15 Data Model | 타입, fixture, empty/error 상태 |
+| PR-S16 Architecture | 라우트와 모듈 경계 |
+| PR-S17 Task Graph | 구현 완료 Requirement 추적 |
+| PR-S18 Acceptance | 스크린샷과 허용 오차 |
+| PR-S19 Uncertainties | UNKNOWN 결정과 구현값 추적 |
 
-선행 PR이 병합되기 전에는 후행 PR을 생성하지 않거나, 후행 PR의 base를 바로 앞 stacked branch로 설정한다.
+### 5. PR 하나의 실행 절차
 
-### 5. 코드 수정 역할 분리
+각 PR은 다음 순서를 반드시 따른다.
 
-NVIDIA 모델의 권장 역할:
+1. 최신 `main`에서 `validation/SXX` branch와 별도 임시 작업공간을 만든다.
+2. 해당 `PrUnit`의 Specification 조각, DESIGN_INDEX 조각, 관련 Evidence와 구현 추출물만 준비한다.
+3. NVIDIA API에 항목 전용 검증 요청을 한 번 보낸다.
+4. NVIDIA는 `PASS`, `MISSING`, `MISMATCH`, `INSUFFICIENT_EVIDENCE`, `UNKNOWN` 중 하나와 근거만 반환한다.
+5. `PASS`이면 애플리케이션 코드를 변경하지 않고 검증 기록만 커밋한다.
+6. 실패이면 Codex를 별도 임시 작업공간에서 실행해 반환된 Requirement ID 범위만 수정한다.
+7. build, lint, test, Playwright와 필요한 시각 비교를 실행한다.
+8. 같은 항목 조각만 NVIDIA API로 재검사한다.
+9. 검증 기록과 코드 diff를 포함한 PR을 생성한다.
+10. PR이 승인 및 병합돼야 다음 번호의 PR을 생성한다.
 
-- 명세 누락 검출
-- 구현과 Requirement의 불일치 분류
-- diff가 Gap 범위를 벗어났는지 검토
-- 실패 로그 요약
-- PR 재검사
+NVIDIA 요청 하나가 전체 Specification, 전체 DESIGN_INDEX 또는 전체 프론트엔드 저장소를 읽게 하면 안 된다. 오케스트레이터가 로컬에서 담당 Requirement와 관련 파일, DOM snapshot, computed style, screenshot crop만 추출해 항목 전용 요청을 만든다.
 
-Codex의 권장 역할:
+### 6. 역할 분리
 
-- Evidence를 확인한 문서 보정
-- 프론트엔드 코드 수정
-- 테스트 작성
-- Playwright 스크린샷과 시각 비교
-- 의존성 충돌 해결
-- PR 설명과 Requirement 매핑 작성
+NVIDIA API 역할:
 
-출력 제한이 4096인 모델에 전체 프론트엔드 patch를 한 번에 맡기기보다, NVIDIA는 판정기로 사용하고 Codex가 범위가 고정된 patch를 작성하는 편이 안전하다.
+- 담당 항목의 누락 또는 구현 불일치 판정
+- 값이 문서와 코드에 실제로 존재하는지 확인
+- Codex 수정 후 같은 항목 재검사
+- 수정 diff가 해당 Requirement 범위를 벗어났는지 판정
 
-### 6. 의존성 처리
+NVIDIA API 금지 역할:
 
-#### 명세 영역 의존성
+- 누락된 폰트 크기, 좌표, 색상, 간격과 breakpoint 생성
+- 전체 문서 또는 전체 코드를 한 요청에서 읽고 종합 설계
+- 프론트엔드 코드 작성
+- 다른 PR 항목까지 함께 고치라는 제안
 
-Requirement Graph의 `dependsOn`으로 처리한다. 토큰과 공통 컴포넌트를 먼저 고치고 페이지와 반응형 검사를 나중에 실행한다.
+Codex 역할:
+
+- 1차 Gap Report에 따른 DESIGN_INDEX 보정
+- 2차 실패 PR의 프론트엔드 코드 수정
+- Evidence에서 실제 값을 측정할 수 있을 때만 값 추가
+- 테스트 작성과 실행
+- PR 설명에 Requirement ID, 근거, 수정 파일과 검증 결과 기록
+
+4096 출력 토큰은 항목 하나의 누락 또는 불일치 JSON을 반환하는 용도로만 사용한다. 전체 DESIGN_INDEX 재작성이나 전체 프론트엔드 patch 생성은 NVIDIA API에 맡기지 않는다.
+
+### 7. 의존성 처리
+
+#### 기본 원칙: 직렬 병합
+
+- PR은 번호 순서대로 하나씩만 연다.
+- 이전 PR이 병합되지 않으면 다음 PR을 생성하지 않는다.
+- 다음 PR branch는 항상 병합 이후의 최신 `main`에서 만든다.
+- 따라서 앞선 수정이 후행 PR의 입력과 테스트에 자동으로 포함된다.
+
+#### 명시적 Requirement 의존성
+
+- 각 `PrUnit.dependsOn`에는 선행 Requirement ID를 기록한다.
+- 선행 Requirement가 `PASS` 또는 `FIXED_AND_PASS`가 아니면 현재 PR을 시작하지 않는다.
+- 후행 항목에서 선행 항목의 회귀가 발견되면 현재 PR에서 조용히 함께 수정하지 않는다.
+- 회귀는 현재 PR에 기록하고 선행 Requirement를 대상으로 한 보정 커밋임을 명시한다.
+- 공유 파일을 수정한 PR은 이미 통과한 관련 항목의 결정적 검사와 Playwright 검사를 다시 실행한다.
 
 #### 패키지 의존성
 
 - 현재 프로젝트의 package manager와 lockfile을 감지한다.
-- 새 패키지는 Specification상 필요하고 기존 라이브러리로 해결할 수 없을 때만 추가한다.
-- 패키지 추가는 Foundations PR에서만 허용한다.
-- 후행 PR은 lockfile을 수정하지 못하게 제한한다.
-- 설치, 빌드, 테스트가 통과하지 않으면 후행 PR 생성을 중단한다.
-- 의존성 버전 전체 업그레이드는 자동 보정 범위에서 제외한다.
+- 새 패키지는 현재 PR의 Requirement를 기존 의존성으로 구현할 수 없을 때만 추가한다.
+- 패키지 추가 사유와 영향을 받는 후행 PR 목록을 manifest에 기록한다.
+- 설치, 빌드와 테스트가 실패하면 현재 PR 병합과 다음 PR 생성을 중단한다.
+- 자동 파이프라인에서 무관한 전체 의존성 업그레이드는 금지한다.
 
-#### 코드 의존성
+### 8. PR manifest
 
-- Requirement ID와 소유 파일 목록을 유지한다.
-- 같은 파일을 수정하는 영역은 같은 PR 묶음으로 이동한다.
-- 병렬 수정이 필요한 경우 파일 lock 또는 ownership lease를 둔다.
-- 선행 PR 병합 후 후행 branch를 재생성하거나 rebase한다.
+모든 PR은 다음과 같은 기계 판독 가능한 manifest를 남긴다.
 
-### 7. PR 완료 조건
+```json
+{
+  "prUnit": "S12",
+  "order": 12,
+  "baseCommit": "<latest-main-sha>",
+  "dependsOn": ["S04", "S06", "S07", "S09", "S10"],
+  "initialStatus": "FAIL",
+  "finalStatus": "FIXED_AND_PASS",
+  "requirementIds": ["S12-BREAKPOINT-390-001"],
+  "applicationCodeChanged": true,
+  "validationArtifacts": ["validation/S12/result.json"],
+  "nextPrAllowed": true
+}
+```
 
-각 PR은 다음 항목이 모두 충족돼야 완료된다.
+### 9. PR 완료 조건
 
-- 연결된 Gap Finding이 모두 Requirement ID로 추적됨
-- Gap 범위 밖의 변경이 없음
-- build, lint, unit test 통과
+각 PR은 다음 항목을 충족해야 병합되고 다음 PR을 열 수 있다.
+
+- 담당 Requirement가 `PASS` 또는 `FIXED_AND_PASS`
+- 실패한 항목만 수정됐으며 통과한 구현을 불필요하게 변경하지 않음
+- build, lint와 unit test 통과
 - 필요한 viewport의 Playwright 스크린샷 생성
 - 명세 허용 오차 내 시각 비교 통과
-- 접근성 검사 통과
-- NVIDIA 재검사에서 새 누락을 만들지 않았음
-- UNKNOWN 항목을 구현값으로 조용히 바꾸지 않았음
-- 사람이 확인할 근거 이미지와 diff가 PR에 연결됨
+- 접근성 대상 PR은 접근성 검사 통과
+- NVIDIA 재검사에서 담당 항목이 통과함
+- `UNKNOWN`을 임의 구현값으로 바꾸지 않음
+- 근거, Requirement ID, 검증 결과와 diff가 PR에 연결됨
 
 ## NVIDIA API 사용 전제
 
@@ -480,9 +514,18 @@ validation-runs/
     │   ├── iteration-01.patch
     │   └── iteration-01.json
     └── implementation/
-        ├── check-results.json
-        ├── pr-plan.json
-        └── screenshots/
+        ├── pr-input/
+        │   ├── S01.json
+        │   ├── S02.json
+        │   └── ...
+        ├── pr-results/
+        │   ├── S01/
+        │   │   ├── manifest.json
+        │   │   ├── report.md
+        │   │   └── screenshots/
+        │   ├── S02/
+        │   └── ...
+        └── sequence.json
 ```
 
 ## 실행 상태 모델
@@ -495,10 +538,15 @@ queued
   -> repairing
   -> reauditing
   -> document_ready
-  -> implementation_checking
-  -> patching
-  -> visual_verifying
-  -> pr_ready
+  -> pr_s01_preparing
+  -> pr_s01_checking
+  -> pr_s01_patching_or_recording_pass
+  -> pr_s01_verifying
+  -> pr_s01_open
+  -> pr_s01_merged
+  -> pr_s02_preparing
+  -> ...
+  -> pr_s19_merged
   -> completed
 ```
 
@@ -538,24 +586,27 @@ queued
 - 실패 영역만 재검사
 - 최대 반복과 수렴 조건 구현
 
-### MVP 3: 프론트엔드 읽기 전용 검증
+### MVP 3: 19개 PR 입력과 직렬 실행기
 
-- DESIGN_INDEX를 Requirement Graph로 변환
-- 프론트엔드 저장소에서 19개 Check 실행
-- 코드 수정 없이 실패 목록과 의존성 그래프만 생성
+- DESIGN_INDEX를 `S01`부터 `S19`까지 19개 `PrUnit`으로 변환
+- PR 입력마다 담당 명세, 문서, Evidence와 구현 조각만 포함
+- 최신 `main` 기준 branch와 임시 작업공간 생성
+- 이전 PR 병합 전에는 다음 PR을 열지 않는 직렬 상태 제어
+- `PASS` 항목은 애플리케이션 코드를 수정하지 않고 검증 기록만 생성
 
 ### MVP 4: 수정 PR 자동화
 
-- 실패 항목을 PR 묶음으로 계획
-- 임시 worktree에서 Codex 수정
-- build, lint, test, Playwright, 시각 비교
-- NVIDIA 재검사
-- draft PR 생성
+- `PR-S01`부터 `PR-S19`까지 순차 PR 생성
+- 실패 항목만 임시 worktree에서 Codex가 수정
+- build, lint, test, Playwright와 시각 비교
+- 담당 항목만 NVIDIA API로 재검사
+- `PASS`와 `FIXED_AND_PASS` 모두 검증 artifact를 포함한 PR 생성
+- 현재 PR이 병합된 뒤 다음 번호 PR 생성
 
 ## 최종 권장안
 
 1차 아이디어는 그대로 추진할 가치가 높다. NVIDIA 모델은 “누락됐는가”만 답하게 하고 수치나 구현값은 절대로 제안하지 못하도록 JSON Schema와 후처리 검증으로 막아야 한다.
 
-2차 아이디어도 가능하지만 19개 PR을 기본 단위로 삼기보다 19개 검증 Check와 5개 안팎의 의존성 기반 수정 PR을 분리하는 편이 안정적이다. 무료 NVIDIA 호출은 누락 탐지, 분류, 재검사에 집중하고, 실제 문서와 코드 수정은 Evidence를 볼 수 있는 Codex가 담당하는 구성이 가장 현실적이다.
+2차 아이디어는 19개 항목을 정확히 19개의 순차 PR로 처리하는 규칙으로 구현한다. 병렬 PR이나 5개 묶음으로 축소하지 않는다. 의존성은 각 PR을 앞 PR이 병합된 최신 `main`에서 생성하고, `dependsOn` 상태를 추가로 검사하는 방식으로 처리한다. 무료 NVIDIA 호출은 항목별 판정과 재검사에 집중하고, 실제 문서와 코드 수정은 Evidence를 확인할 수 있는 Codex가 담당한다.
 
-가장 먼저 만들 MVP는 1차 누락 탐지와 `GAP_REPORT.md` 생성이다. 이 단계가 정확하게 동작해야 이후 자동 수정과 PR 생성이 잘못된 값을 대량으로 추가하지 않는다.
+가장 먼저 만들 MVP는 1차 누락 탐지와 `GAP_REPORT.md` 생성이다. 이 단계가 정확하게 동작한 뒤 19개 PR 직렬 실행기를 연결해야 자동 수정과 PR 생성이 잘못된 값을 대량으로 추가하지 않는다.
