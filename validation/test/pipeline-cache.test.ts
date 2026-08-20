@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,13 +9,17 @@ import { runPipeline } from "../src/orchestrator.ts";
 test("a second identical run performs zero mock API calls through immutable PASS cache", async () => {
   const root = process.cwd();
   const stateRoot = await mkdtemp(path.join(os.tmpdir(), "secret-mcp-state-"));
-  const outputRoot = path.join(root, ".validation-runs", "cache-test");
+  const outputParent = path.join(root, ".validation-runs");
+  await mkdir(outputParent, { recursive: true });
+  const outputRoot = await mkdtemp(path.join(outputParent, "cache-test-"));
   const config = await loadConfig([
     "--mock",
     "--dry-run",
     "--trigger",
     "trigger/DESIGN_INDEX_gdweb-26357.md",
   ]);
+  assert.equal(config.dryRun, true);
+  assert.equal(config.createPrs, false);
   config.outputRoot = outputRoot;
   config.stateRoot = stateRoot;
 

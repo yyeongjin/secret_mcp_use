@@ -65,8 +65,9 @@ export async function loadConfig(argv = process.argv.slice(2)): Promise<Pipeline
   const triggerPaths = triggerArgs.length > 0 ? triggerArgs : await discoverTriggers(repositoryRoot);
   const mock = hasArg(argv, "--mock") || bool(process.env.NVIDIA_MOCK, false);
   const forceFullAudit = hasArg(argv, "--force-full-audit") || bool(process.env.PIPELINE_FORCE_FULL_AUDIT, false);
-  const dryRun = hasArg(argv, "--dry-run") || bool(process.env.PIPELINE_DRY_RUN, true);
-  const createPrs = hasArg(argv, "--create-prs") || bool(process.env.PIPELINE_CREATE_PRS, false);
+  const explicitDryRun = hasArg(argv, "--dry-run");
+  const dryRun = explicitDryRun || bool(process.env.PIPELINE_DRY_RUN, true);
+  const createPrs = hasArg(argv, "--create-prs") || (!explicitDryRun && bool(process.env.PIPELINE_CREATE_PRS, false));
 
   if (createPrs && dryRun) {
     throw new Error("PIPELINE_CREATE_PRS=true requires PIPELINE_DRY_RUN=false.");
