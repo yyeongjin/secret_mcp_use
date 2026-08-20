@@ -19,7 +19,7 @@ import {
 } from "./nvidia.ts";
 import {
   guardPatch,
-  isRepairablePatchSyntaxError,
+  isRepairablePatchFormatError,
   type GuardedPatch,
 } from "./patch.ts";
 import {
@@ -357,7 +357,7 @@ async function runPatches(args: {
       });
     } catch (error) {
       const initialGuardError = errorMessage(error);
-      if (!isRepairablePatchSyntaxError(error)) {
+      if (!isRepairablePatchFormatError(error)) {
         records.push({ sectionId, status: "BLOCKED_GUARD", reason: initialGuardError });
         continue;
       }

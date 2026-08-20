@@ -124,7 +124,7 @@ Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마
 
 ### 4. 최초 실행 안전 설정
 
-커밋된 push workflow는 `PIPELINE_DRY_RUN=false`, `PIPELINE_CREATE_PRS=true`로 실행합니다. 그렇더라도 모델 출력을 바로 게시할 수는 없습니다. 요청 격리, 응답 schema 검증, 불변 경로 거부, base hash 검증, write 소유권, diff 크기 제한, `git apply --check`, typecheck, 단위 테스트, 데스크톱·모바일 브라우저 테스트, 접근성 회귀 검사, 수정 Section 재감사, 영향받은 기존 PASS 회귀 감사, 열린 PR 충돌 검사와 멱등성 검사를 모두 통과해야 병합되지 않은 draft PR 하나를 생성합니다. 최초 patch가 unified diff 문법 오류만으로 거부되면 같은 Section에 한해 격리된 문법 보정 요청을 한 번 보냅니다. 보안, 소유권, 근거, 테스트 또는 재감사 실패는 보정 재시도 대상이 아니며 두 번째 diff도 잘못되면 격리합니다.
+커밋된 push workflow는 `PIPELINE_DRY_RUN=false`, `PIPELINE_CREATE_PRS=true`로 실행합니다. 그렇더라도 모델 출력을 바로 게시할 수는 없습니다. 요청 격리, 응답 schema 검증, 불변 경로 거부, base hash 검증, write 소유권, diff 크기 제한, `git apply --check`, typecheck, 단위 테스트, 데스크톱·모바일 브라우저 테스트, 접근성 회귀 검사, 수정 Section 재감사, 영향받은 기존 PASS 회귀 감사, 열린 PR 충돌 검사와 멱등성 검사를 모두 통과해야 병합되지 않은 draft PR 하나를 생성합니다. 최초 patch가 unified diff 문법 오류 또는 제공된 원본 파일과 맞지 않는 hunk 문맥만으로 거부되면 같은 Section에 한해 격리된 기계적 보정 요청을 한 번 보냅니다. 보안, 소유권, 근거, 테스트 또는 재감사 실패는 보정 재시도 대상이 아니며 두 번째 diff도 거부되면 격리합니다.
 
 ### 5. 파이프라인 실행과 결과 확인
 
@@ -147,7 +147,7 @@ end-to-end 순서는 다음으로 고정합니다.
   -> 남은 Section마다 stateless NVIDIA audit 요청 하나 전송
   -> 결정적 코드로 JSON 출력 병합
   -> 근거가 있는 PATCH_REQUIRED 노드만 별도 patch 요청 전송
-  -> unified diff 문법 오류일 때만 같은 Section을 한 번 보정 요청
+  -> unified diff 문법 또는 원본 문맥 적용 오류일 때만 같은 Section을 한 번 보정 요청
   -> trigger/spec 쓰기, 오래된 hash, 과도한 diff와 소유권 위반 거부
   -> 임시 worktree에 적용
   -> typecheck, 단위 테스트, 데스크톱·모바일 렌더링, 접근성 검사

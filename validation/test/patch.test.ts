@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { inspectUnifiedDiff, isRepairablePatchSyntaxError } from "../src/patch.ts";
+import { inspectUnifiedDiff, isRepairablePatchFormatError } from "../src/patch.ts";
 
 test("unified diff inspection returns exact frontend write paths", () => {
   const result = inspectUnifiedDiff([
@@ -37,23 +37,29 @@ test("file deletion and path traversal are rejected", () => {
   );
 });
 
-test("only unified-diff syntax failures qualify for one-shot repair", () => {
+test("only mechanical unified-diff failures qualify for one-shot repair", () => {
   assert.equal(
-    isRepairablePatchSyntaxError(new Error("Malformed unified diff file headers.")),
+    isRepairablePatchFormatError(new Error("Malformed unified diff file headers.")),
     true,
   );
   assert.equal(
-    isRepairablePatchSyntaxError(
+    isRepairablePatchFormatError(
       new Error("git apply --check patch.diff failed with 128: error: corrupt patch at line 9"),
     ),
     true,
   );
   assert.equal(
-    isRepairablePatchSyntaxError(
+    isRepairablePatchFormatError(
       new Error("git apply --check patch.diff failed with 1: error: patch failed: frontend/app.js:1"),
     ),
-    false,
+    true,
   );
-  assert.equal(isRepairablePatchSyntaxError(new Error("Unsafe diff path: ../trigger/a.md")), false);
-  assert.equal(isRepairablePatchSyntaxError(new Error("Stale or incorrect base hash")), false);
+  assert.equal(
+    isRepairablePatchFormatError(
+      new Error("git apply --check patch.diff failed with 1: error: frontend/app.js: patch does not apply"),
+    ),
+    true,
+  );
+  assert.equal(isRepairablePatchFormatError(new Error("Unsafe diff path: ../trigger/a.md")), false);
+  assert.equal(isRepairablePatchFormatError(new Error("Stale or incorrect base hash")), false);
 });

@@ -2,6 +2,11 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { hashJson, sha256 } from "./hash.ts";
 import { matchesAnyPath } from "./manifest.ts";
+import {
+  AUDIT_SYSTEM_PROMPT,
+  PATCH_REPAIR_SYSTEM_PROMPT,
+  PATCH_SYSTEM_PROMPT,
+} from "./prompts.ts";
 import type {
   EvidenceReference,
   ImpactManifest,
@@ -116,8 +121,9 @@ export function validatorContractHash(
 ): Sha256 {
   return hashJson({
     schemaVersion: "design-validation/validator-contract/v2",
-    promptVersion: "audit-system/v3-schema-bound",
-    patchPromptVersion: "patch-system/v3-schema-bound",
+    auditPromptHash: sha256(AUDIT_SYSTEM_PROMPT),
+    patchPromptHash: sha256(PATCH_SYSTEM_PROMPT),
+    patchRepairPromptHash: sha256(PATCH_REPAIR_SYSTEM_PROMPT),
     normalizerVersion: "nvidia-output-normalizer/v4-quarantine",
     auditSchemaHash,
     impactManifest: manifest,
