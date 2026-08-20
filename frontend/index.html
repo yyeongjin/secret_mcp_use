@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="게임으로 일상을 연결하는 카카오게임즈 기업 홈페이지 콘셉트"
+    />
+    <title>카카오게임즈 | 일상이 게임이 되는 세상</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&amp;display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">본문 바로가기</a>
+
+    <header class="site-header" data-header>
+      <nav class="site-header__inner" aria-label="주요 메뉴">
+        <a class="brand brand--header" href="#top" aria-current="page" aria-label="카카오게임즈 홈">
+          <span class="brand__kakao">kakao</span><span class="brand__games">games</span>
+        </a>
+
+        <ul class="primary-nav" role="list">
+          <li><a href="#about">소개</a></li>
+          <li><a href="#sustainability">사업소개</a></li>
+          <li><a href="#games">게임</a></li>
+          <li><a href="#news">뉴스룸</a></li>
+          <li><a href="#footer">투자정보</a></li>
+          <li><a href="#sustainability">지속가능경영</a></li>
+          <li><a href="#recruitment">인재영입</a></li>
+        </ul>
+
+        <button class="locale-control" type="button" data-locale aria-label="언어 변경">
+          <i data-lucide="globe-2" aria-hidden="true"></i>
+          <span data-locale-label>KR</span>
+        </button>
+
+        <button
+          class="menu-toggle"
+          type="button"
+          aria-label="메뉴 열기"
+          aria-controls="mobile-menu"
+          aria-expanded="false"
+          title="메뉴"
+          data-menu-open
+        >
+          <i data-lucide="menu" aria-hidden="true"></i>
+        </button>
+      </nav>
+    </header>
+
+    <div class="mobile-menu" id="mobile-menu" aria-hidden="true" data-mobile-menu>
+      <button class="mobile-menu__scrim" type="button" aria-label="메뉴 닫기" data-menu-close></button>
+      <nav class="mobile-menu__panel" aria-label="모바일 메뉴">
+        <div class="mobile-menu__top">
+          <a class="brand" href="#top" aria-label="카카오게임즈 홈">
+            <span class="brand__kakao">kakao</span><span class="brand__games">games</span>
+          </a>
+          <button class="icon-button" type="button" aria-label="메뉴 닫기" title="닫기" data-menu-close>
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+        <ul class="mobile-menu__links" role="list">
+          <li><a href="#about">소개</a></li>
+          <li><a href="#sustainability">사업소개</a></li>
+          <li><a href="#games">게임</a></li>
+          <li><a href="#news">뉴스룸</a></li>
+          <li><a href="#footer">투자정보</a></li>
+          <li><a href="#sustainability">지속가능경영</a></li>
+          <li><a href="#recruitment">인재영입</a></li>
+        </ul>
+        <button class="mobile-menu__locale" type="button" data-locale>
+          <i data-lucide="globe-2" aria-hidden="true"></i>
+          <span data-locale-label>KR</span>
+          <i data-lucide="chevron-down" aria-hidden="true"></i>
+        </button>
+      </nav>
+    </div>
+
+    <main id="main-content">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <img
+          class="hero__image"
+          src="./assets/hero-world.jpg"
+          alt="황금빛 비행 로봇이 빛나는 판타지 세계 위를 날아가는 모습"
+          width="1920"
+          height="1080"
+        />
+        <div class="hero__veil" aria-hidden="true"></div>
+        <div class="hero__content" id="about">
+          <p class="eyebrow eyebrow--light">PLAY CONNECTS EVERYDAY</p>
+          <h1 id="hero-title">일상이 게임이 되는 세상<br />카카오게임즈</h1>
+          <p class="hero__description">
+            새로운 재미와 연결의 경험으로<br />오늘의 일상을 더 즐겁게 만듭니다.
+          </p>
+          <a class="action action--light" href="#sustainability">
+            카카오게임즈 알아보기
+            <i data-lucide="arrow-right" aria-hidden="true"></i>
+          </a>
+        </div>
+        <div class="hero__index" aria-hidden="true"><span>01</span><span class="hero__line"></span><span>04</span></div>
+      </section>
+
+      <section class="sustainability" id="sustainability" aria-labelledby="sustainability-title">
+        <div class="section-heading section-heading--center">
+          <p class="eyebrow">BETTER PLAY, BETTER WORLD</p>
+          <h2 id="sustainability-title">지속가능한 미래를 위한 노력</h2>
+          <p>게임이 만드는 즐거운 연결을 통해 세상에 긍정적인 변화를 더합니다.</p>
+        </div>
+
+        <div class="media-track" role="region" aria-label="지속가능경영 이야기" tabindex="0">
+          <article class="media-feature media-feature--wide">
+            <img src="./assets/sustainability.jpg" alt="도심 하천에 나무를 심는 청년 봉사자들" loading="lazy" />
+            <div class="media-feature__copy">
+              <span>GREEN PLAY</span>
+              <h3>함께 플레이하고, 함께 지키는 내일</h3>
+            </div>
+          </article>
+          <article class="media-feature">
+            <img src="./assets/crew-studio.jpg" alt="게임 스튜디오에서 협업하는 크루들" loading="lazy" />
+            <div class="media-feature__copy"><span>PEOPLE</span><h3>모두의 가능성이 이어지는 환경</h3></div>
+          </article>
+          <article class="media-feature">
+            <img src="./assets/hero-world.jpg" alt="새로운 세계를 여행하는 작은 비행 로봇" loading="lazy" />
+            <div class="media-feature__copy"><span>ACCESSIBILITY</span><h3>누구나 즐길 수 있는 플레이</h3></div>
+          </article>
+          <article class="media-feature">
+            <img src="./assets/game-odin.jpg" alt="거대한 빛의 나무를 바라보는 판타지 수호자" loading="lazy" />
+            <div class="media-feature__copy"><span>TRUST</span><h3>오래 사랑받는 게임을 위한 약속</h3></div>
+          </article>
+        </div>
+
+        <div class="action-group">
+          <a class="action action--dark" href="#news">지속가능경영 소식<i data-lucide="arrow-right" aria-hidden="true"></i></a>
+          <a class="action action--dark" href="#footer">ESG 보고서<i data-lucide="download" aria-hidden="true"></i></a>
+        </div>
+        <div class="decorative-plane decorative-plane--one" aria-hidden="true"></div>
+        <div class="decorative-plane decorative-plane--two" aria-hidden="true"></div>
+      </section>
+
+      <section class="news section-band" id="news" aria-labelledby="news-title">
+        <div class="main-container">
+          <div class="section-heading section-heading--center">
+            <p class="eyebrow">LATEST NEWS</p>
+            <h2 id="news-title">카카오게임즈 최신 뉴스</h2>
+          </div>
+          <div class="editorial-track" role="region" aria-label="최신 뉴스" tabindex="0">
+            <article class="editorial-card">
+              <a href="#footer">
+                <img src="./assets/hero-world.jpg" alt="황금 비행 로봇과 새로운 판타지 세계" loading="lazy" />
+                <div class="editorial-card__body">
+                  <h3>새로운 세계를 연결하는 차세대 프로젝트 공개</h3>
+                  <p><span>보도자료</span><time datetime="2026-08-18">2026. 08. 18</time></p>
+                </div>
+              </a>
+            </article>
+            <article class="editorial-card">
+              <a href="#footer">
+                <img src="./assets/sustainability.jpg" alt="도심 하천 생태 활동에 참여한 크루들" loading="lazy" />
+                <div class="editorial-card__body">
+                  <h3>게임으로 이어진 크루들의 생태 회복 프로젝트</h3>
+                  <p><span>지속가능경영</span><time datetime="2026-08-12">2026. 08. 12</time></p>
+                </div>
+              </a>
+            </article>
+            <article class="editorial-card">
+              <a href="#footer">
+                <img src="./assets/crew-studio.jpg" alt="게임 배경 아트를 검토하는 개발 크루" loading="lazy" />
+                <div class="editorial-card__body">
+                  <h3>크루의 상상이 플레이가 되기까지, 월드 아트팀 이야기</h3>
+                  <p><span>피플</span><time datetime="2026-08-05">2026. 08. 05</time></p>
+                </div>
+              </a>
+            </article>
+          </div>
+          <a class="action action--dark section-action" href="#footer">보도자료 전체보기<i data-lucide="arrow-right" aria-hidden="true"></i></a>
+        </div>
+      </section>
+
+      <section class="games section-band" id="games" aria-labelledby="games-title">
+        <div class="main-container games__grid">
+          <div class="games__copy">
+            <p class="eyebrow">LIVE GAMES</p>
+            <h2 id="games-title">서비스 중인 게임</h2>
+            <p class="games__intro">모바일부터 PC, 콘솔까지.<br />각자의 일상에 새로운 플레이를 전합니다.</p>
+            <div class="game-selector" role="tablist" aria-label="서비스 게임">
+              <button role="tab" aria-selected="true" data-game="odin">오딘: 발할라 라이징</button>
+              <button role="tab" aria-selected="false" data-game="archeage">아키에이지 워</button>
+              <button role="tab" aria-selected="false" data-game="battlegrounds">배틀그라운드</button>
+              <button role="tab" aria-selected="false" data-game="poe">패스 오브 엑자일 2</button>
+              <button role="tab" aria-selected="false" data-game="chrono">크로노오디세이</button>
+            </div>
+            <a class="action action--dark games__action" href="#footer">서비스 게임 전체보기<i data-lucide="arrow-right" aria-hidden="true"></i></a>
+          </div>
+          <div class="game-artwork" role="tabpanel" tabindex="0" aria-live="polite">
+            <img src="./assets/game-odin.jpg" alt="오딘: 발할라 라이징 콘셉트 아트" data-game-image />
+            <div class="game-artwork__caption">
+              <span data-game-platform>PC · MOBILE</span>
+              <strong data-game-title>오딘: 발할라 라이징</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="crew section-band" id="crew" aria-labelledby="crew-title">
+        <div class="main-container">
+          <div class="section-heading section-heading--center">
+            <p class="eyebrow">CREW STORIES</p>
+            <h2 id="crew-title">카카오게임즈 크루들의 생생한 이야기</h2>
+            <p>즐겁고 행복하게, 건강하게 일합니다.</p>
+          </div>
+          <div class="editorial-track" role="region" aria-label="크루 이야기" tabindex="0">
+            <article class="editorial-card">
+              <a href="#footer">
+                <img src="./assets/crew-studio.jpg" alt="게임 배경을 함께 검토하는 크루들" loading="lazy" />
+                <div class="editorial-card__body"><h3>좋은 세계는 좋은 질문에서 시작됩니다</h3><p><span>WORLD ART</span><time datetime="2026-07-28">2026. 07. 28</time></p></div>
+              </a>
+            </article>
+            <article class="editorial-card">
+              <a href="#footer">
+                <img src="./assets/sustainability.jpg" alt="강변에서 함께 나무를 심는 크루들" loading="lazy" />
+                <div class="editorial-card__body"><h3>우리의 플레이가 회사 밖에서도 이어지는 법</h3><p><span>CULTURE</span><time datetime="2026-07-16">2026. 07. 16</time></p></div>
+              </a>
+            </article>
+            <article class="editorial-card">
+              <a href="#footer">
+                <img src="./assets/game-odin.jpg" alt="빛의 나무와 판타지 세계를 바라보는 수호자" loading="lazy" />
+                <div class="editorial-card__body"><h3>한 장면에 오래 머물고 싶은 이유</h3><p><span>GAME DESIGN</span><time datetime="2026-07-02">2026. 07. 02</time></p></div>
+              </a>
+            </article>
+          </div>
+          <a class="action action--dark section-action" href="#footer">크루스토리 전체보기<i data-lucide="arrow-right" aria-hidden="true"></i></a>
+        </div>
+      </section>
+
+      <section class="recruitment" id="recruitment" aria-labelledby="recruitment-title">
+        <div class="recruitment__loop" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="recruitment__copy">
+          <p class="eyebrow">JOIN OUR CREW</p>
+          <h2 id="recruitment-title">게임으로 하나되는 세상<br /><strong>카카오게임즈 크루를 찾습니다!</strong></h2>
+          <a class="action action--primary" href="#footer">채용공고 보기<i data-lucide="arrow-right" aria-hidden="true"></i></a>
+        </div>
+      </section>
+    </main>
+
+    <button class="back-to-top" type="button" aria-label="맨 위로 이동" title="맨 위로" data-back-to-top>
+      <i data-lucide="arrow-up" aria-hidden="true"></i>
+    </button>
+
+    <footer class="site-footer" id="footer">
+      <div class="site-footer__inner">
+        <div class="footer-sitemap">
+          <section><h2>소개</h2><a href="#about">회사소개</a><a href="#crew">크루</a><a href="#footer">오시는 길</a></section>
+          <section><h2>사업소개</h2><a href="#games">퍼블리싱</a><a href="#games">개발</a><a href="#games">파트너십</a></section>
+          <section><h2>게임</h2><a href="#games">모바일</a><a href="#games">PC</a><a href="#games">콘솔</a></section>
+          <section><h2>뉴스룸</h2><a href="#news">보도자료</a><a href="#crew">크루스토리</a><a href="#news">미디어</a></section>
+          <section><h2>투자정보</h2><a href="#footer">기업지배구조</a><a href="#footer">공시정보</a><a href="#footer">IR 자료</a></section>
+          <section><h2>지속가능경영</h2><a href="#sustainability">ESG 전략</a><a href="#sustainability">사회공헌</a><a href="#sustainability">보고서</a></section>
+          <section><h2>인재영입</h2><a href="#recruitment">채용공고</a><a href="#crew">일하는 문화</a><a href="#recruitment">직무소개</a></section>
+        </div>
+
+        <div class="footer-social" aria-label="소셜 미디어">
+          <a href="#footer" aria-label="유튜브" title="유튜브"><i data-lucide="youtube" aria-hidden="true"></i></a>
+          <a href="#footer" aria-label="인스타그램" title="인스타그램"><i data-lucide="instagram" aria-hidden="true"></i></a>
+          <a href="#footer" aria-label="페이스북" title="페이스북"><i data-lucide="facebook" aria-hidden="true"></i></a>
+        </div>
+
+        <div class="footer-bottom">
+          <div>
+            <a class="brand brand--footer" href="#top" aria-label="카카오게임즈 홈"><span class="brand__kakao">kakao</span><span class="brand__games">games</span></a>
+            <div class="footer-legal"><a href="#footer">개인정보처리방침</a><a href="#footer">이용약관</a><a href="#footer">윤리경영</a></div>
+            <p>© KAKAO GAMES CORP. ALL RIGHTS RESERVED.</p>
+          </div>
+          <button class="related-sites" type="button" aria-expanded="false" data-related-sites>
+            관련 사이트
+            <i data-lucide="plus" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>
