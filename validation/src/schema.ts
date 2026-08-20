@@ -3,9 +3,13 @@ import path from "node:path";
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import type { NodeAuditOutput, NodePatchOutput, PipelineConfig, SectionId, Sha256 } from "./types.ts";
 
+export type JsonSchema = Record<string, unknown>;
+
 export interface Validators {
   audit: ValidateFunction<NodeAuditOutput>;
   patch: ValidateFunction<NodePatchOutput>;
+  auditSchema: JsonSchema;
+  patchSchema: JsonSchema;
   auditSchemaBytes: Uint8Array;
 }
 
@@ -16,10 +20,14 @@ export async function loadValidators(config: PipelineConfig): Promise<Validators
   const patchSchemaBytes = await readFile(
     path.join(config.repositoryRoot, "validation/schemas/patch-output.schema.json"),
   );
+  const auditSchema = JSON.parse(auditSchemaBytes.toString("utf8")) as JsonSchema;
+  const patchSchema = JSON.parse(patchSchemaBytes.toString("utf8")) as JsonSchema;
   const ajv = new Ajv2020({ allErrors: true, strict: true });
   return {
-    audit: ajv.compile<NodeAuditOutput>(JSON.parse(auditSchemaBytes.toString("utf8"))),
-    patch: ajv.compile<NodePatchOutput>(JSON.parse(patchSchemaBytes.toString("utf8"))),
+    audit: ajv.compile<NodeAuditOutput>(auditSchema),
+    patch: ajv.compile<NodePatchOutput>(patchSchema),
+    auditSchema,
+    patchSchema,
     auditSchemaBytes,
   };
 }

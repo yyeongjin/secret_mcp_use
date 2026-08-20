@@ -116,8 +116,8 @@ export function validatorContractHash(
 ): Sha256 {
   return hashJson({
     schemaVersion: "design-validation/validator-contract/v2",
-    promptVersion: "audit-system/v2",
-    patchPromptVersion: "patch-system/v2",
+    promptVersion: "audit-system/v3-schema-bound",
+    patchPromptVersion: "patch-system/v3-schema-bound",
     auditSchemaHash,
     impactManifest: manifest,
     maxChangedFiles: config.maxChangedFiles,

@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { hashHex, sha256 } from "./hash.ts";
+import type { JsonSchema } from "./schema.ts";
 import type { PipelineConfig, SectionId, Sha256 } from "./types.ts";
 
 interface ChatCompletionResponse {
@@ -53,7 +54,99 @@ function parseJsonContent(content: string): unknown {
   const trimmed = content.trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
   const candidate = fenced ? fenced[1] : trimmed;
+  if (candidate === "PASS") return candidate;
   return JSON.parse(candidate);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+export function bindOutputSchema(schema: JsonSchema, sectionId: SectionId, fingerprint: Sha256): JsonSchema {
+  const bound = structuredClone(schema);
+  delete bound.$schema;
+  delete bound.$id;
+  const properties = asRecord(bound.properties);
+  if (!properties) throw new Error("Output schema is missing properties.");
+  properties.sectionId = { const: sectionId };
+  properties.fingerprint = { const: fingerprint };
+  return bound;
+}
+
+function normalizePublicOutput(value: unknown): Record<string, string | number | boolean | string[] | null> {
+  const source = asRecord(value);
+  if (!source) return {};
+  return Object.fromEntries(
+    Object.entries(source).filter(([, candidate]) => (
+      candidate === null ||
+      typeof candidate === "string" ||
+      typeof candidate === "number" ||
+      typeof candidate === "boolean" ||
+      (Array.isArray(candidate) && candidate.every((item) => typeof item === "string"))
+    )),
+  ) as Record<string, string | number | boolean | string[] | null>;
+}
+
+function normalizeFindings(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((candidate) => {
+    const finding = asRecord(candidate);
+    if (!finding) return candidate;
+    return {
+      requirementId: finding.requirementId,
+      pageId: finding.pageId,
+      componentId: finding.componentId,
+      status: finding.status,
+      finding: finding.finding,
+      evidenceRefs: finding.evidenceRefs,
+      implementationRefs: finding.implementationRefs,
+      proposedValue: null,
+    };
+  });
+}
+
+export function normalizeCompletionOutput(
+  kind: "audit" | "patch" | "reaudit",
+  value: unknown,
+  sectionId: SectionId,
+  fingerprint: Sha256,
+): unknown {
+  if ((kind === "audit" || kind === "reaudit") && value === "PASS") {
+    return {
+      schemaVersion: "design-validation/audit-output/v2",
+      sectionId,
+      fingerprint,
+      status: "PASS",
+      findings: [],
+      publicOutput: {},
+    };
+  }
+  const source = asRecord(value);
+  if (!source) return value;
+  if (kind === "audit" || kind === "reaudit") {
+    return {
+      schemaVersion: "design-validation/audit-output/v2",
+      sectionId,
+      fingerprint,
+      status: source.status,
+      findings: normalizeFindings(source.findings),
+      publicOutput: normalizePublicOutput(source.publicOutput),
+    };
+  }
+  return {
+    schemaVersion: "design-validation/patch-output/v2",
+    sectionId,
+    fingerprint,
+    status: source.status,
+    requirementIds: source.requirementIds,
+    evidenceRefs: source.evidenceRefs,
+    readSet: source.readSet,
+    writeSet: source.writeSet,
+    reason: source.reason,
+    diff: source.diff,
+  };
 }
 
 function retryAfterMs(response: Response, attempt: number): number {
@@ -168,6 +261,7 @@ export class NvidiaClient {
     requestId: string;
     systemPrompt: string;
     userPrompt: string;
+    outputSchema: JsonSchema;
   }): Promise<CompletionResult> {
     if (this.config.mock) {
       const parsed = args.kind === "patch"
@@ -187,7 +281,9 @@ export class NvidiaClient {
       };
     }
 
-    const inputUpperBound = Buffer.byteLength(args.systemPrompt) + Buffer.byteLength(args.userPrompt);
+    const boundOutputSchema = bindOutputSchema(args.outputSchema, args.sectionId, args.fingerprint);
+    const trustedSystemPrompt = `${args.systemPrompt}\n\nTRUSTED OUTPUT CONTRACT\nThe JSON Schema below is the complete output contract. Emit exactly one object that satisfies it. Never omit or rename a required field. Use the literal sectionId and fingerprint constants. Do not add top-level or finding fields. For audits, publicOutput should be {} unless a value already fits its schema exactly.\n${JSON.stringify(boundOutputSchema)}`;
+    const inputUpperBound = Buffer.byteLength(trustedSystemPrompt) + Buffer.byteLength(args.userPrompt);
     if (inputUpperBound > this.config.nvidia.maxInputTokens) {
       throw new Error(
         `${args.requestId} input upper bound ${inputUpperBound} exceeds ${this.config.nvidia.maxInputTokens}.`,
@@ -200,7 +296,7 @@ export class NvidiaClient {
     const body = {
       model: this.config.nvidia.model,
       messages: [
-        { role: "system", content: args.systemPrompt },
+        { role: "system", content: trustedSystemPrompt },
         { role: "user", content: args.userPrompt },
       ],
       temperature: this.config.nvidia.temperature,
@@ -252,7 +348,12 @@ export class NvidiaClient {
       if (!content) throw new Error(`${args.requestId} returned no message content.`);
       let parsed: unknown;
       try {
-        parsed = parseJsonContent(content);
+        parsed = normalizeCompletionOutput(
+          args.kind,
+          parseJsonContent(content),
+          args.sectionId,
+          args.fingerprint,
+        );
       } catch (error) {
         throw new Error(
           `${args.requestId} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,

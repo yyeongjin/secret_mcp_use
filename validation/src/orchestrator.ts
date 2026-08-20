@@ -23,6 +23,7 @@ import {
   assertAuditOutput,
   assertPatchOutput,
   loadValidators,
+  type JsonSchema,
 } from "./schema.ts";
 import type {
   FreshNode,
@@ -48,6 +49,7 @@ interface AuditCallFailure {
   ok: false;
   sectionId: SectionId;
   error: string;
+  completion?: CompletionResult;
 }
 
 type AuditCallResult = AuditCallSuccess | AuditCallFailure;
@@ -153,17 +155,24 @@ async function callAudit(args: {
   kind: "audit" | "reaudit";
   requestId: string;
   validate: Parameters<typeof assertAuditOutput>[0];
+  outputSchema: JsonSchema;
 }): Promise<AuditCallResult> {
   const sectionId = args.input.node.sectionId;
+  let completion: CompletionResult;
   try {
-    const completion = await args.client.completeJson({
+    completion = await args.client.completeJson({
       kind: args.kind,
       sectionId,
       fingerprint: args.input.node.fingerprint,
       requestId: args.requestId,
       systemPrompt: AUDIT_SYSTEM_PROMPT,
       userPrompt: auditUserPrompt(args.input),
+      outputSchema: args.outputSchema,
     });
+  } catch (error) {
+    return { ok: false, sectionId, error: errorMessage(error) };
+  }
+  try {
     assertAuditOutput(
       args.validate,
       completion.parsed,
@@ -172,7 +181,7 @@ async function callAudit(args: {
     );
     return { ok: true, sectionId, completion, output: completion.parsed };
   } catch (error) {
-    return { ok: false, sectionId, error: errorMessage(error) };
+    return { ok: false, sectionId, error: errorMessage(error), completion };
   }
 }
 
@@ -188,6 +197,10 @@ async function saveAuditCall(
     await writeJson(path.join(nodeDirectory, "api-response.json"), result.completion.raw);
     await writeJson(path.join(nodeDirectory, "audit-output.json"), result.output);
   } else {
+    if (result.completion) {
+      await writeJson(path.join(nodeDirectory, "api-response.json"), result.completion.raw);
+      await writeJson(path.join(nodeDirectory, "audit-output-invalid.json"), result.completion.parsed);
+    }
     await writeJson(path.join(nodeDirectory, "audit-error.json"), {
       sectionId: result.sectionId,
       error: result.error,
@@ -234,6 +247,8 @@ async function runPatches(args: {
   attestations: Map<SectionId, PassAttestation>;
   validatePatch: Parameters<typeof assertPatchOutput>[0];
   validateAudit: Parameters<typeof assertAuditOutput>[0];
+  patchOutputSchema: JsonSchema;
+  auditOutputSchema: JsonSchema;
   auditSchemaHash: ReturnType<typeof sha256>;
   runDirectory: string;
   triggerPath: string;
@@ -286,6 +301,7 @@ async function runPatches(args: {
         requestId: patchRequestId,
         systemPrompt: PATCH_SYSTEM_PROMPT,
         userPrompt: patchUserPrompt({ auditInput: input, auditOutput: resolved.output }),
+        outputSchema: args.patchOutputSchema,
       });
       assertPatchOutput(
         args.validatePatch,
@@ -363,6 +379,7 @@ async function runPatches(args: {
         kind: "reaudit",
         requestId: `${args.runId}:reaudit:${sectionId}`,
         validate: args.validateAudit,
+        outputSchema: args.auditOutputSchema,
       });
       await saveAuditCall(path.join(scratchDirectory, sectionId, "reaudit"), nextInput, reaudit);
       if (!reaudit.ok || reaudit.output.status !== "PASS") {
@@ -406,6 +423,7 @@ async function runPatches(args: {
             kind: "reaudit",
             requestId: `${args.runId}:regression:${sectionId}:${regressionSectionId}`,
             validate: args.validateAudit,
+            outputSchema: args.auditOutputSchema,
           });
           await saveAuditCall(
             path.join(scratchDirectory, sectionId, "regressions"),
@@ -568,6 +586,7 @@ async function runTrigger(args: {
         kind: "audit",
         requestId: `${runId}:audit:${sectionId}`,
         validate: args.validators.audit,
+        outputSchema: args.validators.auditSchema,
       });
       await saveAuditCall(nodesDirectory, input, result);
       return result;
@@ -637,6 +656,8 @@ async function runTrigger(args: {
     attestations,
     validatePatch: args.validators.patch,
     validateAudit: args.validators.audit,
+    patchOutputSchema: args.validators.patchSchema,
+    auditOutputSchema: args.validators.auditSchema,
     auditSchemaHash: args.auditSchemaHash,
     runDirectory,
     triggerPath: trigger.path,
