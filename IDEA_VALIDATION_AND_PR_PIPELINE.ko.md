@@ -3,8 +3,9 @@
 ## 문서 상태
 
 - 상태: 구현 가능한 V2 설계안
-- 대상: `secret_mcp`, `secret_mcp_use`, NVIDIA API, Codex, GitHub Actions, GitHub PR 자동화
-- 입력: 작품별 `DESIGN_INDEX`, 공통 Specification, 작품별 Request Contract, Evidence, 프론트엔드 저장소
+- 실행 대상 저장소: `secret_mcp_use` 하나만 사용
+- 상위 생성기: `secret_mcp`는 작품별 `DESIGN_INDEX`, Request Contract와 Evidence를 생성해 전달하는 역할만 담당
+- 입력: `secret_mcp`가 생성한 작품별 `DESIGN_INDEX`, 공통 Specification, 작품별 Request Contract, Evidence와 `secret_mcp_use`의 프론트엔드 소스
 - 출력: 19개 항목의 독립 검증 증명서, 필요한 경우에만 생성되는 최소 수정 PR, 재실행 시 사용할 정적 PASS 상태
 - 핵심 변경: 19개 항목을 항상 19개 PR로 만드는 구조를 폐기하고, 19개 항목을 DAG 노드로 유지하되 `PATCH_VERIFIED`인 노드만 PR을 생성한다.
 
@@ -13,28 +14,53 @@
 이 아이디어는 다음 구조로 구현하는 것이 가장 안전하다.
 
 1. Specification의 19개 영역을 `S01`부터 `S19`까지 독립 노드로 만든다.
-2. 각 노드는 별도의 임시 작업공간, 별도의 LLM 요청, 별도의 입력 JSON과 출력 JSON을 사용한다.
-3. 선행 노드의 자연어 응답은 후행 노드에 전달하지 않는다. 후행 노드는 서명된 상태와 공개 출력 해시만 받는다.
-4. 기존 PASS 증명서의 fingerprint가 현재 입력 fingerprint와 같으면 API를 호출하지 않고 `CACHED_PASS`로 종료한다.
-5. `PASS`인 노드는 PR을 만들지 않는다. 정적 PASS 증명서만 `validation-state` 브랜치에 기록한다.
-6. `PATCH_REQUIRED`인 노드만 NVIDIA API에 최소 unified diff를 요청한다.
-7. diff가 허용 파일, 기준 해시, 변경 범위, 테스트와 회귀 검사를 모두 통과한 경우에만 PR을 만든다.
-8. 서로 의존하지 않고 쓰기 파일도 겹치지 않는 노드는 병렬 실행할 수 있다.
-9. 같은 파일을 수정하거나 의존 관계가 있는 노드는 자동으로 직렬화한다.
-10. merge 전에는 최신 `main`을 기준으로 patch를 다시 검증하며, 오래된 patch는 자동 병합하지 않는다.
+2. 최초 전체 검증 또는 강제 전체 검증은 NVIDIA API를 정확히 19번 호출한다. S01 요청부터 S19 요청까지 한 요청이 한 Section만 담당한다.
+3. 각 노드는 별도의 임시 작업공간, 별도의 NVIDIA stateless 요청, 별도의 입력 JSON과 출력 JSON을 사용한다.
+4. 하나의 NVIDIA 요청이나 하나의 통합 LLM이 S01-S19 전체를 읽고 19개 결과를 한꺼번에 반환하는 방식은 금지한다.
+5. audit fan-out은 DAG 선행 상태와 무관하게 실행한다. 전체 검증에서는 선행 노드가 실패해도 S01-S19의 19개 audit 호출을 모두 완료한다.
+6. DAG 의존성은 patch 적용과 PR 생성 순서에만 사용한다.
+7. 선행 노드의 자연어 응답은 후행 노드에 전달하지 않는다. patch scheduler는 서명된 상태와 공개 출력 해시만 읽는다.
+8. 기존 PASS 증명서의 fingerprint가 현재 입력 fingerprint와 같으면 API를 호출하지 않고 `CACHED_PASS`로 종료한다.
+9. `PASS`인 노드는 PR을 만들지 않는다. 정적 PASS 증명서만 `validation-state` 브랜치에 기록한다.
+10. `PATCH_REQUIRED`인 노드만 별도의 NVIDIA patch 요청으로 최소 unified diff를 생성한다. audit 요청과 patch 요청도 서로 다른 세션이다.
+11. diff가 허용 파일, 기준 해시, 변경 범위, 테스트와 회귀 검사를 모두 통과한 경우에만 PR을 만든다.
+12. 서로 의존하지 않고 쓰기 파일도 겹치지 않는 노드는 병렬 실행할 수 있다.
+13. 같은 파일을 수정하거나 의존 관계가 있는 노드는 자동으로 직렬화한다.
+14. merge 전에는 최신 `main`을 기준으로 patch를 다시 검증하며, 오래된 patch는 자동 병합하지 않는다.
 
 `19개 항목`은 검증 격리 단위이지 `19개 PR을 반드시 생성한다`는 뜻이 아니다. 한 실행에서 17개가 이미 PASS이고 2개만 누락됐다면 PR은 최대 2개만 생성되어야 한다.
+
+## 저장소 역할 경계
+
+| 저장소 | 역할 | 이 파이프라인이 할 수 있는 작업 |
+| --- | --- | --- |
+| `secret_mcp` | GDWEB 검색 결과를 작품별 독립 요청으로 분석하고 `DESIGN_INDEX`, Request Contract와 Evidence 묶음을 생성하는 upstream producer | 생성 결과를 읽어 입력 묶음으로 전달하는 것만 허용 |
+| `secret_mcp_use` | 생성된 명세로 프론트엔드를 구현하고 19개 항목을 검증·보정하는 유일한 execution target | DAG 실행, NVIDIA API 호출, PASS 증명서 기록, 임시 branch, 코드 patch, 테스트와 PR 생성 |
+
+강제 규칙:
+
+- `secret_mcp`에는 검증 branch, `validation-state`, 자동 수정 commit 또는 PR을 만들지 않는다.
+- `secret_mcp`의 소스 코드를 이 파이프라인의 구현 입력이나 patch 대상으로 전달하지 않는다.
+- `secret_mcp`에서 전달받은 산출물은 content hash가 고정된 읽기 전용 입력으로 취급한다.
+- `main`, `auto/<target>/<section>/<fingerprint>`, `validation-state`와 모든 자동 PR은 `secret_mcp_use` 저장소에만 존재한다.
+- 문서에서 별도 저장소 표기가 없는 `저장소`, `main`, `프론트엔드`, `target repository`는 모두 `secret_mcp_use`를 뜻한다.
 
 ## 절대 규칙
 
 ### 요청 독립성
 
 - 한 API 요청은 정확히 한 작품의 한 Section ID만 담당한다.
+- 전체 검증 한 pass는 `audit:S01`부터 `audit:S19`까지 19개의 요청 ID를 가진다.
+- 19개의 요청은 같은 NVIDIA model ID를 사용할 수 있지만 요청 context, request ID, 응답, 임시 디렉터리와 로그는 완전히 분리한다.
+- `audit:S01-S19`처럼 여러 Section을 나타내는 통합 request ID는 허용하지 않는다.
 - 요청마다 새로운 stateless 세션을 사용한다.
 - conversation ID, message history, response cache, 임시 작업공간을 재사용하지 않는다.
 - 다른 Section의 Specification 본문, DESIGN_INDEX 본문, finding 자연어 문장과 diff를 입력에 넣지 않는다.
-- 선행 상태는 `sectionId`, `status`, `publicDigest`, `attestationHash`만 전달한다.
+- audit 요청에는 선행 노드의 현재 응답을 전달하지 않는다.
+- patch scheduler만 선행 상태의 `sectionId`, `status`, `publicDigest`, `attestationHash`를 읽는다.
 - 19개 결과를 하나의 LLM에 다시 넣어 병합하지 않는다. 병합은 코드가 수행한다.
+- 한 요청의 입력 JSON에 다른 Section ID가 발견되면 NVIDIA를 호출하기 전에 실행을 실패시킨다.
+- 한 응답의 `sectionId`가 요청 Section과 다르면 해당 응답을 폐기한다.
 
 ### 값 창작 금지
 
@@ -63,16 +89,21 @@ PASS 기록을 남기기 위해 빈 PR이나 report-only PR을 만드는 방식�
 
 ```mermaid
 flowchart TD
-    Push["main push 또는 수동 실행"] --> Snapshot["입력 스냅샷과 영향 범위 계산"]
+    Producer["secret_mcp: DESIGN_INDEX 입력 묶음 생성"] --> Import["secret_mcp_use: 읽기 전용 입력으로 가져오기"]
+    Push["secret_mcp_use main push 또는 수동 실행"] --> Snapshot["입력 스냅샷과 영향 범위 계산"]
+    Import --> Snapshot
     Snapshot --> Fingerprint["S01-S19 fingerprint 계산"]
-    Fingerprint --> Cache{"동일한 PASS 증명서가 있는가?"}
-    Cache -->|예| Cached["CACHED_PASS, API와 PR 없음"]
-    Cache -->|아니요| Ready["DAG 의존성 충족 대기"]
-    Ready --> Audit["독립 NVIDIA 누락 검사"]
-    Audit --> Verdict{"검사 결과"}
+    Fingerprint --> Fanout["오케스트레이터가 S01-S19 입력 19개 생성"]
+    Fanout --> Cache{"노드별 동일 PASS 증명서가 있는가?"}
+    Cache -->|예| Cached["해당 노드는 CACHED_PASS, 호출 없음"]
+    Cache -->|아니요| Audit["DAG 대기 없이 Section별 독립 NVIDIA audit 호출"]
+    Audit --> Results["S01-S19 개별 JSON 결과"]
+    Results --> Merge["코드가 schema 검증, 정렬, 중복 제거 후 병합"]
+    Merge --> Verdict{"노드별 검사 결과"}
     Verdict -->|PASS| Attest["validation-state에 PASS 증명서 기록"]
     Verdict -->|BLOCKED| Check["Check 또는 Issue에 중단 사유 기록"]
-    Verdict -->|PATCH_REQUIRED| Patch["독립 NVIDIA 최소 diff 요청"]
+    Verdict -->|PATCH_REQUIRED| DependencyGate["DAG 선행 PASS 또는 병합 대기"]
+    DependencyGate --> Patch["독립 NVIDIA 최소 diff 요청"]
     Patch --> Guard["해시, 소유권, write-set, git apply 검사"]
     Guard --> Verify["build, test, visual, 영향받은 PASS 회귀 검사"]
     Verify --> Safe{"모든 검사가 통과했는가?"}
@@ -84,9 +115,136 @@ flowchart TD
     Merge --> Attest
 ```
 
+## 19개 NVIDIA 호출과 결정적 병합
+
+### 전체 검증 모드
+
+최초 실행, Specification 버전 변경, validator contract 변경 또는 사용자가 `forceFullAudit: true`를 지정한 실행은 cache와 관계없이 정확히 19개의 audit 요청을 만든다.
+
+```text
+audit:S01 -> NVIDIA request #01 -> nodes/S01/audit-output.json
+audit:S02 -> NVIDIA request #02 -> nodes/S02/audit-output.json
+...
+audit:S19 -> NVIDIA request #19 -> nodes/S19/audit-output.json
+```
+
+이 19개 호출은 한 모델 응답을 논리적으로 나눈 것이 아니다. 실제 HTTP 요청 19개이며 요청마다 다음 값이 달라야 한다.
+
+- `requestId`
+- `sectionId`
+- system prompt의 Section 소유권
+- Specification fragment
+- DESIGN_INDEX fragment
+- Evidence subset
+- implementation slice
+- response JSON 파일
+- 실행 로그와 token usage
+
+동일해야 하는 값은 schema 버전, target ID, run ID, 기준 commit처럼 실행을 식별하는 최소 metadata뿐이다.
+
+### 증분 검증 모드
+
+일반적인 code push에서는 먼저 S01-S19의 fingerprint를 코드로 계산한다. fingerprint는 LLM이 계산하거나 판단하지 않는다.
+
+- fingerprint가 동일하고 유효한 PASS 증명서가 있으면 해당 Section은 `CACHED_PASS`다.
+- fingerprint가 달라진 Section은 Section마다 NVIDIA 요청 하나를 새로 호출한다.
+- 직접 선행 노드의 `publicDigest`가 달라져 무효화된 후행 Section도 각각 별도 NVIDIA 요청을 호출한다.
+- 변경된 Section이 4개라면 호출은 4개이며, 이 4개를 한 요청에 묶지 않는다.
+- 전체 검증을 요구하면 19개 모두 다시 각각 호출한다.
+
+따라서 호출 규칙은 다음과 같다.
+
+```text
+fresh full audit       = 19개의 독립 audit 호출
+forced full audit      = 19개의 독립 audit 호출
+incremental audit      = dirty Section 수만큼 독립 audit 호출
+patch generation       = PATCH_REQUIRED Section마다 별도 patch 호출 1개
+merge                  = LLM 호출 0개, 오케스트레이터 코드만 사용
+```
+
+### 19개 요청 manifest
+
+```json
+{
+  "schemaVersion": "design-validation/audit-batch/v2",
+  "runId": "run-2026-08-20-001",
+  "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
+  "mode": "full",
+  "expectedSections": [
+    "S01", "S02", "S03", "S04", "S05", "S06", "S07", "S08", "S09", "S10",
+    "S11", "S12", "S13", "S14", "S15", "S16", "S17", "S18", "S19"
+  ],
+  "requests": [
+    {
+      "requestId": "run-2026-08-20-001:audit:S01",
+      "sectionId": "S01",
+      "inputPath": "nodes/S01/audit-input.json",
+      "outputPath": "nodes/S01/audit-output.json"
+    },
+    {
+      "requestId": "run-2026-08-20-001:audit:S02",
+      "sectionId": "S02",
+      "inputPath": "nodes/S02/audit-input.json",
+      "outputPath": "nodes/S02/audit-output.json"
+    }
+  ]
+}
+```
+
+실제 `requests` 배열은 S01-S19의 19개 행을 가져야 한다. full mode에서 한 행이라도 없거나 Section ID가 중복되면 API 호출을 시작하지 않는다.
+
+### fan-out 실행 규칙
+
+오케스트레이터는 다음 검사를 한 뒤 각 요청을 독립 queue item으로 보낸다.
+
+1. S01-S19가 정확히 한 번씩 존재하는지 검사한다.
+2. 각 input에 담당 Section 이외의 Specification heading이 없는지 검사한다.
+3. 각 input에 다른 Section의 DESIGN_INDEX 본문이 없는지 검사한다.
+4. Evidence reference가 담당 Section allowlist에 포함되는지 검사한다.
+5. implementation file이 담당 노드의 `allowedReadGlobs`에 포함되는지 검사한다.
+6. request마다 빈 대화 기록과 새로운 client request ID를 할당한다.
+7. rate limiter가 허용하는 범위에서 병렬 호출한다.
+
+### fan-in 병합 규칙
+
+19개 응답을 합치는 `merge-audit-results`는 일반 프로그램이며 NVIDIA, Codex 또는 다른 LLM을 호출하지 않는다.
+
+```ts
+function mergeAuditResults(
+  manifest: AuditBatchManifest,
+  outputs: NodeAuditOutput[],
+): AuditMatrix {
+  assertExactSectionSet(manifest.expectedSections, outputs);
+  outputs.forEach(validateNodeAuditSchema);
+  outputs.forEach(assertRequestSectionMatchesOutput);
+  outputs.forEach(assertRequirementOwnership);
+
+  const ordered = outputs.sort(byNumericSectionId);
+  const findings = deduplicateByRequirementId(ordered.flatMap((item) => item.findings));
+
+  return {
+    runId: manifest.runId,
+    sections: ordered.map(toSectionVerdict),
+    findings,
+    summary: countStatuses(ordered),
+  };
+}
+```
+
+병합 산출물:
+
+```text
+audit-matrix.json   S01-S19의 상태와 응답 hash
+gap-report.json     Requirement ID 기준 누락 목록
+GAP_REPORT.md       고정 Markdown template로 만든 사람이 읽는 목록
+batch-summary.json  PASS, PATCH_REQUIRED, BLOCKED, ERROR 개수
+```
+
+`GAP_REPORT.md` 문장을 자연스럽게 다듬기 위한 추가 LLM 호출도 금지한다. 자연어 표현이 조금 딱딱하더라도 각 Section 응답의 finding을 고정 template에 넣어 의미 변형을 막는다.
+
 ## 저장소와 상태 분리
 
-애플리케이션 코드와 검증 상태를 같은 브랜치에 섞지 않는다.
+아래 branch와 artifact는 모두 `secret_mcp_use`에만 만든다. 애플리케이션 코드와 검증 상태를 같은 브랜치에 섞지 않는다.
 
 | 위치 | 역할 |
 | --- | --- |
@@ -140,16 +298,14 @@ yyeongjin-secret-mcp-use--gdweb-26357
   "designIndexFragmentHash": "sha256:...",
   "evidenceSubsetHash": "sha256:...",
   "implementationSliceHash": "sha256:...",
-  "dependencyPublicDigests": {
-    "S05": "sha256:...",
-    "S07": "sha256:..."
-  },
   "validatorConfigHash": "sha256:...",
   "modelContractHash": "sha256:..."
 }
 ```
 
 fingerprint에 전체 저장소 commit SHA를 직접 넣지 않는다. 무관한 README 수정만으로 19개 노드가 모두 무효화되는 것을 막기 위해 각 노드가 실제로 읽는 구현 조각의 해시만 넣는다.
+
+audit fingerprint에는 선행 노드 응답을 넣지 않는다. 선행 상태는 PASS 증명서의 `dependencyAttestations`에서 별도로 비교한다. 이 분리 덕분에 full audit의 19개 요청이 서로의 응답을 기다리지 않고 독립적으로 실행될 수 있다.
 
 ### PASS 재사용 조건
 
@@ -185,12 +341,6 @@ interface NodeAuditInput<TPayload> {
     specificationFragment: string;
     designIndexFragment: string;
   };
-  dependencies: Array<{
-    sectionId: SectionId;
-    status: 'PASS' | 'CACHED_PASS';
-    publicDigest: `sha256:${string}`;
-    attestationHash: `sha256:${string}`;
-  }>;
   evidence: Array<{
     evidenceId: string;
     kind: 'image' | 'crop' | 'metadata' | 'measurement';
@@ -312,7 +462,7 @@ patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제
 | S18 | 페이지별 인수 조건 | S05, S06, S09, S10, S11, S12, S13, S14 |
 | S19 | 불확실성과 결정 | S01-S18 |
 
-이 의존성은 실행 순서를 위한 것이며 요청 문맥 공유를 허용하는 규칙이 아니다. 후행 노드에는 선행 노드의 PASS 증명서와 `publicDigest`만 전달한다.
+이 의존성은 patch와 PR 처리 순서를 위한 것이며 audit 호출 순서를 막지 않는다. full audit의 S01-S19 요청은 모두 실행하고, 선행 노드가 아직 PASS가 아니면 후행 노드의 audit 결과를 `PASS_PENDING_DEPENDENCY` 또는 `PATCH_WAITING_DEPENDENCY`로 보관한다. 선행 노드의 자연어 결과는 후행 NVIDIA 요청에 전달하지 않는다.
 
 ### S01 목표와 범위
 
@@ -397,7 +547,7 @@ patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제
 
 `orderedSections[]`의 필수 필드는 `sectionId`, `bounds`, `semanticRole`, `container`, `layout`, `spacing`, `alignment`, `surface`, `content`, `responsive`, `evidenceLevel`이다.
 
-**구현 입력:** 한 요청에 한 Page ID만 넣는다. 여러 페이지가 있으면 S06 내부 fan-out 작업 `S06/P-01`, `S06/P-02`로 더 분리한다.
+**구현 입력:** S06 요청 하나에 S06이 소유한 모든 Page ID의 page fragment를 넣되 다른 Section 본문은 넣지 않는다. full audit의 정확한 19호출 계약을 지키기 위해 S06 audit를 페이지 수만큼 추가 분할하지 않는다. 응답의 finding은 `pageId`로 분리한다.
 
 **출력 `publicOutput`:** `pageSectionOrder`, `pageCanvasDigests`, `sectionIdsByPage`, `pageFanoutDigest`.
 
@@ -529,7 +679,7 @@ patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제
 
 **전용 입력 `payload`:** `uncertainties[]`에 `uncertaintyId`, `pageId`, `sectionId`, `componentId`, `decision`, `alternatives`, `confidence`, `risk`, `requiredEvidence`를 넣는다.
 
-**구현 입력:** S01-S18의 상태, Requirement ID와 `publicDigest`만 허용한다. 다른 노드의 자연어 보고서나 diff를 넣지 않는다.
+**구현 입력:** S19에 기록된 uncertainty·decision marker와 직접 연결된 구현 파일만 허용한다. S01-S18의 audit 응답, 자연어 보고서나 diff를 넣지 않는다.
 
 **출력 `publicOutput`:** `uncertaintyIds`, `unresolvedIds`, `decisionDigest`, `requiredEvidenceIds`.
 
@@ -614,27 +764,325 @@ nodes:
 - patch 노드는 다른 PASS 노드의 코드를 조용히 함께 수정할 수 없다.
 - 재검사 결과의 `publicDigest`가 같으면 기존 후행 PASS는 유지한다.
 
-## DAG 스케줄러
+## code push 입력 계약
 
-노드는 다음 조건을 모두 만족할 때 `READY`가 된다.
-
-- 직접 선행 노드가 모두 PASS 또는 CACHED_PASS다.
-- 같은 target과 Section의 실행 lock이 없다.
-- 현재 patch 후보의 write-set과 실행 중인 다른 patch의 write-set이 겹치지 않는다.
-- 동일한 idempotency key의 open PR이 없다.
-- 호출 rate limit token을 획득했다.
+GitHub push, PR merge, 수동 실행을 모두 같은 `ChangeEvent` 형식으로 정규화한다.
 
 ```ts
-function ready(node: Node, state: State): boolean {
-  return node.dependsOn.every((id) => state[id].isPassing)
-    && !state.locks.has(node.lockKey)
-    && !state.activeWriteSets.some((set) => intersects(set, node.plannedWriteSet))
-    && !state.openPrKeys.has(node.idempotencyKey)
-    && state.rateLimiter.available();
+interface ChangeEvent {
+  schemaVersion: 'design-validation/change-event/v2';
+  eventId: string;
+  source: 'push' | 'merge' | 'manual' | 'design-index-import';
+  repository: 'yyeongjin/secret_mcp_use';
+  beforeCommit: string | null;
+  afterCommit: string;
+  changedFiles: Array<{
+    path: string;
+    status: 'added' | 'modified' | 'deleted' | 'renamed';
+    beforeHash: `sha256:${string}` | null;
+    afterHash: `sha256:${string}` | null;
+  }>;
+  importedArtifacts: Array<{
+    producer: 'secret_mcp';
+    kind: 'design-index' | 'request-contract' | 'evidence';
+    referenceId: string;
+    contentHash: `sha256:${string}`;
+  }>;
+  options: {
+    forceFullAudit: boolean;
+    allowCachedPass: boolean;
+  };
 }
 ```
 
-누락 검사 단계는 read-only이므로 의존성이 충족된 여러 노드를 병렬 실행할 수 있다. patch 적용과 PR 생성 단계는 write-set 충돌 그래프를 추가해 보수적으로 직렬화한다.
+오케스트레이터는 code diff를 LLM에 통째로 보내지 않는다. `changedFiles`를 impact manifest에 대입해 dirty Section을 계산하고, 각 Section builder가 담당 파일의 필요한 조각만 추출한다.
+
+## 코드 변경 유형별 처리 행렬
+
+아래 표의 `호출`은 항상 Section마다 별도 NVIDIA 요청이라는 뜻이다. `S04, S09, S12 호출`은 세 Section을 한 번에 보내는 요청 하나가 아니라 서로 격리된 요청 세 개다.
+
+| 들어온 변경 | 최초 dirty Section | NVIDIA audit 호출 | PR 동작 |
+| --- | --- | --- | --- |
+| `README.md`, 일반 문서만 변경 | 없음 | 0개 | PR 없음, 기존 PASS 유지 |
+| `trigger/DESIGN_INDEX_*.md`의 S05 조각 변경 | S05 | S05 1개, `publicDigest` 변경 시 후행 노드를 각자 호출 | 실제 frontend 누락이 검증된 노드만 PR |
+| Request Contract 변경 | contract가 소유한 Section | 해당 Section별 독립 호출 | 코드 patch가 필요한 Section만 PR |
+| Evidence 이미지 또는 crop metadata 변경 | S02와 Evidence를 직접 읽는 노드 | S02부터 DAG를 따라 별도 호출 | 새 근거로 기존 값이 무효화되면 patch PR |
+| route 파일 추가·수정 | S03 | S03 1개 후 digest 변경 시 S04, S05, S06, S11, S15, S16 등 후행 호출 | 누락 route 구현만 S03 PR |
+| route 파일 삭제 | S03 | S03 별도 호출 | 문서에 route가 있으면 복구 patch PR, 근거가 없으면 BLOCKED |
+| AppShell 또는 root layout 변경 | S04 | S04 1개 후 S05, S06, S07, S12 등 후행 호출 가능 | shell 누락만 S04 PR |
+| navigation component 변경 | S05 | S05 1개 후 S06, S12, S13, S14, S17, S18, S19 재평가 가능 | navigation 누락만 S05 PR |
+| 페이지 section composition 변경 | S06 | S06 독립 호출 1개, 결과 내부 finding을 Page ID별로 분리 | 해당 page composition PR만 생성 |
+| section-scoped layout CSS 변경 | S07 | S07 독립 호출 1개, 결과 내부 finding을 Section ID별로 분리 | layout 누락만 S07 PR |
+| component props 또는 variant 변경 | S08 | S08 1개 후 S12-S14 등 후행 호출 가능 | component API 누락만 S08 PR |
+| color/token 파일 변경 | S09 | S09 1개 후 S10, S12, S13 등 digest 영향 노드 호출 | 누락 token 선언만 S09 PR |
+| font import 또는 typography class 변경 | S10 | S10 1개 후 S05, S06, S12, S14, S18 영향 호출 | typography 누락만 S10 PR |
+| 이미지·아이콘 파일 또는 manifest 변경 | S11 | S11 1개 후 S06, S12, S18 영향 호출 | 잘못된 참조 연결만 S11 PR |
+| media query 또는 responsive stylesheet 변경 | S12 | S12 1개 후 S13, S14, S17-S19 영향 호출 | 반응형 누락만 S12 PR |
+| event handler·state reducer 변경 | S13 | S13 1개 후 S14, S17-S19 영향 호출 | 상호작용 누락만 S13 PR |
+| aria, focus, keyboard code 변경 | S14 | S14 1개 후 S17-S19 영향 호출 | 접근성 누락만 S14 PR |
+| type, schema, fixture 변경 | S15 | S15 1개 후 S16, S06, S08, S17, S19 영향 호출 | 데이터 상태 누락만 S15 PR |
+| module graph, build 설정 변경 | S16 | S16 1개와 영향 graph에 포함된 후행 호출 | 광범위 구조 변경은 validation-only 또는 BLOCKED |
+| 구현 manifest 변경 | S17 | S17 1개 후 S19 영향 호출 | 애플리케이션 코드 PR 없음 |
+| Playwright, acceptance test 변경 | S18 | S18 1개 후 S19 영향 호출 | 누락 test만 S18 PR, tolerance 완화 PR 금지 |
+| uncertainty decision 변경 | S19 | S19 1개 | 애플리케이션 코드 PR 없음 |
+| 전역 `styles.css` 하나가 여러 역할을 담당 | S04, S05, S07, S09, S10, S12, S13, S14, S18 | 각 Section을 별도 호출 | 같은 파일 write-set은 직렬 PR 처리 |
+| `package.json` 또는 lockfile 변경 | S16과 package consumer 노드 | 영향 manifest에 따른 별도 호출 | 무관한 dependency upgrade는 BLOCKED |
+| impact manifest에 없는 source 파일 변경 | 알 수 없음 | 안전 기본값으로 S01-S19 19개 전체 호출 | 판정된 실제 누락만 PR |
+| generated build output만 변경 | 없음 또는 정책 오류 | 정상적으로 0개 | 추적 금지 파일이면 Check 경고, PR 없음 |
+
+## 상세 동작 사례
+
+### 사례 A: 완전히 새로운 frontend 코드가 들어온 경우
+
+입력:
+
+```text
+frontend/index.html added
+frontend/styles.css added
+frontend/app.js added
+frontend/assets/* added
+PASS 증명서 없음
+```
+
+동작:
+
+1. 신규 target이므로 S01-S19 audit input 19개를 만든다.
+2. NVIDIA API를 실제로 19번 독립 호출한다.
+3. 각 응답을 `nodes/SXX/audit-output.json`에 따로 저장한다.
+4. 코드 merger가 19개 JSON을 Section 순서로 합친다.
+5. PASS Section은 증명서만 기록하고 PR을 만들지 않는다.
+6. PATCH_REQUIRED Section은 Section마다 별도의 patch API 요청을 호출한다.
+7. patch write-set이 겹치지 않으면 여러 PR을 병렬로 열 수 있다.
+8. write-set이 겹치면 DAG와 file lock 순서대로 하나씩 연다.
+
+예상 결과:
+
+```text
+19 audit calls
+S01-S08, S11, S15-S17 PASS -> 0 PR
+S09 PATCH_REQUIRED -> PR #101
+S10 PATCH_REQUIRED -> S09 병합 대기
+S12 PATCH_REQUIRED -> S09/S10 병합 대기
+S13-S14 PASS -> 0 PR
+S18 PATCH_REQUIRED -> PR #102, 파일이 겹치지 않으면 병렬 가능
+S19 BLOCKED_MISSING_EVIDENCE -> 0 PR
+```
+
+### 사례 B: README 문장만 수정된 경우
+
+1. changed file이 어떤 노드의 `reads`에도 매칭되지 않는다.
+2. 19개 fingerprint가 모두 이전과 같다.
+3. 19개 모두 `CACHED_PASS` 또는 기존 blocked 상태를 유지한다.
+4. NVIDIA 호출 0개, branch 0개, PR 0개다.
+
+### 사례 C: navigation에 메뉴 항목 하나가 추가된 경우
+
+입력 diff:
+
+```diff
++ <a href="/community">Community</a>
+```
+
+동작:
+
+1. `src/components/navigation/**` 변경으로 S05만 직접 dirty다.
+2. S05 input에는 navigation 코드, S05 명세, 관련 Evidence만 들어간다.
+3. S05 NVIDIA audit 요청을 한 번 호출한다.
+4. 문서에도 `/community`가 있으면 상태·모바일 메뉴·active state 누락을 finding으로 만들 수 있다.
+5. 문서에 없는 항목이면 모델이 새 route로 인정하지 않고 S03 범위 위반 또는 `UNKNOWN`으로 보고한다.
+6. S05가 PATCH_REQUIRED이고 안전한 추가 diff를 만들면 S05 PR을 연다.
+7. S05 PR이 병합되기 전 S06, S12-S14 후행 patch PR은 만들지 않는다.
+8. 병합 후 S05 `publicDigest`가 바뀐 경우에만 후행 노드를 각각 재호출한다.
+
+### 사례 D: 명세에 있는 모바일 메뉴 CSS가 코드에서 삭제된 경우
+
+입력 diff:
+
+```diff
+- @media (max-width: 768px) {
+-   .mobile-menu { display: block; }
+- }
+```
+
+동작:
+
+1. S12 audit가 명세에 존재하지만 코드에 없는 규칙을 `PATCH_REQUIRED`로 판정한다.
+2. 별도의 S12 patch 요청이 삭제된 규칙을 복구하는 최소 diff를 반환한다.
+3. base hash, write-set과 `git apply --check`를 검사한다.
+4. 768, 390, 360px Playwright와 overflow 검사를 실행한다.
+5. S05 navigation PASS 회귀 검사도 실행한다.
+6. 전부 통과한 경우에만 `fix(S12): restore mobile navigation breakpoint` PR을 연다.
+
+### 사례 E: 코드에 문서 근거가 없는 색상값이 들어온 경우
+
+입력 diff:
+
+```diff
+- color: var(--color-primary);
++ color: #7b61ff;
+```
+
+동작:
+
+1. S09와 해당 consumer Section이 dirty다.
+2. S09 audit는 `#7b61ff`가 DESIGN_INDEX 또는 Evidence에 없음을 확인한다.
+3. 근거에 올바른 기존 값이 있으면 최소 교체 patch를 만들 수 있다.
+4. 올바른 값도 문서에 없으면 `BLOCKED_MISSING_EVIDENCE`다.
+5. 근거 없이 모델이 새로운 색상을 제안하거나 평균값을 계산하는 것은 schema 위반이다.
+6. BLOCKED 상태에서는 PR을 만들지 않고 필요한 Evidence ID만 Check에 표시한다.
+
+### 사례 F: 두 독립 코드 변경이 서로 다른 파일에 들어온 경우
+
+입력:
+
+```text
+src/tokens/colors.css modified       -> S09
+src/data/game.fixture.ts modified    -> S15
+```
+
+동작:
+
+1. S09와 S15 audit를 서로 다른 NVIDIA 요청으로 병렬 호출할 수 있다.
+2. 둘 다 patch가 필요하고 write-set이 겹치지 않으면 PR 두 개를 병렬 생성할 수 있다.
+3. 각 PR은 자기 Section test와 영향받는 PASS 회귀 검사만 실행한다.
+4. merge queue는 각 PR을 최신 main에서 다시 검증한다.
+
+### 사례 G: 두 노드가 같은 `styles.css`를 수정하려는 경우
+
+입력:
+
+```text
+S09 patch writeSet = [frontend/styles.css]
+S12 patch writeSet = [frontend/styles.css]
+```
+
+동작:
+
+1. 두 audit 요청은 독립적으로 실행할 수 있다.
+2. 두 patch proposal도 격리된 작업공간에서 생성할 수 있다.
+3. write-set lock이 겹치므로 PR은 동시에 열지 않는다.
+4. DAG상 먼저 준비된 S09 PR을 열고 S12를 `WAITING_WRITE_LOCK`으로 둔다.
+5. S09가 병합되면 기존 S12 patch는 base hash가 달라졌으므로 폐기한다.
+6. 최신 main에서 S12 audit와 patch 요청을 새로 실행한다.
+7. 새 S12 diff가 검증될 때만 두 번째 PR을 연다.
+
+### 사례 H: 이미 PASS인 코드를 다른 PR이 건드린 경우
+
+1. patch write-set과 기존 PASS 노드들의 read-set을 교차 검사한다.
+2. 교차되는 PASS 노드를 현재 PR의 regression set에 추가한다.
+3. 각 regression Section은 별도 NVIDIA audit 요청으로 실행한다.
+4. 모두 PASS면 별도 PR 없이 현재 PR check에 증명서를 연결한다.
+5. 하나라도 실패하면 현재 PR 생성 또는 merge를 중단한다.
+
+### 사례 I: 열린 자동 PR이 있는 동안 사람이 main에 직접 push한 경우
+
+1. open PR의 `baseCommit`과 현재 main이 달라진다.
+2. PR을 `STALE_BASE`로 표시하고 merge queue 진입을 막는다.
+3. changed files와 기존 PR write-set이 겹치면 기존 patch를 즉시 폐기한다.
+4. 최신 main에서 해당 Section audit를 새 요청으로 다시 호출한다.
+5. 사람이 이미 누락을 고쳤다면 PASS 증명서를 쓰고 기존 자동 PR을 `obsolete`로 닫는다.
+6. 여전히 누락이면 새로운 fingerprint와 patch hash로 기존 PR을 대체한다.
+
+### 사례 J: 같은 push event가 중복 전달된 경우
+
+1. `eventId`, run key와 node idempotency key를 확인한다.
+2. 이미 같은 fingerprint를 처리 중이면 두 번째 실행은 기존 실행을 관찰만 한다.
+3. 동일한 open PR key가 있으면 새 branch와 PR을 만들지 않는다.
+4. 완료된 PASS 증명서가 있으면 CACHED_PASS로 종료한다.
+
+### 사례 K: NVIDIA 응답이 잘렸거나 JSON이 아닌 경우
+
+1. 해당 Section 응답만 `FAILED_SCHEMA`로 처리한다.
+2. 다른 18개 응답과 PASS 증명서는 폐기하지 않는다.
+3. 같은 독립 입력으로 제한된 횟수만 재시도한다.
+4. 재시도에도 실패하면 그 Section과 후행 노드만 BLOCKED다.
+5. 불완전한 diff를 이어 붙이거나 다른 Section 응답으로 보충하지 않는다.
+
+### 사례 L: NVIDIA diff가 허용 범위를 벗어난 경우
+
+예:
+
+```text
+S05 allowedWriteGlobs = src/components/navigation/**
+NVIDIA diff           = src/components/navigation/Nav.tsx + src/pages/Home.tsx
+```
+
+동작:
+
+1. scope guard가 전체 diff를 거부한다.
+2. 허용 파일 부분만 잘라서 적용하지 않는다.
+3. PR을 만들지 않는다.
+4. `BLOCKED_CROSS_OWNER_CHANGE`와 위반 경로를 기록한다.
+5. 필요한 경우 S06을 별도 dirty 노드로 예약하되 두 Section을 한 요청에 묶지 않는다.
+
+### 사례 M: 코드가 추가됐지만 이미 명세를 만족하는 경우
+
+1. 담당 Section audit 요청은 `PASS`를 반환한다.
+2. diff 생성 요청을 호출하지 않는다.
+3. branch와 PR을 만들지 않는다.
+4. 새 fingerprint의 PASS 증명서만 `validation-state`에 기록한다.
+
+### 사례 N: 코드가 과도하게 추가되어 명세 범위를 침범한 경우
+
+1. 담당 Section은 범위 위반을 finding으로 기록한다.
+2. 기본 정책이 누락 추가 중심이므로 대량 삭제 patch를 만들지 않는다.
+3. 안전한 한 줄 교체나 직접 위반 줄 제거로 한정할 수 없으면 `BLOCKED_UNSAFE_REMOVAL`로 둔다.
+4. PR 대신 사람이 검토할 Check 또는 Issue를 만든다.
+
+### 사례 O: package dependency가 추가된 경우
+
+1. S16이 dependency 이름, 사용 파일과 lockfile 변화를 검사한다.
+2. 해당 package를 import하는 Section을 impact graph로 찾고 각각 독립 호출한다.
+3. 사용되지 않는 package 또는 전체 upgrade는 자동 제거·정리하지 않고 BLOCKED로 표시한다.
+4. 명세 구현에 필수이고 안전한 경우에도 package 추가 PR은 다른 code patch보다 먼저 병합한다.
+5. 병합 뒤 lockfile hash가 바뀌므로 후행 patch는 최신 base에서 다시 생성한다.
+
+### 사례 P: 자동 PR이 병합되지 않고 닫힌 경우
+
+1. 해당 노드를 PASS로 표시하지 않는다.
+2. patch proposal과 PR 결과를 실행 이력으로만 남긴다.
+3. 다음 code push에서 fingerprint가 같아도 유효한 PASS 증명서가 없으므로 다시 audit한다.
+4. 사람이 `do-not-retry` 결정을 기록한 경우에만 수동 차단 상태를 유지한다.
+
+### 사례 Q: 자동 PR이 병합된 경우
+
+1. merge commit에서 담당 Section과 영향받은 PASS Section을 다시 audit한다.
+2. 모두 PASS면 새 fingerprint별 증명서를 기록한다.
+3. 담당 Section의 `publicDigest`가 달라졌으면 DAG 후행 노드를 dirty로 표시한다.
+4. ready 상태가 된 후행 노드는 각자 새로운 NVIDIA 요청으로 실행한다.
+5. 이전 PR의 대화 내용이나 diff를 후행 모델 context에 전달하지 않는다.
+
+### 사례 R: 어떤 노드에도 매핑되지 않는 source code가 들어온 경우
+
+1. 누락된 영향 매핑을 안전하게 무시하지 않는다.
+2. `UNMAPPED_SOURCE_CHANGE` 경고를 남긴다.
+3. 이번 실행은 S01-S19 전체 독립 audit 19개로 전환한다.
+4. 실행 후 새 파일을 어느 노드가 읽고 쓸지 `impact-manifest.yml` 보정 작업을 만든다.
+
+## DAG 스케줄러
+
+audit queue와 patch queue의 준비 조건을 분리한다.
+
+- `AUDIT_READY`: node가 dirty이고 같은 target·Section audit가 실행 중이 아니며 NVIDIA rate limit token이 있다. DAG 선행 PASS는 요구하지 않는다.
+- `PATCH_READY`: audit가 PATCH_REQUIRED이고 직접 선행 노드가 모두 최종 PASS 또는 CACHED_PASS이며 write-set lock과 중복 PR 검사를 통과했다.
+
+```ts
+function auditReady(node: Node, state: State): boolean {
+  return node.isDirty
+    && !state.auditLocks.has(node.auditLockKey)
+    && state.rateLimiter.available();
+}
+
+function patchReady(node: Node, state: State): boolean {
+  return node.auditStatus === 'PATCH_REQUIRED'
+    && node.dependsOn.every((id) => state[id].isFinalPassing)
+    && !state.patchLocks.has(node.patchLockKey)
+    && !state.activeWriteSets.some((set) => intersects(set, node.plannedWriteSet))
+    && !state.openPrKeys.has(node.idempotencyKey);
+}
+```
+
+누락 검사 단계는 read-only이므로 full audit에서 S01-S19를 모두 queue에 올린다. rate limit 안에서 19개를 병렬 또는 순차 전송할 수 있지만 요청은 끝까지 19개로 분리한다. patch 적용과 PR 생성 단계만 DAG와 write-set 충돌 그래프로 보수적으로 직렬화한다.
 
 ## 충돌 방지
 
@@ -731,23 +1179,279 @@ PR을 만들기 전에 branch 이름, PR label, PR body의 hidden marker를 검�
 
 PR branch에는 실제 코드 변경만 둔다. 원본 API 응답, screenshot과 상세 로그는 Actions artifact에 저장하고 PR body에서 링크한다.
 
+## PR 동작 예시
+
+### Example 1: S09 누락 token 추가 PR
+
+branch:
+
+```text
+auto/gdweb-26357/S09/7f91c3a24b10
+```
+
+제목:
+
+```text
+fix(S09): add missing surface color token
+```
+
+labels:
+
+```text
+automated-design-validation
+section:S09
+patch-source:nvidia
+awaiting-review
+```
+
+본문:
+
+```markdown
+## Reason
+
+`S09-COLOR-SURFACE-004` is present in DESIGN_INDEX and Evidence `E-D01`, but the corresponding CSS custom property is missing from the implementation.
+
+## Scope
+
+- Section: `S09`
+- Target: `gdweb-26357`
+- Base commit: `<sha>`
+- Changed files: `frontend/styles/tokens.css`
+- Changed lines: `+1 / -0`
+
+## Evidence
+
+- Requirement: `S09-COLOR-SURFACE-004`
+- Evidence: `E-D01`
+- DESIGN_INDEX value: `#F5F7FA`, `rgb(245 247 250)`, `hsl(216 33% 97%)`
+
+## Independent NVIDIA Requests
+
+- Audit request: `run-...:audit:S09`
+- Patch request: `run-...:patch:S09`
+- No S01-S08 or S10-S19 content was included in either request.
+
+## Patch Guards
+
+- JSON Schema: PASS
+- Requirement ownership: PASS
+- Base file hashes: PASS
+- Allowed paths: PASS
+- `git apply --check`: PASS
+- Deletion guard: PASS
+
+## Verification
+
+- Build: PASS
+- CSS token parser: PASS
+- S09 visual color check: PASS
+- Affected cached PASS regression: PASS
+
+<!-- design-validation-pr-key: sha256:... -->
+```
+
+이 PR에는 S09 이외의 개선, 포맷 변경, 이름 정리와 token 재배치가 들어가면 안 된다.
+
+### Example 2: S12 모바일 breakpoint 복구 PR
+
+```text
+title: fix(S12): restore 390px navigation layout
+branch: auto/gdweb-26357/S12/9a6bd1cc8120
+depends-on-attestations: S04, S05, S06, S07, S08, S09, S10, S11
+write-set: frontend/styles/responsive.css
+verification-viewports: 390, 360
+regression-viewports: 768, 1024, 1440
+```
+
+동작 과정:
+
+1. S12 audit 요청이 `PATCH_REQUIRED`를 반환한다.
+2. S12 patch 요청이 한 파일의 최소 diff를 반환한다.
+3. S05, S07, S10의 현재 PASS 증명서를 regression set으로 연결한다.
+4. 모바일 viewport와 desktop 회귀 검사를 모두 통과한다.
+5. 같은 write-set을 가진 PR이 없을 때만 PR을 연다.
+6. review 중 main이 바뀌면 merge 전에 base hash를 다시 검사한다.
+
+### Example 3: PASS이므로 PR을 만들지 않는 결과
+
+GitHub Check 제목:
+
+```text
+Design Validation / S05 Navigation: PASS
+```
+
+Check summary:
+
+```markdown
+The navigation implementation satisfies all S05 requirements for fingerprint `sha256:...`.
+
+- NVIDIA audit requests: 1
+- Patch requests: 0
+- Application changes: 0
+- PR created: no
+- Attestation: `attestations/.../S05/<fingerprint>.json`
+```
+
+PASS를 눈에 보이게 남기기 위해 빈 commit이나 빈 PR을 만들지 않는다.
+
+### Example 4: CACHED_PASS로 완전히 건너뛴 결과
+
+```text
+status: CACHED_PASS
+audit API calls: 0
+patch API calls: 0
+branch created: false
+PR created: false
+reason: current fingerprint matches immutable PASS attestation
+```
+
+GitHub Check에는 어떤 증명서를 재사용했는지와 현재 fingerprint만 표시한다.
+
+### Example 5: Evidence 부족으로 차단된 결과
+
+GitHub Check 제목:
+
+```text
+Design Validation / S10 Typography: BLOCKED_MISSING_EVIDENCE
+```
+
+Check summary:
+
+```markdown
+`S10-HERO-TITLE-003` requires an exact line-height, but neither DESIGN_INDEX nor the provided Evidence contains a measurable value.
+
+- Proposed value: none
+- Patch generated: no
+- PR created: no
+- Required Evidence: desktop hero title crop with unscaled text bounds
+```
+
+이 상태에서 NVIDIA가 임의의 `1.2` 또는 `64px`을 생성하면 응답 자체를 schema 위반으로 폐기한다.
+
+### Example 6: 허용 파일을 벗어난 patch 차단
+
+```text
+section: S05
+allowed: frontend/components/navigation/**
+returned write-set:
+  - frontend/components/navigation/Nav.js
+  - frontend/index.html
+result: BLOCKED_CROSS_OWNER_CHANGE
+PR created: false
+```
+
+허용된 첫 번째 파일의 hunk만 잘라 적용하지 않는다. 전체 diff를 폐기한다.
+
+### Example 7: 독립 PR 두 개가 병렬로 열리는 경우
+
+```text
+PR #201 S09 write-set = frontend/styles/tokens.css
+PR #202 S15 write-set = frontend/data/games.js
+dependency path between S09 and S15 = none
+```
+
+두 PR은 동시에 열 수 있지만 각각 자기 Section NVIDIA audit와 patch 요청을 사용한다. PR #201의 결과를 PR #202 모델에게 전달하지 않는다. merge queue에서 하나가 먼저 병합되더라도 파일이 겹치지 않으면 나머지 PR은 base 재검증 후 유지할 수 있다.
+
+### Example 8: 같은 파일 때문에 후행 PR을 만들지 않는 경우
+
+```text
+S09 verified patch -> frontend/styles.css
+S12 verified patch -> frontend/styles.css
+```
+
+1. S09만 PR을 연다.
+2. S12는 `WAITING_WRITE_LOCK`이며 PR 창을 만들지 않는다.
+3. S09 병합 후 S12의 기존 patch를 폐기한다.
+4. S12를 최신 main에서 새 NVIDIA audit와 patch 요청으로 다시 처리한다.
+5. 새 결과가 PASS라면 S12 PR은 끝까지 생성되지 않는다.
+
+### Example 9: 기존 자동 PR과 같은 수정이 사람이 먼저 들어온 경우
+
+```text
+open PR: #203 section S12
+manual main push: same 390px rule implemented
+```
+
+1. #203을 `STALE_BASE`로 표시한다.
+2. 최신 main으로 S12 독립 audit를 실행한다.
+3. 결과가 PASS이면 PASS 증명서를 기록한다.
+4. #203에 `superseded by main <sha>` comment를 남기고 닫는다.
+5. 대체 PR을 만들지 않는다.
+
+### Example 10: 자동 PR이 테스트에서 실패한 경우
+
+```text
+audit: PATCH_REQUIRED
+patch schema: PASS
+git apply --check: PASS
+build: PASS
+Playwright 390px: FAIL
+```
+
+검증 전 branch를 내부 작업공간에 만들 수는 있지만 GitHub PR은 생성하지 않는다. 결과는 `FAILED_TEST` 또는 `FAILED_VISUAL_REGRESSION`으로 기록하고 NVIDIA에 테스트 로그 전체를 넘겨 임의 재수정을 반복하지 않는다. 재시도는 동일 Requirement에 대해 설정된 횟수로 제한한다.
+
+### Example 11: 열린 PR의 base가 오래된 경우
+
+PR 상태 comment:
+
+```markdown
+This automated patch is stale because `main` changed from `<old-sha>` to `<new-sha>`.
+
+- Original patch was not rebased automatically.
+- Original NVIDIA diff was discarded.
+- The node has been queued for a fresh isolated audit against `<new-sha>`.
+```
+
+새 audit가 PASS면 PR을 닫고, PATCH_REQUIRED면 새로운 fingerprint로 patch를 다시 만든다. Git이 우연히 rebase에 성공했다는 이유만으로 오래된 NVIDIA diff를 신뢰하지 않는다.
+
+### Example 12: PR이 병합된 후 후행 DAG가 진행되는 경우
+
+```text
+PR #204 / S05 merged
+S05 post-merge audit -> PASS
+S05 publicDigest changed
+ready candidates -> S06, S12
+```
+
+S06과 S12는 각각 별도의 NVIDIA audit 요청으로 실행된다. S05 PR 본문, review comment와 diff는 두 요청의 context에 들어가지 않는다. 두 노드가 모두 patch를 요구하더라도 DAG와 write-set 조건을 각각 계산해 PR 생성 여부를 결정한다.
+
+### PR 생성 전후 상태표
+
+| 상태 | branch | PR | 다음 동작 |
+| --- | --- | --- | --- |
+| PASS | 없음 | 없음 | 증명서 기록 |
+| CACHED_PASS | 없음 | 없음 | 즉시 종료 |
+| PATCH_REQUIRED | 없음 | 없음 | 독립 patch 요청 |
+| PATCH_PROPOSED | 임시 worktree만 | 없음 | guard와 test |
+| PATCH_VERIFIED | 생성 가능 | 생성 가능 | lock과 중복 검사 |
+| PATCH_WAITING_DEPENDENCY | 없음 | 없음 | audit 결과 보관 후 선행 PASS/병합 대기 |
+| WAITING_WRITE_LOCK | 없음 | 없음 | 충돌 PR 병합 대기 |
+| BLOCKED_* | 없음 | 없음 | Check 또는 Issue |
+| PR_OPEN | 있음 | 하나 | review와 merge queue |
+| STALE_BASE | 기존 branch | merge 금지 | 새 audit 후 닫기 또는 대체 |
+| MERGED | 삭제 가능 | merged | post-merge audit와 증명서 |
+| CLOSED_UNMERGED | 삭제 가능 | closed | PASS 처리 금지 |
+
 ## 노드 상태 모델
 
 ```text
 DISCOVERED
   -> CACHED_PASS
-  -> WAITING_DEPENDENCY
-  -> READY
+  -> AUDIT_READY
   -> AUDITING
   -> PASS
+  -> PASS_PENDING_DEPENDENCY
   -> PATCH_REQUIRED
+  -> PATCH_WAITING_DEPENDENCY
   -> PATCH_GENERATING
   -> PATCH_PROPOSED
   -> VERIFYING
-  -> PR_READY
+  -> PATCH_VERIFIED
+  -> WAITING_WRITE_LOCK
   -> PR_OPEN
   -> MERGE_QUEUE
   -> MERGED
+  -> POST_MERGE_AUDIT
   -> PASS_ATTESTED
 ```
 
@@ -878,29 +1582,35 @@ NVIDIA 호출은 token bucket으로 RPM을 제한한다. 19개 노드를 무조�
 현재 실행 결과가 다음과 같다고 가정한다.
 
 ```text
-S01 CACHED_PASS
-S02 CACHED_PASS
-S03 CACHED_PASS
-S04 CACHED_PASS
+S01 audit PASS
+S02 audit PASS
+S03 audit PASS
+S04 audit PASS
 S05 PATCH_REQUIRED -> PATCH_VERIFIED -> PR #41
-S06 WAITING_DEPENDENCY
-S07 CACHED_PASS
-S08 CACHED_PASS
-S09 CACHED_PASS
-S10 CACHED_PASS
-S11 CACHED_PASS
-S12 PATCH_REQUIRED -> S05 병합 대기
-S13-S19 dependency 대기 또는 CACHED_PASS 판정 보류
+S06 audit PASS -> PASS_PENDING_DEPENDENCY
+S07 audit PASS
+S08 audit PASS
+S09 audit PASS
+S10 audit PASS
+S11 audit PASS
+S12 audit PATCH_REQUIRED -> PATCH_WAITING_DEPENDENCY
+S13-S18 audit PASS 또는 PATCH_REQUIRED
+S19 audit BLOCKED_MISSING_EVIDENCE
+전체 audit 호출 수 = 19
 ```
 
-`PR #41`이 병합되면 S05의 새 PASS 증명서를 만든다. S05의 `publicDigest`가 이전과 달라졌으므로 S06, S12와 그 후행 노드만 다시 계산한다. S01-S04, S07-S11 중 입력과 dependency digest가 그대로인 노드는 다시 호출하지 않는다. S12가 최신 `main`에서 여전히 실패하고 안전한 diff를 만들 수 있을 때만 두 번째 PR을 생성한다.
+S05가 실패했어도 full audit의 S06-S19 호출을 생략하지 않는다. 다만 S05에 의존하는 PASS 결과는 `PASS_PENDING_DEPENDENCY`, patch 결과는 `PATCH_WAITING_DEPENDENCY`로 보관해 PR 생성을 막는다.
+
+`PR #41`이 병합되면 S05의 새 PASS 증명서를 만든다. S05의 `publicDigest`가 이전과 달라졌으므로 S06, S12와 그 후행 노드만 각각 다시 호출한다. S01-S04, S07-S11 중 입력과 dependency digest가 그대로인 노드는 다시 호출하지 않는다. S12가 최신 `main`에서 여전히 실패하고 안전한 diff를 만들 수 있을 때만 두 번째 PR을 생성한다.
 
 ## 최종 권장안
 
 가장 중요한 것은 `항목 수`, `API 호출 수`, `PR 수`를 같은 숫자로 취급하지 않는 것이다.
 
 - 항목 수는 항상 19개다.
-- API 호출 수는 cache와 변경 영향에 따라 0개부터 19개 이상까지 달라진다.
+- 최초·강제 전체 audit의 NVIDIA 호출 수는 정확히 19개다.
+- 증분 audit 호출 수는 dirty Section 수만큼이며, 언제나 Section별 별도 요청이다.
+- PATCH_REQUIRED가 있으면 audit 19개와 별도로 해당 Section의 patch 요청이 추가되므로 전체 API 호출 수는 19개를 넘을 수 있다.
 - PR 수는 실제 누락이 있고 안전한 코드 diff가 검증된 노드 수만큼만 생긴다.
 - 이미 통과한 노드는 fingerprint가 바뀌지 않는 한 정적으로 PASS 상태를 재사용한다.
 - 독립성은 별도 요청과 작업공간으로 보장하고, 일관성은 DAG 증명서와 `publicDigest`로 보장한다.
