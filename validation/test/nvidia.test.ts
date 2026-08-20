@@ -82,3 +82,47 @@ test("normalizes transport metadata while preserving model-owned audit judgments
     },
   });
 });
+
+test("normalizes identifier transport defects without changing the finding judgment", () => {
+  const longId = "responsive requirement ".repeat(20);
+  const normalized = normalizeCompletionOutput("audit", {
+    status: "BLOCKED_MISSING_EVIDENCE",
+    findings: [
+      {
+        requirementid: "Typography size",
+        status: "INSUFFICIENT_EVIDENCE",
+        finding: "No grounded measurement is available.",
+      },
+      {
+        requirementId: longId,
+        status: "MISSING",
+        finding: "A required behavior is absent.",
+      },
+    ],
+  }, sectionId, fingerprint) as { findings: Array<{ requirementId: string; status: string }> };
+
+  assert.equal(normalized.findings[0].requirementId, "Typography size");
+  assert.equal(normalized.findings[0].status, "INSUFFICIENT_EVIDENCE");
+  assert.equal(normalized.findings[1].requirementId.length, 160);
+  assert.equal(normalized.findings[1].status, "MISSING");
+});
+
+test("quarantines an incomplete audit response as UNKNOWN instead of creating a patch", () => {
+  assert.deepEqual(normalizeCompletionOutput("audit", { schemaVersion: "" }, sectionId, fingerprint), {
+    schemaVersion: "design-validation/audit-output/v2",
+    sectionId,
+    fingerprint,
+    status: "UNKNOWN",
+    findings: [{
+      requirementId: "S05-UNKNOWN-001",
+      pageId: null,
+      componentId: null,
+      status: "UNKNOWN",
+      finding: "The isolated audit returned no grounded requirement-level conclusion.",
+      evidenceRefs: [],
+      implementationRefs: [],
+      proposedValue: null,
+    }],
+    publicOutput: {},
+  });
+});

@@ -118,6 +118,7 @@ export function validatorContractHash(
     schemaVersion: "design-validation/validator-contract/v2",
     promptVersion: "audit-system/v3-schema-bound",
     patchPromptVersion: "patch-system/v3-schema-bound",
+    normalizerVersion: "nvidia-output-normalizer/v2",
     auditSchemaHash,
     impactManifest: manifest,
     maxChangedFiles: config.maxChangedFiles,

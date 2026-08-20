@@ -89,22 +89,52 @@ function normalizePublicOutput(value: unknown): Record<string, string | number |
   ) as Record<string, string | number | boolean | string[] | null>;
 }
 
-function normalizeFindings(value: unknown): unknown {
+function requirementId(value: unknown, sectionId: SectionId, index: number): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    return `${sectionId}-FINDING-${String(index + 1).padStart(3, "0")}`;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length <= 160) return trimmed;
+  return `${trimmed.slice(0, 143)}-${hashHex(sha256(trimmed)).slice(0, 16)}`;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function normalizeFindings(value: unknown, sectionId: SectionId): unknown {
   if (!Array.isArray(value)) return value;
-  return value.map((candidate) => {
+  return value.map((candidate, index) => {
     const finding = asRecord(candidate);
     if (!finding) return candidate;
     return {
-      requirementId: finding.requirementId,
-      pageId: finding.pageId,
-      componentId: finding.componentId,
-      status: finding.status,
-      finding: finding.finding,
-      evidenceRefs: finding.evidenceRefs,
-      implementationRefs: finding.implementationRefs,
+      requirementId: requirementId(finding.requirementId ?? finding.requirementid, sectionId, index),
+      pageId: typeof finding.pageId === "string" ? finding.pageId : null,
+      componentId: typeof finding.componentId === "string" ? finding.componentId : null,
+      status: finding.status === "MISSING" || finding.status === "INSUFFICIENT_EVIDENCE"
+        ? finding.status
+        : "UNKNOWN",
+      finding: typeof finding.finding === "string" && finding.finding.trim() !== ""
+        ? finding.finding
+        : "The isolated audit returned a finding without a grounded description.",
+      evidenceRefs: normalizeStringArray(finding.evidenceRefs),
+      implementationRefs: normalizeStringArray(finding.implementationRefs),
       proposedValue: null,
     };
   });
+}
+
+function unknownFinding(sectionId: SectionId): Record<string, unknown> {
+  return {
+    requirementId: `${sectionId}-UNKNOWN-001`,
+    pageId: null,
+    componentId: null,
+    status: "UNKNOWN",
+    finding: "The isolated audit returned no grounded requirement-level conclusion.",
+    evidenceRefs: [],
+    implementationRefs: [],
+    proposedValue: null,
+  };
 }
 
 export function normalizeCompletionOutput(
@@ -126,12 +156,21 @@ export function normalizeCompletionOutput(
   const source = asRecord(value);
   if (!source) return value;
   if (kind === "audit" || kind === "reaudit") {
+    const status = source.status === "PASS" ||
+      source.status === "PATCH_REQUIRED" ||
+      source.status === "BLOCKED_MISSING_EVIDENCE" ||
+      source.status === "BLOCKED_CONTRACT_CONFLICT" ||
+      source.status === "UNKNOWN"
+      ? source.status
+      : "UNKNOWN";
+    const normalizedFindings = normalizeFindings(source.findings, sectionId);
+    const findings = Array.isArray(normalizedFindings) ? normalizedFindings : [];
     return {
       schemaVersion: "design-validation/audit-output/v2",
       sectionId,
       fingerprint,
-      status: source.status,
-      findings: normalizeFindings(source.findings),
+      status,
+      findings: status === "PASS" || findings.length > 0 ? findings : [unknownFinding(sectionId)],
       publicOutput: normalizePublicOutput(source.publicOutput),
     };
   }
