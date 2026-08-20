@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bindOutputSchema, normalizeCompletionOutput } from "../src/nvidia.ts";
+import { bindOutputSchema, normalizeCompletionOutput, parseJsonContent } from "../src/nvidia.ts";
 import type { SectionId, Sha256 } from "../src/types.ts";
 
 const sectionId: SectionId = "S05";
@@ -125,4 +125,13 @@ test("quarantines an incomplete audit response as UNKNOWN instead of creating a 
     }],
     publicOutput: {},
   });
+});
+
+test("repairs JSON syntax defects before the unchanged schema validation boundary", () => {
+  const parsed = parseJsonContent('{"status":"UNKNOWN","finding":"line one\nline two"}') as {
+    status: string;
+    finding: string;
+  };
+  assert.equal(parsed.status, "UNKNOWN");
+  assert.equal(parsed.finding, "line one\nline two");
 });

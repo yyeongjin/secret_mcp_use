@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { jsonrepair } from "jsonrepair";
 import { hashHex, sha256 } from "./hash.ts";
 import type { JsonSchema } from "./schema.ts";
 import type { PipelineConfig, SectionId, Sha256 } from "./types.ts";
@@ -50,12 +51,23 @@ class StartRateLimiter {
   }
 }
 
-function parseJsonContent(content: string): unknown {
+export function parseJsonContent(content: string): unknown {
   const trimmed = content.trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
   const candidate = fenced ? fenced[1] : trimmed;
   if (candidate === "PASS") return candidate;
-  return JSON.parse(candidate);
+  try {
+    return JSON.parse(candidate);
+  } catch (strictError) {
+    try {
+      return JSON.parse(jsonrepair(candidate));
+    } catch (repairError) {
+      throw new Error(
+        `Strict JSON parse failed (${strictError instanceof Error ? strictError.message : String(strictError)}); ` +
+        `syntax-only repair failed (${repairError instanceof Error ? repairError.message : String(repairError)}).`,
+      );
+    }
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
