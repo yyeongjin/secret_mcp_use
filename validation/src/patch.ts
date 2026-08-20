@@ -21,6 +21,15 @@ export interface GuardedPatch {
   patchHash: Sha256;
 }
 
+export function isRepairablePatchSyntaxError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === "Malformed unified diff file headers.") return true;
+  if (!message.includes("git apply --check")) return false;
+  return /(?:corrupt patch|patch fragment without header|malformed patch|unexpected end of file|unrecognized input|No valid patches in input)/i.test(
+    message,
+  );
+}
+
 async function exists(pathname: string): Promise<boolean> {
   try {
     await access(pathname);

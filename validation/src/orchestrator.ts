@@ -17,11 +17,17 @@ import {
   runWithConcurrency,
   type CompletionResult,
 } from "./nvidia.ts";
-import { guardPatch, type GuardedPatch } from "./patch.ts";
+import {
+  guardPatch,
+  isRepairablePatchSyntaxError,
+  type GuardedPatch,
+} from "./patch.ts";
 import {
   AUDIT_SYSTEM_PROMPT,
+  PATCH_REPAIR_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
   auditUserPrompt,
+  patchRepairUserPrompt,
   patchUserPrompt,
 } from "./prompts.ts";
 import {
@@ -350,8 +356,78 @@ async function runPatches(args: {
         scratchDirectory,
       });
     } catch (error) {
-      records.push({ sectionId, status: "BLOCKED_GUARD", reason: errorMessage(error) });
-      continue;
+      const initialGuardError = errorMessage(error);
+      if (!isRepairablePatchSyntaxError(error)) {
+        records.push({ sectionId, status: "BLOCKED_GUARD", reason: initialGuardError });
+        continue;
+      }
+
+      patchCalls += 1;
+      let repairCompletion: CompletionResult;
+      let repairOutput: NodePatchOutput;
+      try {
+        repairCompletion = await args.client.completeJson({
+          kind: "patch",
+          sectionId,
+          fingerprint: input.node.fingerprint,
+          requestId: `${patchRequestId}:repair:1`,
+          systemPrompt: PATCH_REPAIR_SYSTEM_PROMPT,
+          userPrompt: patchRepairUserPrompt({
+            auditInput: input,
+            auditOutput: resolved.output,
+            rejectedOutput: patchOutput,
+            guardError: initialGuardError,
+          }),
+          outputSchema: args.patchOutputSchema,
+        });
+        assertPatchOutput(
+          args.validatePatch,
+          repairCompletion.parsed,
+          sectionId,
+          input.node.fingerprint,
+        );
+        repairOutput = repairCompletion.parsed;
+        await writeJson(
+          path.join(scratchDirectory, sectionId, "patch-repair-api-response.json"),
+          repairCompletion.raw,
+        );
+        await writeJson(
+          path.join(scratchDirectory, sectionId, "patch-repair-output.json"),
+          repairOutput,
+        );
+      } catch (repairError) {
+        records.push({
+          sectionId,
+          status: "BLOCKED_MODEL",
+          reason: `Unified-diff syntax repair request failed: ${errorMessage(repairError)}`,
+        });
+        continue;
+      }
+      if (repairOutput.status !== "PATCH") {
+        records.push({
+          sectionId,
+          status: "BLOCKED_MODEL",
+          reason: `Unified-diff syntax repair declined: ${repairOutput.reason}`,
+        });
+        continue;
+      }
+      patchOutput = repairOutput;
+      try {
+        guarded = await guardPatch({
+          config: args.config,
+          manifest: args.manifest,
+          auditInput: input,
+          patchOutput,
+          scratchDirectory,
+        });
+      } catch (repairGuardError) {
+        records.push({
+          sectionId,
+          status: "BLOCKED_GUARD",
+          reason: `Initial diff syntax error: ${initialGuardError} One repair attempt was rejected: ${errorMessage(repairGuardError)}`,
+        });
+        continue;
+      }
     }
     const conflicts = guarded.changedPaths.filter((changedPath) => claimedPaths.has(changedPath));
     if (conflicts.length > 0) {

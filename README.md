@@ -124,7 +124,7 @@ The Specification is not compiled into the runner. Every execution parses the cu
 
 ### 4. First-run safety settings
 
-The committed push workflow runs with `PIPELINE_DRY_RUN=false` and `PIPELINE_CREATE_PRS=true`. It still cannot publish arbitrary model output: a patch must pass request isolation, response schema validation, immutable-path rejection, base-hash validation, write ownership, diff size limits, `git apply --check`, type checks, unit tests, desktop/mobile browser tests, accessibility regression checks, patched-Section re-audit, affected PASS regression audits, open-PR conflict checks, and idempotency checks. Only then is an unmerged draft PR created.
+The committed push workflow runs with `PIPELINE_DRY_RUN=false` and `PIPELINE_CREATE_PRS=true`. It still cannot publish arbitrary model output: a patch must pass request isolation, response schema validation, immutable-path rejection, base-hash validation, write ownership, diff size limits, `git apply --check`, type checks, unit tests, desktop/mobile browser tests, accessibility regression checks, patched-Section re-audit, affected PASS regression audits, open-PR conflict checks, and idempotency checks. Only then is an unmerged draft PR created. If the first patch is rejected solely because its unified-diff syntax is malformed, the same Section receives one isolated syntax-repair request. Security, ownership, evidence, tests, and re-audit failures are never repair-retried, and a second malformed diff is quarantined.
 
 ### 5. Run and inspect the pipeline
 
@@ -147,6 +147,7 @@ parse current Specification and trigger
   -> send one stateless NVIDIA audit request per remaining Section
   -> merge JSON outputs with deterministic code
   -> send a separate patch request only for grounded PATCH_REQUIRED nodes
+  -> retry the same Section once only for malformed unified-diff syntax
   -> reject trigger/spec writes, stale hashes, excessive diffs, and ownership violations
   -> apply in a temporary worktree
   -> type-check, unit-test, render desktop/mobile, check accessibility

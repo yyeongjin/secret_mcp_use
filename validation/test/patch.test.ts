@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { inspectUnifiedDiff } from "../src/patch.ts";
+import { inspectUnifiedDiff, isRepairablePatchSyntaxError } from "../src/patch.ts";
 
 test("unified diff inspection returns exact frontend write paths", () => {
   const result = inspectUnifiedDiff([
@@ -35,4 +35,25 @@ test("file deletion and path traversal are rejected", () => {
     () => inspectUnifiedDiff("new file mode 120000\n--- /dev/null\n+++ b/frontend/link\n@@ -0,0 +1 @@\n+target\n"),
     /Unsafe new file mode/,
   );
+});
+
+test("only unified-diff syntax failures qualify for one-shot repair", () => {
+  assert.equal(
+    isRepairablePatchSyntaxError(new Error("Malformed unified diff file headers.")),
+    true,
+  );
+  assert.equal(
+    isRepairablePatchSyntaxError(
+      new Error("git apply --check patch.diff failed with 128: error: corrupt patch at line 9"),
+    ),
+    true,
+  );
+  assert.equal(
+    isRepairablePatchSyntaxError(
+      new Error("git apply --check patch.diff failed with 1: error: patch failed: frontend/app.js:1"),
+    ),
+    false,
+  );
+  assert.equal(isRepairablePatchSyntaxError(new Error("Unsafe diff path: ../trigger/a.md")), false);
+  assert.equal(isRepairablePatchSyntaxError(new Error("Stale or incorrect base hash")), false);
 });

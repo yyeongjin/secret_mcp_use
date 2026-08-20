@@ -279,13 +279,44 @@ function mockAudit(sectionId: SectionId, fingerprint: Sha256, patched: boolean):
   };
 }
 
-function mockPatch(sectionId: SectionId, fingerprint: Sha256, userPrompt: string): unknown {
+function mockPatch(
+  sectionId: SectionId,
+  fingerprint: Sha256,
+  userPrompt: string,
+  requestId: string,
+): unknown {
   const validPatchSections = new Set(
     (process.env.NVIDIA_MOCK_VALID_PATCH_SECTIONS ?? "")
       .split(",")
       .map((value) => value.trim())
       .filter(Boolean),
   );
+  const malformedPatchSections = new Set(
+    (process.env.NVIDIA_MOCK_MALFORMED_PATCH_SECTIONS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  if (malformedPatchSections.has(sectionId) && !requestId.includes(":repair:")) {
+    const request = JSON.parse(userPrompt) as {
+      files: Array<{ path: string; contentHash: Sha256; content: string | null }>;
+      findings: Array<{ requirementId: string }>;
+    };
+    const file = request.files.find((candidate) => candidate.path.endsWith("app.js") && candidate.content);
+    if (!file?.content) throw new Error(`${sectionId} malformed mock patch requires frontend/app.js.`);
+    return {
+      schemaVersion: "design-validation/patch-output/v2",
+      sectionId,
+      fingerprint,
+      status: "PATCH",
+      requirementIds: request.findings.map((finding) => finding.requirementId),
+      evidenceRefs: [],
+      readSet: [{ path: file.path, baseHash: file.contentHash }],
+      writeSet: [{ path: file.path, baseHash: file.contentHash }],
+      reason: "Deterministic malformed patch used to test one-shot syntax repair.",
+      diff: "@@\n+// malformed mock patch\n",
+    };
+  }
   if (validPatchSections.has(sectionId)) {
     const request = JSON.parse(userPrompt) as {
       files: Array<{ path: string; contentHash: Sha256; content: string | null }>;
@@ -348,7 +379,7 @@ export class NvidiaClient {
   }): Promise<CompletionResult> {
     if (this.config.mock) {
       const parsed = args.kind === "patch"
-        ? mockPatch(args.sectionId, args.fingerprint, args.userPrompt)
+        ? mockPatch(args.sectionId, args.fingerprint, args.userPrompt, args.requestId)
         : mockAudit(args.sectionId, args.fingerprint, args.kind === "reaudit");
       const raw: ChatCompletionResponse = {
         id: `mock-${args.requestId}`,
