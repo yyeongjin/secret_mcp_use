@@ -26,6 +26,7 @@ export interface CompletionResult {
   rawHash: Sha256;
   requestId: string;
   usage: ChatCompletionResponse["usage"];
+  warning?: string;
 }
 
 class StartRateLimiter {
@@ -110,35 +111,25 @@ function requirementId(value: unknown, sectionId: SectionId, index: number): str
   return `${trimmed.slice(0, 143)}-${hashHex(sha256(trimmed)).slice(0, 16)}`;
 }
 
+function boundedString(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+  return trimmed.length <= maxLength ? trimmed : trimmed.slice(0, maxLength);
+}
+
 function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  if (!Array.isArray(value)) return [];
+  return [...new Set(
+    value
+      .map((item) => boundedString(item, 300))
+      .filter((item): item is string => item !== null),
+  )];
 }
 
-function normalizeFindings(value: unknown, sectionId: SectionId): unknown {
-  if (!Array.isArray(value)) return value;
-  return value.map((candidate, index) => {
-    const finding = asRecord(candidate);
-    if (!finding) return candidate;
-    return {
-      requirementId: requirementId(finding.requirementId ?? finding.requirementid, sectionId, index),
-      pageId: typeof finding.pageId === "string" ? finding.pageId : null,
-      componentId: typeof finding.componentId === "string" ? finding.componentId : null,
-      status: finding.status === "MISSING" || finding.status === "INSUFFICIENT_EVIDENCE"
-        ? finding.status
-        : "UNKNOWN",
-      finding: typeof finding.finding === "string" && finding.finding.trim() !== ""
-        ? finding.finding
-        : "The isolated audit returned a finding without a grounded description.",
-      evidenceRefs: normalizeStringArray(finding.evidenceRefs),
-      implementationRefs: normalizeStringArray(finding.implementationRefs),
-      proposedValue: null,
-    };
-  });
-}
-
-function unknownFinding(sectionId: SectionId): Record<string, unknown> {
+function unknownFinding(sectionId: SectionId, index = 0): Record<string, unknown> {
   return {
-    requirementId: `${sectionId}-UNKNOWN-001`,
+    requirementId: `${sectionId}-UNKNOWN-${String(index + 1).padStart(3, "0")}`,
     pageId: null,
     componentId: null,
     status: "UNKNOWN",
@@ -146,6 +137,38 @@ function unknownFinding(sectionId: SectionId): Record<string, unknown> {
     evidenceRefs: [],
     implementationRefs: [],
     proposedValue: null,
+  };
+}
+
+function normalizeFindings(value: unknown, sectionId: SectionId): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.map((candidate, index) => {
+    const finding = asRecord(candidate);
+    if (!finding) return unknownFinding(sectionId, index);
+    return {
+      requirementId: requirementId(finding.requirementId ?? finding.requirementid, sectionId, index),
+      pageId: boundedString(finding.pageId, 120),
+      componentId: boundedString(finding.componentId, 120),
+      status: finding.status === "MISSING" || finding.status === "INSUFFICIENT_EVIDENCE"
+        ? finding.status
+        : "UNKNOWN",
+      finding: boundedString(finding.finding, 2000) ??
+        "The isolated audit returned a finding without a grounded description.",
+      evidenceRefs: normalizeStringArray(finding.evidenceRefs),
+      implementationRefs: normalizeStringArray(finding.implementationRefs),
+      proposedValue: null,
+    };
+  });
+}
+
+export function quarantineAuditOutput(sectionId: SectionId, fingerprint: Sha256): unknown {
+  return {
+    schemaVersion: "design-validation/audit-output/v2",
+    sectionId,
+    fingerprint,
+    status: "UNKNOWN",
+    findings: [unknownFinding(sectionId)],
+    publicOutput: { transportStatus: "QUARANTINED" },
   };
 }
 
@@ -175,14 +198,23 @@ export function normalizeCompletionOutput(
       source.status === "UNKNOWN"
       ? source.status
       : "UNKNOWN";
-    const normalizedFindings = normalizeFindings(source.findings, sectionId);
-    const findings = Array.isArray(normalizedFindings) ? normalizedFindings : [];
+    const findings = normalizeFindings(source.findings, sectionId);
+    const patchFindingsAreGrounded = findings.length > 0 && findings.every(
+      (finding) => finding.status === "MISSING" &&
+        typeof finding.finding === "string" &&
+        !finding.finding.startsWith("The isolated audit returned"),
+    );
+    const normalizedStatus = status === "PASS" && findings.length > 0
+      ? "UNKNOWN"
+      : status === "PATCH_REQUIRED" && !patchFindingsAreGrounded
+        ? "UNKNOWN"
+        : status;
     return {
       schemaVersion: "design-validation/audit-output/v2",
       sectionId,
       fingerprint,
-      status,
-      findings: status === "PASS" || findings.length > 0 ? findings : [unknownFinding(sectionId)],
+      status: normalizedStatus,
+      findings: normalizedStatus === "PASS" || findings.length > 0 ? findings : [unknownFinding(sectionId)],
       publicOutput: normalizePublicOutput(source.publicOutput),
     };
   }
@@ -398,6 +430,7 @@ export class NvidiaClient {
       const content = raw.choices?.[0]?.message?.content;
       if (!content) throw new Error(`${args.requestId} returned no message content.`);
       let parsed: unknown;
+      let warning: string | undefined;
       try {
         parsed = normalizeCompletionOutput(
           args.kind,
@@ -406,9 +439,15 @@ export class NvidiaClient {
           args.fingerprint,
         );
       } catch (error) {
-        throw new Error(
-          `${args.requestId} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        if (args.kind === "patch") {
+          throw new Error(
+            `${args.requestId} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        warning = `${args.requestId} returned invalid JSON and was quarantined: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+        parsed = quarantineAuditOutput(args.sectionId, args.fingerprint);
       }
       return {
         parsed,
@@ -416,6 +455,7 @@ export class NvidiaClient {
         rawHash: sha256(JSON.stringify(raw)),
         requestId: args.requestId,
         usage: raw.usage,
+        warning,
       };
     }
     throw new Error(`${args.requestId} exhausted NVIDIA retries.`);

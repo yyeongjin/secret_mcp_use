@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bindOutputSchema, normalizeCompletionOutput, parseJsonContent } from "../src/nvidia.ts";
+import {
+  bindOutputSchema,
+  normalizeCompletionOutput,
+  parseJsonContent,
+  quarantineAuditOutput,
+} from "../src/nvidia.ts";
 import type { SectionId, Sha256 } from "../src/types.ts";
 
 const sectionId: SectionId = "S05";
@@ -134,4 +139,33 @@ test("repairs JSON syntax defects before the unchanged schema validation boundar
   };
   assert.equal(parsed.status, "UNKNOWN");
   assert.equal(parsed.finding, "line one\nline two");
+});
+
+test("quarantines an unparseable Section without promoting it to PATCH_REQUIRED", () => {
+  assert.deepEqual(quarantineAuditOutput(sectionId, fingerprint), {
+    schemaVersion: "design-validation/audit-output/v2",
+    sectionId,
+    fingerprint,
+    status: "UNKNOWN",
+    findings: [{
+      requirementId: "S05-UNKNOWN-001",
+      pageId: null,
+      componentId: null,
+      status: "UNKNOWN",
+      finding: "The isolated audit returned no grounded requirement-level conclusion.",
+      evidenceRefs: [],
+      implementationRefs: [],
+      proposedValue: null,
+    }],
+    publicOutput: { transportStatus: "QUARANTINED" },
+  });
+});
+
+test("downgrades an ungrounded PATCH_REQUIRED envelope to UNKNOWN", () => {
+  const normalized = normalizeCompletionOutput("audit", {
+    status: "PATCH_REQUIRED",
+    findings: [{ status: "UNKNOWN" }],
+  }, sectionId, fingerprint) as { status: string; findings: unknown[] };
+  assert.equal(normalized.status, "UNKNOWN");
+  assert.equal(normalized.findings.length, 1);
 });

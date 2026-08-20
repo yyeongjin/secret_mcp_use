@@ -11,7 +11,12 @@ import {
 } from "./input.ts";
 import { readImpactManifest, topologicalSections } from "./manifest.ts";
 import { readSpecification, readTrigger } from "./markdown.ts";
-import { NvidiaClient, runWithConcurrency, type CompletionResult } from "./nvidia.ts";
+import {
+  NvidiaClient,
+  quarantineAuditOutput,
+  runWithConcurrency,
+  type CompletionResult,
+} from "./nvidia.ts";
 import { guardPatch, type GuardedPatch } from "./patch.ts";
 import {
   AUDIT_SYSTEM_PROMPT,
@@ -181,7 +186,15 @@ async function callAudit(args: {
     );
     return { ok: true, sectionId, completion, output: completion.parsed };
   } catch (error) {
-    return { ok: false, sectionId, error: errorMessage(error), completion };
+    const warning = `${errorMessage(error)} The response was quarantined as UNKNOWN.`;
+    const output = quarantineAuditOutput(sectionId, args.input.node.fingerprint);
+    assertAuditOutput(args.validate, output, sectionId, args.input.node.fingerprint);
+    return {
+      ok: true,
+      sectionId,
+      completion: { ...completion, parsed: output, warning },
+      output,
+    };
   }
 }
 
@@ -196,6 +209,12 @@ async function saveAuditCall(
   if (result.ok) {
     await writeJson(path.join(nodeDirectory, "api-response.json"), result.completion.raw);
     await writeJson(path.join(nodeDirectory, "audit-output.json"), result.output);
+    if (result.completion.warning) {
+      await writeJson(path.join(nodeDirectory, "audit-warning.json"), {
+        sectionId: result.sectionId,
+        warning: result.completion.warning,
+      });
+    }
   } else {
     if (result.completion) {
       await writeJson(path.join(nodeDirectory, "api-response.json"), result.completion.raw);
