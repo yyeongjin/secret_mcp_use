@@ -1,0 +1,106 @@
+schemaVersion: design-validation/impact-manifest/v1
+
+immutableInputGlobs:
+  - trigger/**
+  - DESIGN_INDEX_SPECIFICATION.md
+  - DESIGN_INDEX_SPECIFICATION.ko.md
+
+globalAllowedWriteGlobs:
+  - frontend/**
+
+nodes:
+  S01:
+    name: Goal and scope
+    dependsOn: []
+    reads: [frontend/index.html, frontend/app.js]
+    writes: [frontend/index.html, frontend/app.js]
+  S02:
+    name: Evidence and coordinates
+    dependsOn: [S01]
+    reads: []
+    writes: []
+  S03:
+    name: Site map and routes
+    dependsOn: [S01, S02]
+    reads: [frontend/index.html, frontend/app.js]
+    writes: [frontend/index.html, frontend/app.js]
+  S04:
+    name: Shared application shell
+    dependsOn: [S03, S09, S16]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
+  S05:
+    name: Navigation and header
+    dependsOn: [S03, S04, S09, S10]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
+  S06:
+    name: Page-by-page specifications
+    dependsOn: [S02, S03, S04, S05, S09, S10, S11, S15]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
+  S07:
+    name: Sections and layout
+    dependsOn: [S04, S06, S09]
+    reads: [frontend/index.html, frontend/styles.css]
+    writes: [frontend/index.html, frontend/styles.css]
+  S08:
+    name: Component abstraction
+    dependsOn: [S06, S07, S15, S16]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
+  S09:
+    name: Design tokens and colors
+    dependsOn: [S02]
+    reads: [frontend/styles.css]
+    writes: [frontend/styles.css]
+  S10:
+    name: Typography
+    dependsOn: [S02, S09]
+    reads: [frontend/index.html, frontend/styles.css]
+    writes: [frontend/index.html, frontend/styles.css]
+  S11:
+    name: Assets and icons
+    dependsOn: [S02, S03]
+    reads: [frontend/index.html, frontend/styles.css, frontend/assets/**]
+    writes: [frontend/index.html, frontend/styles.css, frontend/assets/**]
+  S12:
+    name: Responsive behavior
+    dependsOn: [S04, S05, S06, S07, S08, S09, S10, S11]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
+  S13:
+    name: Interaction and motion
+    dependsOn: [S05, S08, S09, S12]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
+  S14:
+    name: Accessibility
+    dependsOn: [S05, S08, S10, S12, S13]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
+  S15:
+    name: Data and content
+    dependsOn: [S01, S03]
+    reads: [frontend/index.html, frontend/app.js]
+    writes: [frontend/index.html, frontend/app.js]
+  S16:
+    name: Frontend architecture
+    dependsOn: [S01, S03, S15]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, frontend/README.md]
+    writes: [frontend/index.html, frontend/styles.css, frontend/app.js, frontend/README.md]
+  S17:
+    name: Implementation task graph
+    dependsOn: [S04, S05, S06, S07, S08, S09, S10, S11, S12, S13, S14, S15, S16]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, frontend/README.md]
+    writes: []
+  S18:
+    name: Page acceptance criteria
+    dependsOn: [S05, S06, S09, S10, S11, S12, S13, S14]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
+  S19:
+    name: Uncertainties and decisions
+    dependsOn: [S01, S02, S03, S04, S05, S06, S07, S08, S09, S10, S11, S12, S13, S14, S15, S16, S17, S18]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    writes: []

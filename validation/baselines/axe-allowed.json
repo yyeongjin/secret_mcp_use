@@ -1,0 +1,457 @@
+[
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      ".footer-bottom > div > p"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      ".media-feature--wide > .media-feature__copy > span"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#news\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#news\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#recruitment\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#recruitment\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#sustainability\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#sustainability\"]:nth-child(3)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "div[aria-label=\"최신 뉴스\"] > .editorial-card:nth-child(1) > a[href$=\"#footer\"] > .editorial-card__body > p > span"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "div[aria-label=\"최신 뉴스\"] > .editorial-card:nth-child(2) > a[href$=\"#footer\"] > .editorial-card__body > p > span"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "div[aria-label=\"최신 뉴스\"] > .editorial-card:nth-child(3) > a[href$=\"#footer\"] > .editorial-card__body > p > span"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "div[aria-label=\"크루 이야기\"] > .editorial-card:nth-child(1) > a[href$=\"#footer\"] > .editorial-card__body > p > span"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "div[aria-label=\"크루 이야기\"] > .editorial-card:nth-child(2) > a[href$=\"#footer\"] > .editorial-card__body > p > span"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "div[aria-label=\"크루 이야기\"] > .editorial-card:nth-child(3) > a[href$=\"#footer\"] > .editorial-card__body > p > span"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(1) > a[href$=\"#about\"]"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(1) > a[href$=\"#crew\"]"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(1) > a[href$=\"#footer\"]"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(2) > a[href$=\"#games\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(2) > a[href$=\"#games\"]:nth-child(3)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(2) > a[href$=\"#games\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(3) > a[href$=\"#games\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(3) > a[href$=\"#games\"]:nth-child(3)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(3) > a[href$=\"#games\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(4) > a[href$=\"#crew\"]"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(5) > a[href$=\"#footer\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(5) > a[href$=\"#footer\"]:nth-child(3)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(5) > a[href$=\"#footer\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(6) > a[href$=\"#sustainability\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(7) > a[href$=\"#crew\"]"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "time[datetime=\"2026-07-02\"]"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "time[datetime=\"2026-07-16\"]"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "time[datetime=\"2026-07-28\"]"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "time[datetime=\"2026-08-05\"]"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "time[datetime=\"2026-08-12\"]"
+    ]
+  },
+  {
+    "project": "desktop",
+    "ruleId": "color-contrast",
+    "target": [
+      "time[datetime=\"2026-08-18\"]"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      ".footer-bottom > div > p"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#news\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#news\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#recruitment\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#recruitment\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#sustainability\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "a[href$=\"#sustainability\"]:nth-child(3)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "button[data-game=\"archeage\"]"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "button[data-game=\"battlegrounds\"]"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "button[data-game=\"chrono\"]"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "button[data-game=\"poe\"]"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "div[aria-label=\"최신 뉴스\"] > .editorial-card:nth-child(1) > a[href$=\"#footer\"] > .editorial-card__body > p > span"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "div[aria-label=\"크루 이야기\"] > .editorial-card:nth-child(1) > a[href$=\"#footer\"] > .editorial-card__body > p > span"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(1) > a[href$=\"#about\"]"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(1) > a[href$=\"#crew\"]"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(1) > a[href$=\"#footer\"]"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(2) > a[href$=\"#games\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(2) > a[href$=\"#games\"]:nth-child(3)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(2) > a[href$=\"#games\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(3) > a[href$=\"#games\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(3) > a[href$=\"#games\"]:nth-child(3)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(3) > a[href$=\"#games\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(4) > a[href$=\"#crew\"]"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(5) > a[href$=\"#footer\"]:nth-child(2)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(5) > a[href$=\"#footer\"]:nth-child(3)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(5) > a[href$=\"#footer\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(6) > a[href$=\"#sustainability\"]:nth-child(4)"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "section:nth-child(7) > a[href$=\"#crew\"]"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "time[datetime=\"2026-07-28\"]"
+    ]
+  },
+  {
+    "project": "mobile",
+    "ruleId": "color-contrast",
+    "target": [
+      "time[datetime=\"2026-08-18\"]"
+    ]
+  }
+]

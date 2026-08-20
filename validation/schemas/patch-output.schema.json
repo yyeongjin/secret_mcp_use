@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "design-validation/patch-output/v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "sectionId", "fingerprint", "status", "requirementIds", "evidenceRefs", "readSet", "writeSet", "reason", "diff"],
+  "properties": {
+    "schemaVersion": { "const": "design-validation/patch-output/v2" },
+    "sectionId": { "type": "string", "pattern": "^S(0[1-9]|1[0-9])$" },
+    "fingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "status": { "enum": ["PATCH", "BLOCKED_MISSING_VALUE", "BLOCKED_PATCH_TOO_LARGE"] },
+    "requirementIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "evidenceRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "readSet": { "$ref": "#/$defs/fileSet" },
+    "writeSet": { "$ref": "#/$defs/fileSet" },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "diff": { "type": "string" }
+  },
+  "$defs": {
+    "fileSet": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "baseHash"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "baseHash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+        }
+      }
+    }
+  }
+}

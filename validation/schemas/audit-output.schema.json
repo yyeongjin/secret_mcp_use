@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "design-validation/audit-output/v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "sectionId", "fingerprint", "status", "findings", "publicOutput"],
+  "properties": {
+    "schemaVersion": { "const": "design-validation/audit-output/v2" },
+    "sectionId": { "type": "string", "pattern": "^S(0[1-9]|1[0-9])$" },
+    "fingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "status": {
+      "enum": ["PASS", "PATCH_REQUIRED", "BLOCKED_MISSING_EVIDENCE", "BLOCKED_CONTRACT_CONFLICT", "UNKNOWN"]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirementId", "pageId", "componentId", "status", "finding", "evidenceRefs", "implementationRefs", "proposedValue"],
+        "properties": {
+          "requirementId": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "pageId": { "type": ["string", "null"], "maxLength": 120 },
+          "componentId": { "type": ["string", "null"], "maxLength": 120 },
+          "status": { "enum": ["MISSING", "INSUFFICIENT_EVIDENCE", "UNKNOWN"] },
+          "finding": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "evidenceRefs": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "uniqueItems": true },
+          "implementationRefs": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "uniqueItems": true },
+          "proposedValue": { "type": "null" }
+        }
+      }
+    },
+    "publicOutput": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          { "type": "string" },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "null" },
+          { "type": "array", "items": { "type": "string" } }
+        ]
+      }
+    }
+  }
+}

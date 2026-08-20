@@ -29,7 +29,7 @@
 
 ## NVIDIA 검증 파이프라인 설정
 
-계획된 검증 파이프라인은 NVIDIA API를 통해 [`nvidia/nemotron-3-super-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b)를 사용합니다. 모델 ID가 하나라고 해서 하나의 통합 LLM 작업으로 처리하지 않습니다. 작품 하나를 `S01`부터 `S19`까지 나누고 오케스트레이터가 프롬프트, 입력, 출력, 요청 ID, 로그와 임시 작업공간이 서로 격리된 stateless 요청 19개를 전송합니다.
+검증 파이프라인은 NVIDIA API를 통해 [`nvidia/nemotron-3-super-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b)를 사용합니다. 모델 ID가 하나라고 해서 하나의 통합 LLM 작업으로 처리하지 않습니다. 작품 하나를 `S01`부터 `S19`까지 나누고 오케스트레이터가 프롬프트, 입력, 출력, 요청 ID, 로그와 임시 작업공간이 서로 격리된 stateless 요청 19개를 전송합니다.
 
 전체 파이프라인 계약은 [IDEA_VALIDATION_AND_PR_PIPELINE.ko.md](IDEA_VALIDATION_AND_PR_PIPELINE.ko.md)에 기록되어 있습니다.
 
@@ -71,8 +71,8 @@ unset NVIDIA_API_KEY
 | `NVIDIA_AUDIT_CONCURRENCY` | `1` | 최초 실행용 안전한 동시성으로 요청 독립성은 병렬 실행을 요구하지 않음 |
 | `PIPELINE_TRIGGER_GLOB` | `trigger/DESIGN_INDEX_gdweb-*.md` | 작품별 run을 시작하는 불변 입력 문서 경로 |
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | 일반 코드 검증에서 유효한 PASS cache를 유지 |
-| `PIPELINE_DRY_RUN` | `true` | patch 적용이나 PR 생성 없이 audit artifact만 생성 |
-| `PIPELINE_CREATE_PRS` | `false` | 최초 검증에서 PR 생성 비활성화 |
+| `PIPELINE_DRY_RUN` | `false` | 임시 worktree 검증을 통과한 patch 게시 허용 |
+| `PIPELINE_CREATE_PRS` | `true` | 검증된 `PATCH_REQUIRED` 노드의 멱등적인 draft PR 자동 생성 |
 
 이 값들은 runner 설정이며 전부 NVIDIA 요청에 그대로 전달되는 필드는 아닙니다. 특히 `NVIDIA_MAX_INPUT_TOKENS`는 HTTP 요청을 보내기 전에 runner가 검사합니다. 입력을 100만 token으로 가득 채우지 않고 `980000`으로 제한해 system message, chat template과 최대 4,096 output token을 위한 약 20,000 token의 여유를 둡니다.
 
@@ -94,8 +94,8 @@ gh variable set NVIDIA_RPM_LIMIT --body '40' --repo "$REPO"
 gh variable set NVIDIA_AUDIT_CONCURRENCY --body '1' --repo "$REPO"
 gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' --repo "$REPO"
 gh variable set PIPELINE_FORCE_FULL_AUDIT --body 'false' --repo "$REPO"
-gh variable set PIPELINE_DRY_RUN --body 'true' --repo "$REPO"
-gh variable set PIPELINE_CREATE_PRS --body 'false' --repo "$REPO"
+gh variable set PIPELINE_DRY_RUN --body 'false' --repo "$REPO"
+gh variable set PIPELINE_CREATE_PRS --body 'true' --repo "$REPO"
 ```
 
 저장된 Secret 값은 GitHub가 다시 보여주지 않으므로 이름과 갱신 시각만 확인합니다.
@@ -120,11 +120,54 @@ gh variable list --repo yyeongjin/secret_mcp_use
 
 fingerprint 입력 중 하나가 바뀌거나 증명서가 없거나 폐기된 경우, 또는 의존 증명서가 더 이상 유효하지 않으면 cache를 무효화합니다. `trigger/DESIGN_INDEX_gdweb-*.md`가 새로 추가되거나 외부에서 갱신되면 새로운 불변 계약 버전이므로 해당 작품에 대해 19개 전체 요청을 다시 실행합니다. `PIPELINE_FORCE_FULL_AUDIT=true`도 PASS cache를 무시하므로 의도적인 전체 재검증 때만 사용해야 합니다.
 
+Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마다 현재 `DESIGN_INDEX_SPECIFICATION.md`를 Markdown AST로 파싱해 현재 공통 규칙과 번호별 S01-S19 fragment를 추출합니다. 공통 규칙이 바뀌면 19개 Section fingerprint를 모두 무효화합니다. 번호가 붙은 fragment 하나가 바뀌면 해당 Section과 의존 증명서가 더 이상 유효하지 않은 DAG 후행 cache를 무효화합니다. 다른 Specification hash에서 생성한 과거 PASS는 재사용하지 않습니다. 번호 fragment가 빠지거나 중복되면 NVIDIA 요청 전에 실행을 중단하며, pipeline이 Specification을 수정해 구조를 보정하지 않습니다.
+
 ### 4. 최초 실행 안전 설정
 
-첫 실행에서는 `PIPELINE_DRY_RUN=true`와 `PIPELINE_CREATE_PRS=false`를 유지합니다. 새 trigger 하나에 대해 서로 격리된 audit 출력 19개와 결정적으로 병합된 artifact가 생기고, `trigger/**` 아래에는 아무것도 쓰지 않으며, PR도 만들지 않는 것이 기대 결과입니다. 요청 격리, 응답 schema 검증, fingerprint 재사용, 불변 경로 거부, rate limiting과 artifact 민감 정보 제거를 모두 확인한 뒤에만 PR 생성을 켭니다.
+커밋된 push workflow는 `PIPELINE_DRY_RUN=false`, `PIPELINE_CREATE_PRS=true`로 실행합니다. 그렇더라도 모델 출력을 바로 게시할 수는 없습니다. 요청 격리, 응답 schema 검증, 불변 경로 거부, base hash 검증, write 소유권, diff 크기 제한, `git apply --check`, typecheck, 단위 테스트, 데스크톱·모바일 브라우저 테스트, 접근성 회귀 검사, 수정 Section 재감사, 영향받은 기존 PASS 회귀 감사, 열린 PR 충돌 검사와 멱등성 검사를 모두 통과해야 병합되지 않은 draft PR 하나를 생성합니다.
 
-현재 이 저장소에는 Pages 배포 workflow만 있고 NVIDIA 검증 runner와 전용 GitHub Actions workflow는 아직 없습니다. Secret과 Variable을 추가하면 저장소 설정은 준비되지만 그것만으로 19개의 API 요청이 실행되지는 않습니다. end-to-end 검증을 시작하려면 먼저 위 계약을 구현하는 runner가 필요합니다.
+### 5. 파이프라인 실행과 결과 확인
+
+전체 runner는 [`validation/`](validation/)에 있고 [`.github/workflows/validate-design-index.yml`](.github/workflows/validate-design-index.yml)이 실행합니다. trigger, 영어 Specification, frontend 소스, validation 코드 또는 runner package 파일이 바뀐 `main` push에서 검증된 draft PR 자동 생성을 켠 상태로 실행합니다. **Actions → Validate DESIGN_INDEX and prepare grounded PRs → Run workflow**에서 수동으로도 실행할 수 있습니다.
+
+수동 입력의 의미는 다음과 같습니다.
+
+- `trigger_path`: 정확히 하나의 불변 `trigger/DESIGN_INDEX_gdweb-*.md` 입력입니다. push 실행은 일치하는 입력을 모두 찾고 fingerprint가 그대로인 작품은 건너뜁니다.
+- `force_full_audit`: 유효한 PASS cache를 무시하고 audit 요청 19개를 모두 전송합니다.
+- `dry_run`: 제안 diff를 격리된 임시 worktree에만 적용하고 게시하지 않습니다.
+- `create_prs`: 모든 guard, 브라우저 테스트와 수정 코드 재감사를 통과한 뒤 멱등적인 draft PR을 게시합니다. 이때 `dry_run=false`여야 합니다.
+- `mock`: NVIDIA 없이 결정적인 로컬 응답을 사용합니다. Mock 증명서는 `validation-state`에 저장하지 않습니다.
+
+end-to-end 순서는 다음으로 고정합니다.
+
+```text
+현재 Specification과 trigger 파싱
+  -> S01-S19 fingerprint 계산
+  -> API 호출 전에 유효한 불변 PASS 증명서 재사용
+  -> 남은 Section마다 stateless NVIDIA audit 요청 하나 전송
+  -> 결정적 코드로 JSON 출력 병합
+  -> 근거가 있는 PATCH_REQUIRED 노드만 별도 patch 요청 전송
+  -> trigger/spec 쓰기, 오래된 hash, 과도한 diff와 소유권 위반 거부
+  -> 임시 worktree에 적용
+  -> typecheck, 단위 테스트, 데스크톱·모바일 렌더링, 접근성 검사
+  -> 별도 stateless 요청으로 수정된 Section 재감사
+  -> 검증된 노드에만 멱등적인 draft PR 하나를 선택적으로 생성
+```
+
+PASS 증명서는 orphan `validation-state` branch에 기록합니다. 격리된 원본 입력, 검증된 출력, gap report, patch guard, 테스트 결과와 재감사 결과는 30일 동안 보존되는 GitHub Actions artifact로 올립니다. workflow는 PR을 자동 승인하거나 자동 병합하지 않습니다.
+
+API를 호출하지 않는 로컬 통합 테스트:
+
+```bash
+npm ci
+npx playwright install chromium
+npm run typecheck
+npm test
+npm run test:frontend
+npm run audit -- --mock --dry-run --trigger trigger/DESIGN_INDEX_gdweb-26357.md
+```
+
+기존 상태가 없는 mock 실행은 `auditCalls: 19`를 반환해야 합니다. 생성된 증명서를 임시 상태 디렉터리로 옮겨 같은 실행을 반복했을 때 `cachedPasses: 19`, `auditCalls: 0`이 되는 과정은 통합 테스트에 포함되어 있습니다.
 
 ## 프론트엔드 라이브 미리보기
 

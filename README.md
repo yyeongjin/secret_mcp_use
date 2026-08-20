@@ -29,7 +29,7 @@ The complete rules are maintained in [DESIGN_INDEX_SPECIFICATION.md](DESIGN_INDE
 
 ## NVIDIA Validation Pipeline Setup
 
-The planned validation pipeline uses [`nvidia/nemotron-3-super-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) through the NVIDIA API. A single model ID does not mean a single combined LLM job: one work is split into `S01` through `S19`, and the orchestrator sends 19 stateless requests whose prompts, inputs, outputs, request IDs, logs, and temporary workspaces are isolated from one another.
+The validation pipeline uses [`nvidia/nemotron-3-super-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) through the NVIDIA API. A single model ID does not mean a single combined LLM job: one work is split into `S01` through `S19`, and the orchestrator sends 19 stateless requests whose prompts, inputs, outputs, request IDs, logs, and temporary workspaces are isolated from one another.
 
 The complete pipeline contract is documented in [IDEA_VALIDATION_AND_PR_PIPELINE.ko.md](IDEA_VALIDATION_AND_PR_PIPELINE.ko.md).
 
@@ -71,8 +71,8 @@ Open **Settings → Secrets and variables → Actions → Variables → New repo
 | `NVIDIA_AUDIT_CONCURRENCY` | `1` | Safe initial concurrency; request independence does not require parallel execution |
 | `PIPELINE_TRIGGER_GLOB` | `trigger/DESIGN_INDEX_gdweb-*.md` | Immutable input documents that start a work-specific run |
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | Preserves valid cached PASS results during ordinary code validation |
-| `PIPELINE_DRY_RUN` | `true` | Produces audit artifacts without applying patches or creating PRs |
-| `PIPELINE_CREATE_PRS` | `false` | Keeps PR creation disabled during the first validation test |
+| `PIPELINE_DRY_RUN` | `false` | Allows verified patches to be published after temporary-worktree validation |
+| `PIPELINE_CREATE_PRS` | `true` | Automatically creates idempotent draft PRs for verified `PATCH_REQUIRED` nodes |
 
 These are runner configuration variables, not all direct NVIDIA request fields. In particular, `NVIDIA_MAX_INPUT_TOKENS` is enforced before the HTTP request is sent. The `980000` limit deliberately keeps approximately 20,000 tokens available for the system message, chat template, and up to 4,096 output tokens instead of filling the entire one-million-token window with input.
 
@@ -94,8 +94,8 @@ gh variable set NVIDIA_RPM_LIMIT --body '40' --repo "$REPO"
 gh variable set NVIDIA_AUDIT_CONCURRENCY --body '1' --repo "$REPO"
 gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' --repo "$REPO"
 gh variable set PIPELINE_FORCE_FULL_AUDIT --body 'false' --repo "$REPO"
-gh variable set PIPELINE_DRY_RUN --body 'true' --repo "$REPO"
-gh variable set PIPELINE_CREATE_PRS --body 'false' --repo "$REPO"
+gh variable set PIPELINE_DRY_RUN --body 'false' --repo "$REPO"
+gh variable set PIPELINE_CREATE_PRS --body 'true' --repo "$REPO"
 ```
 
 Verify only the names and update timestamps. GitHub does not reveal the stored secret value:
@@ -120,11 +120,54 @@ A visual similarity guess or the model's memory is never sufficient for a skip. 
 
 The cache is invalidated when any fingerprint input changes, the attestation is missing or revoked, or a dependency attestation is no longer valid. A newly added or externally updated `trigger/DESIGN_INDEX_gdweb-*.md` is a new immutable contract version and therefore starts a full 19-request audit for that work. `PIPELINE_FORCE_FULL_AUDIT=true` also bypasses cached PASS results and must only be used for an intentional complete re-audit.
 
+The Specification is not compiled into the runner. Every execution parses the current `DESIGN_INDEX_SPECIFICATION.md` with a Markdown AST and extracts the current global rules and numbered S01-S19 fragments. A global rule change invalidates all Section fingerprints. A numbered fragment change invalidates that Section and any downstream cache whose dependency attestation is no longer valid. A previous PASS from another Specification hash is never reused. Missing or duplicate numbered fragments stop the run before any NVIDIA request, and the pipeline never edits the Specification to repair the structure.
+
 ### 4. First-run safety settings
 
-Keep `PIPELINE_DRY_RUN=true` and `PIPELINE_CREATE_PRS=false` for the first execution. The expected result is 19 isolated audit outputs for a new trigger, deterministic merged artifacts, no write under `trigger/**`, and no generated PR. Enable PR creation only after request isolation, response schema validation, fingerprint reuse, immutable-path rejection, rate limiting, and artifact redaction have all been verified.
+The committed push workflow runs with `PIPELINE_DRY_RUN=false` and `PIPELINE_CREATE_PRS=true`. It still cannot publish arbitrary model output: a patch must pass request isolation, response schema validation, immutable-path rejection, base-hash validation, write ownership, diff size limits, `git apply --check`, type checks, unit tests, desktop/mobile browser tests, accessibility regression checks, patched-Section re-audit, affected PASS regression audits, open-PR conflict checks, and idempotency checks. Only then is an unmerged draft PR created.
 
-At present, this repository contains the Pages deployment workflow but not the NVIDIA validation runner or its GitHub Actions workflow. Adding the secret and variables prepares the repository configuration; it does not itself issue the 19 API requests. The runner must implement the contract above before an end-to-end validation run can start.
+### 5. Run and inspect the pipeline
+
+The complete runner is under [`validation/`](validation/) and [`.github/workflows/validate-design-index.yml`](.github/workflows/validate-design-index.yml) executes it. A push to `main` that changes a trigger, the English Specification, frontend source, validation code, or runner package files starts validation with automatic verified draft PR creation enabled. A manual run is available under **Actions → Validate DESIGN_INDEX and prepare grounded PRs → Run workflow**.
+
+Manual inputs have the following meaning:
+
+- `trigger_path`: exactly one immutable `trigger/DESIGN_INDEX_gdweb-*.md` input. Push runs discover every matching input and skip unchanged works by fingerprint.
+- `force_full_audit`: ignores valid PASS cache and sends all 19 audit requests.
+- `dry_run`: applies a proposed diff only in an isolated temporary worktree and never publishes it.
+- `create_prs`: after every guard, browser test, and patched-code re-audit passes, publishes an idempotent draft PR. This requires `dry_run=false`.
+- `mock`: performs deterministic local responses without NVIDIA. Mock attestations are never persisted to `validation-state`.
+
+The end-to-end order is fixed:
+
+```text
+parse current Specification and trigger
+  -> compute S01-S19 fingerprints
+  -> reuse valid immutable PASS attestations before API calls
+  -> send one stateless NVIDIA audit request per remaining Section
+  -> merge JSON outputs with deterministic code
+  -> send a separate patch request only for grounded PATCH_REQUIRED nodes
+  -> reject trigger/spec writes, stale hashes, excessive diffs, and ownership violations
+  -> apply in a temporary worktree
+  -> type-check, unit-test, render desktop/mobile, check accessibility
+  -> re-audit the patched Section in another stateless request
+  -> optionally create one idempotent draft PR for the verified node
+```
+
+PASS attestations are written to the orphan `validation-state` branch. Raw isolated inputs, validated outputs, gap reports, patch guards, test results, and re-audit results are uploaded as a 30-day GitHub Actions artifact. The workflow never auto-approves or auto-merges a PR.
+
+For a local call-free integration test:
+
+```bash
+npm ci
+npx playwright install chromium
+npm run typecheck
+npm test
+npm run test:frontend
+npm run audit -- --mock --dry-run --trigger trigger/DESIGN_INDEX_gdweb-26357.md
+```
+
+The mock run must report `auditCalls: 19` without existing state. Copying its generated attestations into a temporary state directory and repeating the same run is covered by the integration tests and must report `cachedPasses: 19` with `auditCalls: 0`.
 
 ## Live Frontend Preview
 

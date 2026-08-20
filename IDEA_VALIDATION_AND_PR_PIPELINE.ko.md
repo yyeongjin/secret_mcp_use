@@ -2,7 +2,7 @@
 
 ## 문서 상태
 
-- 상태: 구현 가능한 V2 설계안
+- 상태: V2 전체 파이프라인 구현 완료
 - 실행 대상 저장소: `secret_mcp_use` 하나만 사용
 - 상위 생성기: `secret_mcp`는 작품별 `DESIGN_INDEX`, Request Contract와 Evidence를 생성해 전달하는 역할만 담당
 - 입력: `secret_mcp`가 생성한 작품별 `DESIGN_INDEX`, 공통 Specification, 작품별 Request Contract, Evidence와 `secret_mcp_use`의 프론트엔드 소스
@@ -262,7 +262,7 @@ flowchart TD
 
 ### 전체 검증 모드
 
-최초 실행, Specification 버전 변경, validator contract 변경 또는 사용자가 `forceFullAudit: true`를 지정한 실행은 cache와 관계없이 정확히 19개의 audit 요청을 만든다.
+최초 실행, Specification 공통 규칙 변경, validator contract 변경 또는 사용자가 `forceFullAudit: true`를 지정한 실행은 cache와 관계없이 정확히 19개의 audit 요청을 만든다. Specification의 번호별 Section 하나만 바뀌면 해당 노드와 더 이상 유효한 dependency attestation을 갖지 못한 DAG 후행 노드만 다시 호출한다.
 
 ```text
 audit:S01 -> NVIDIA request #01 -> nodes/S01/audit-output.json
@@ -1698,7 +1698,18 @@ validation-runs/
 
 실행 디렉터리는 Actions artifact 또는 로컬 작업 산출물이며 `main`에 자동 커밋하지 않는다.
 
-## GitHub Actions 구성 제안
+## GitHub Actions 구성
+
+실제 구현 파일:
+
+```text
+.github/workflows/validate-design-index.yml
+validation/impact-manifest.yml
+validation/src/
+validation/schemas/
+validation/test/
+validation/browser/
+```
 
 ```text
 discover
@@ -1742,9 +1753,9 @@ NVIDIA 호출은 token bucket으로 RPM을 제한한다. 19개 노드를 무조�
 - 자동 생성 PR은 자동 승인하지 않는다.
 - 증명서에는 model 응답 원문 대신 검증된 구조와 hash를 기록한다.
 
-## 구현 순서
+## 전체 구현 구성
 
-### MVP 1: 독립 감사와 정적 PASS
+### 구성 1: 독립 감사와 정적 PASS
 
 - Specification S01-S19 파서
 - Section별 audit input builder
@@ -1754,7 +1765,7 @@ NVIDIA 호출은 token bucket으로 RPM을 제한한다. 19개 노드를 무조�
 - `validation-state` fingerprint 조회와 CACHED_PASS skip
 - GitHub Check 표시
 
-### MVP 2: DAG와 영향 분석
+### 구성 2: DAG와 영향 분석
 
 - dependency graph validator와 cycle 검사
 - `impact-manifest.yml`
@@ -1762,7 +1773,7 @@ NVIDIA 호출은 token bucket으로 RPM을 제한한다. 19개 노드를 무조�
 - `publicDigest` 기반 후행 invalidation
 - ready set scheduler와 rate limiter
 
-### MVP 3: 안전한 patch
+### 구성 3: 안전한 patch
 
 - 실패 노드만 patch input 생성
 - allowed globs, base hash, size, deletion guard
@@ -1770,7 +1781,7 @@ NVIDIA 호출은 token bucket으로 RPM을 제한한다. 19개 노드를 무조�
 - 노드별 build, test, Playwright, axe 검증
 - 영향받은 cached PASS 회귀 검사
 
-### MVP 4: 조건부 PR 자동화
+### 구성 4: 조건부 PR 자동화
 
 - 결정적 branch와 idempotency key
 - 중복 PR 검색

@@ -1,0 +1,204 @@
+name: Validate DESIGN_INDEX and prepare grounded PRs
+
+on:
+  workflow_dispatch:
+    inputs:
+      trigger_path:
+        description: Immutable DESIGN_INDEX input to validate
+        required: true
+        default: trigger/DESIGN_INDEX_gdweb-26357.md
+        type: string
+      force_full_audit:
+        description: Ignore valid PASS attestations and call all 19 audit nodes
+        required: true
+        default: false
+        type: boolean
+      dry_run:
+        description: Verify patches without publishing branches or PRs
+        required: true
+        default: true
+        type: boolean
+      create_prs:
+        description: Publish verified patches as draft PRs
+        required: true
+        default: false
+        type: boolean
+      mock:
+        description: Use deterministic local mock responses instead of NVIDIA
+        required: true
+        default: false
+        type: boolean
+  push:
+    branches:
+      - main
+    paths:
+      - "trigger/DESIGN_INDEX_gdweb-*.md"
+      - "DESIGN_INDEX_SPECIFICATION.md"
+      - "frontend/**"
+      - "validation/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - ".github/workflows/validate-design-index.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: design-validation-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Audit isolated Sections and verify grounded patches
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+      NVIDIA_BASE_URL: ${{ vars.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1' }}
+      NVIDIA_MODEL: ${{ vars.NVIDIA_MODEL || 'nvidia/nemotron-3-super-120b-a12b' }}
+      NVIDIA_CONTEXT_WINDOW_TOKENS: ${{ vars.NVIDIA_CONTEXT_WINDOW_TOKENS || '1000000' }}
+      NVIDIA_MAX_INPUT_TOKENS: ${{ vars.NVIDIA_MAX_INPUT_TOKENS || '980000' }}
+      NVIDIA_MAX_OUTPUT_TOKENS: ${{ vars.NVIDIA_MAX_OUTPUT_TOKENS || '4096' }}
+      NVIDIA_ENABLE_THINKING: ${{ vars.NVIDIA_ENABLE_THINKING || 'false' }}
+      NVIDIA_REASONING_BUDGET: ${{ vars.NVIDIA_REASONING_BUDGET || '0' }}
+      NVIDIA_TEMPERATURE: ${{ vars.NVIDIA_TEMPERATURE || '1.0' }}
+      NVIDIA_TOP_P: ${{ vars.NVIDIA_TOP_P || '0.95' }}
+      NVIDIA_RPM_LIMIT: ${{ vars.NVIDIA_RPM_LIMIT || '40' }}
+      NVIDIA_AUDIT_CONCURRENCY: ${{ vars.NVIDIA_AUDIT_CONCURRENCY || '1' }}
+      PIPELINE_OUTPUT_ROOT: .validation-runs/current
+      PIPELINE_STATE_ROOT: .validation-state
+      PIPELINE_FORCE_FULL_AUDIT: ${{ vars.PIPELINE_FORCE_FULL_AUDIT || 'false' }}
+      PIPELINE_DRY_RUN: ${{ vars.PIPELINE_DRY_RUN || 'true' }}
+      PIPELINE_CREATE_PRS: ${{ vars.PIPELINE_CREATE_PRS || 'false' }}
+      NVIDIA_MOCK: "false"
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Check out main input snapshot
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Resolve execution policy
+        shell: bash
+        env:
+          INPUT_FORCE_FULL_AUDIT: ${{ inputs.force_full_audit }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_CREATE_PRS: ${{ inputs.create_prs }}
+          INPUT_MOCK: ${{ inputs.mock }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            {
+              echo "PIPELINE_FORCE_FULL_AUDIT=false"
+              echo "PIPELINE_DRY_RUN=false"
+              echo "PIPELINE_CREATE_PRS=true"
+              echo "NVIDIA_MOCK=false"
+            } >> "${GITHUB_ENV}"
+          else
+            {
+              echo "PIPELINE_FORCE_FULL_AUDIT=${INPUT_FORCE_FULL_AUDIT}"
+              echo "PIPELINE_DRY_RUN=${INPUT_DRY_RUN}"
+              echo "PIPELINE_CREATE_PRS=${INPUT_CREATE_PRS}"
+              echo "NVIDIA_MOCK=${INPUT_MOCK}"
+            } >> "${GITHUB_ENV}"
+          fi
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Install Chromium for patch verification
+        run: npx playwright install --with-deps chromium
+
+      - name: Type-check the orchestrator
+        run: npm run typecheck
+
+      - name: Run unit and integration tests
+        run: npm test
+
+      - name: Verify the current frontend baseline
+        run: npm run test:frontend
+
+      - name: Prepare immutable validation-state worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin validation-state >/dev/null 2>&1; then
+            git fetch origin validation-state:validation-state
+            git worktree add .validation-state validation-state
+          else
+            git worktree add --detach .validation-state
+            git -C .validation-state switch --orphan validation-state
+            git -C .validation-state rm -rf . >/dev/null 2>&1 || true
+            printf '%s\n' '# Secret MCP validation state' > .validation-state/README.md
+          fi
+
+      - name: Require the NVIDIA secret for live runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${NVIDIA_MOCK}" == "true" ]]; then
+            exit 0
+          fi
+          if [[ -z "${NVIDIA_API_KEY}" ]]; then
+            echo 'NVIDIA_API_KEY is not configured as an Actions secret.' >&2
+            exit 1
+          fi
+
+      - name: Run isolated audit, patch guards, tests, and optional draft PR publication
+        shell: bash
+        env:
+          DISPATCH_TRIGGER_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.trigger_path || '' }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "${DISPATCH_TRIGGER_PATH}" ]]; then
+            args+=(--trigger "${DISPATCH_TRIGGER_PATH}")
+          fi
+          npm run audit -- "${args[@]}"
+
+      - name: Verify immutable inputs were not changed
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- trigger DESIGN_INDEX_SPECIFICATION.md DESIGN_INDEX_SPECIFICATION.ko.md
+          test -z "$(git status --porcelain -- trigger DESIGN_INDEX_SPECIFICATION.md DESIGN_INDEX_SPECIFICATION.ko.md)"
+
+      - name: Persist fresh PASS attestations on validation-state
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${NVIDIA_MOCK}" == "true" ]]; then
+            exit 0
+          fi
+          if [[ -d .validation-runs/current/attestations ]]; then
+            mkdir -p .validation-state/attestations
+            cp -R .validation-runs/current/attestations/. .validation-state/attestations/
+          fi
+          git -C .validation-state config user.name 'secret-mcp-validation[bot]'
+          git -C .validation-state config user.email 'secret-mcp-validation[bot]@users.noreply.github.com'
+          git -C .validation-state add -- README.md attestations 2>/dev/null || git -C .validation-state add -- README.md
+          if ! git -C .validation-state diff --cached --quiet; then
+            git -C .validation-state commit -m "state: record immutable PASS attestations for ${GITHUB_SHA}"
+            git -C .validation-state push origin HEAD:validation-state
+          fi
+
+      - name: Upload audit and patch artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: design-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .validation-runs/current/**
+            test-results/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
