@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { enforcePatchGrounding, unresolvedPatchDependencies } from "../src/orchestrator.ts";
+import {
+  enforcePatchGrounding,
+  rejectedPatchSummaryForRetry,
+  unresolvedPatchDependencies,
+} from "../src/orchestrator.ts";
 import type {
   FreshNode,
   NodeAuditInput,
@@ -117,4 +121,24 @@ test("PATCH_REQUIRED must identify a supplied file or a safe owned text file", (
     patchRequired(["frontend/../trigger/rewrite.md"]),
   );
   assert.equal(unsafeNewFile.output.status, "BLOCKED_MISSING_EVIDENCE");
+});
+
+test("an invalid PATCH response becomes bounded same-Section retry context", () => {
+  const input = groundingInput(["frontend/styles.css"]);
+  const auditOutput = patchRequired(["frontend/styles.css"]);
+  const result = rejectedPatchSummaryForRetry({
+    value: {
+      status: "PATCH",
+      reason: "The candidate had no changed lines.",
+      diff: "diff --git a/frontend/styles.css b/frontend/styles.css\n",
+    },
+    input,
+    auditOutput,
+  });
+
+  assert.equal(result?.sectionId, "S18");
+  assert.equal(result?.status, "PATCH");
+  assert.deepEqual(result?.requirementIds, ["S18-TEST"]);
+  assert.deepEqual(result?.readSet, []);
+  assert.deepEqual(result?.writeSet, []);
 });

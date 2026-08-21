@@ -165,6 +165,31 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function rejectedPatchSummaryForRetry(args: {
+  value: unknown;
+  input: NodeAuditInput;
+  auditOutput: NodeAuditOutput;
+}): NodePatchOutput | null {
+  if (typeof args.value !== "object" || args.value === null || Array.isArray(args.value)) return null;
+  const source = args.value as Record<string, unknown>;
+  const status = source.status;
+  if (status !== "PATCH" && status !== "BLOCKED_MISSING_VALUE" && status !== "BLOCKED_PATCH_TOO_LARGE") {
+    return null;
+  }
+  return {
+    schemaVersion: "design-validation/patch-output/v2",
+    sectionId: args.input.node.sectionId,
+    fingerprint: args.input.node.fingerprint,
+    status,
+    requirementIds: [...new Set(args.auditOutput.findings.map((finding) => finding.requirementId))],
+    evidenceRefs: [...new Set(args.auditOutput.findings.flatMap((finding) => finding.evidenceRefs))],
+    readSet: [],
+    writeSet: [],
+    reason: typeof source.reason === "string" ? source.reason.slice(0, 500) : "Rejected patch candidate.",
+    diff: typeof source.diff === "string" ? source.diff : "",
+  };
+}
+
 function sanitizeArtifactText(value: string, config: PipelineConfig, worktreePath?: string): string {
   return value
     .replaceAll(config.repositoryRoot, "<repository>")
@@ -607,7 +632,16 @@ async function runPatches(args: {
         };
         attempts.push(attemptRecord);
         await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-        retryContext = undefined;
+        const rejectedOutput = completion
+          ? rejectedPatchSummaryForRetry({
+            value: completion.parsed,
+            input,
+            auditOutput: resolved.output,
+          })
+          : null;
+        retryContext = rejectedOutput
+          ? { output: rejectedOutput, failure: { stage: "guard", reason: errorMessage(error) } }
+          : undefined;
         if (attempt < args.config.patchGenerationAttempts) continue;
         finalRecord = { sectionId, ...attemptRecord, attempts };
         break;
