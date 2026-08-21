@@ -27,9 +27,11 @@ import {
   AUDIT_SYSTEM_PROMPT,
   PATCH_RETRY_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
+  REGRESSION_AUDIT_SYSTEM_PROMPT,
   auditUserPrompt,
   patchRetryUserPrompt,
   patchUserPrompt,
+  regressionAuditUserPrompt,
 } from "./prompts.ts";
 import {
   assertAuditOutput,
@@ -197,6 +199,8 @@ async function callAudit(args: {
   requestId: string;
   validate: Parameters<typeof assertAuditOutput>[0];
   outputSchema: JsonSchema;
+  systemPrompt?: string;
+  userPrompt?: string;
 }): Promise<AuditCallResult> {
   const sectionId = args.input.node.sectionId;
   let completion: CompletionResult;
@@ -206,8 +210,8 @@ async function callAudit(args: {
       sectionId,
       fingerprint: args.input.node.fingerprint,
       requestId: args.requestId,
-      systemPrompt: AUDIT_SYSTEM_PROMPT,
-      userPrompt: auditUserPrompt(args.input),
+      systemPrompt: args.systemPrompt ?? AUDIT_SYSTEM_PROMPT,
+      userPrompt: args.userPrompt ?? auditUserPrompt(args.input),
       outputSchema: args.outputSchema,
     });
   } catch (error) {
@@ -569,7 +573,17 @@ async function runPatches(args: {
               requestId: `${args.runId}:regression:${sectionId}:attempt:${attempt}:${regressionSectionId}`,
               validate: args.validateAudit,
               outputSchema: args.auditOutputSchema,
+              systemPrompt: REGRESSION_AUDIT_SYSTEM_PROMPT,
+              userPrompt: regressionAuditUserPrompt({
+                before: args.inputs.get(regressionSectionId)!,
+                after: regressionInput,
+                changedPaths: guarded.changedPaths,
+              }),
             });
+            await writeJson(
+              path.join(attemptDirectory, "regressions", regressionSectionId, "before-input.json"),
+              args.inputs.get(regressionSectionId),
+            );
             await saveAuditCall(
               path.join(attemptDirectory, "regressions"),
               regressionInput,

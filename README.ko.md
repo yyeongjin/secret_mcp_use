@@ -130,6 +130,8 @@ Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마
 
 하나의 `PATCH_REQUIRED` Section에는 최대 `PIPELINE_PATCH_ATTEMPTS`개의 완전한 patch 후보를 허용합니다. 후보마다 서로 다른 결정적 seed를 쓰는 별도 NVIDIA 요청이며, 같은 격리 Section 계약과 변경되지 않은 원본 파일에서 시작합니다. JSON·schema 오류, 보정 가능한 diff 또는 file-set 형식 오류, 테스트 실패, 수정 Section 재감사 실패, 영향받은 기존 PASS 회귀 감사 실패가 발생하면 해당 후보만 폐기하고 제한 횟수 안에서 다음 후보를 시작할 수 있습니다. 재시도에는 자기 후보의 거부 출력과 실패 진단만 전달하며 다른 Section의 계약이나 응답은 전달하지 않습니다. 불변 경로 쓰기, 소유권 밖 쓰기, 위험한 경로·파일 작업, 과도한 변경 범위, write-set 충돌과 게시 충돌은 guard를 완화하지 않고 해당 Section을 중단합니다. 모든 시도는 `patches/SXX/attempt-N/` 아래에 기록합니다. PASS, UNKNOWN, 근거 부족 Section에는 patch 요청과 PR을 만들지 않습니다.
 
+영향받은 기존 PASS 회귀 요청은 새 전체 감사가 아니라 수정 전후 delta 감사입니다. 해당 기존 PASS Section의 동일한 계약, 후보 적용 전후 자기 구현 slice, 변경 경로 목록과 PASS fingerprint 증명만 받습니다. 후보가 만들지 않은 기존 누락이나 수정 전후 그대로인 Requirement는 새 회귀로 PR을 막을 수 없습니다. patch 담당 Section의 finding과 응답은 전달하지 않습니다.
+
 ### 5. 파이프라인 실행과 결과 확인
 
 전체 runner는 [`validation/`](validation/)에 있고 [`.github/workflows/validate-design-index.yml`](.github/workflows/validate-design-index.yml)이 실행합니다. trigger, 영어 Specification, frontend 소스, validation 코드 또는 runner package 파일이 바뀐 `main` push에서 검증된 draft PR 자동 생성을 켠 상태로 실행합니다. **Actions → Validate DESIGN_INDEX and prepare grounded PRs → Run workflow**에서 수동으로도 실행할 수 있습니다.

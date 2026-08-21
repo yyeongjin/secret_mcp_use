@@ -6,6 +6,7 @@ import {
   AUDIT_SYSTEM_PROMPT,
   PATCH_RETRY_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
+  REGRESSION_AUDIT_SYSTEM_PROMPT,
 } from "./prompts.ts";
 import type {
   EvidenceReference,
@@ -124,6 +125,7 @@ export function validatorContractHash(
     auditPromptHash: sha256(AUDIT_SYSTEM_PROMPT),
     patchPromptHash: sha256(PATCH_SYSTEM_PROMPT),
     patchRetryPromptHash: sha256(PATCH_RETRY_SYSTEM_PROMPT),
+    regressionAuditPromptHash: sha256(REGRESSION_AUDIT_SYSTEM_PROMPT),
     normalizerVersion: "nvidia-output-normalizer/v4-quarantine",
     auditSchemaHash,
     impactManifest: manifest,
