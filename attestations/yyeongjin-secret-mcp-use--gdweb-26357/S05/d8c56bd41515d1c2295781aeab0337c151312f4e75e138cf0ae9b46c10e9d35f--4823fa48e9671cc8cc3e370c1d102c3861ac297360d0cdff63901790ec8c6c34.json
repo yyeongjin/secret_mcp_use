@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "design-validation/attestation/v2",
+  "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
+  "sectionId": "S05",
+  "fingerprint": "sha256:d8c56bd41515d1c2295781aeab0337c151312f4e75e138cf0ae9b46c10e9d35f",
+  "triggerSource": {
+    "path": "trigger/DESIGN_INDEX_gdweb-26357.md",
+    "documentHash": "sha256:f79f163969cbb3520f2741dde3250533a4ff3071dcb772e53dd5802b918e6336",
+    "fragmentHash": "sha256:f3246d03de47f6173e2a9fcd77ae2b859994f05ed482b3c23d5c040805a420c7"
+  },
+  "specificationSource": {
+    "path": "DESIGN_INDEX_SPECIFICATION.md",
+    "documentHash": "sha256:65233a5428ae3411c094ab72691793e2998232e55ea5ca4e299993f7c4cf251a",
+    "globalRulesHash": "sha256:397b59d360af5b81cb8816ecdf12ad45bbd3c55990df199c67adf9b399fb2987",
+    "fragmentHash": "sha256:b3526036d671c0c8a97d2d6305e3f08140733fef681a686d2d73db240f26cd89"
+  },
+  "status": "PASS",
+  "baseCommit": "604aa6535ddb470502859b54db038a396d10e5df",
+  "source": "fresh-audit",
+  "dependencyAttestations": {
+    "S03": "sha256:27c1d102c2190a7ec7edae05559545cc00b5d7b1f8202cffcb66ed979d92b67f",
+    "S04": "sha256:4604d17f13cfa86735a82b2946507e24373617396a05b1b48b00ccf032fdaae2",
+    "S09": "sha256:1ec24b012ae904c7aa8fe8ee79776e70d02c54c20281a3730d917898cb83598a",
+    "S10": "sha256:af627a6f9bd58002efb5c1fab17dbec4a90f91ddd7c0c8f248030fa366d696c0"
+  },
+  "publicOutput": {},
+  "publicDigest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "validator": {
+    "id": "nvidia:nvidia/nemotron-3-super-120b-a12b",
+    "contractHash": "sha256:6af169868e34a05f26a40d68a0b95ea25fef6eb870fb9b0b97b869692efb7053"
+  },
+  "tests": [
+    {
+      "id": "audit-schema",
+      "status": "PASS",
+      "artifactHash": "sha256:f07765cd704a8ba3fb5cee9f4f5ab3d76accb3f3f9a87f19b7a76828092eda27"
+    }
+  ],
+  "createdAt": "2026-08-21T16:13:27.713Z",
+  "attestationHash": "sha256:4823fa48e9671cc8cc3e370c1d102c3861ac297360d0cdff63901790ec8c6c34"
+}
