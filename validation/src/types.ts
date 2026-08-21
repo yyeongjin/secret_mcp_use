@@ -236,6 +236,7 @@ export interface PipelineConfig {
   mock: boolean;
   maxChangedFiles: number;
   maxChangedLines: number;
+  patchGenerationAttempts: number;
   nvidia: {
     apiKey: string;
     baseUrl: string;

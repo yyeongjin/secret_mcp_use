@@ -129,6 +129,7 @@ export function validatorContractHash(
     impactManifest: manifest,
     maxChangedFiles: config.maxChangedFiles,
     maxChangedLines: config.maxChangedLines,
+    patchGenerationAttempts: config.patchGenerationAttempts,
   });
 }
 

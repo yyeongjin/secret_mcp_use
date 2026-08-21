@@ -328,135 +328,90 @@ async function runPatches(args: {
     }
 
     const patchRequestId = `${args.runId}:patch:${sectionId}`;
-    patchCalls += 1;
-    let patchCompletion: CompletionResult;
-    let patchOutput: NodePatchOutput;
-    try {
-      patchCompletion = await args.client.completeJson({
-        kind: "patch",
-        sectionId,
-        fingerprint: input.node.fingerprint,
-        requestId: patchRequestId,
-        systemPrompt: PATCH_SYSTEM_PROMPT,
-        userPrompt: patchUserPrompt({ auditInput: input, auditOutput: resolved.output }),
-        outputSchema: args.patchOutputSchema,
-      });
-      assertPatchOutput(
-        args.validatePatch,
-        patchCompletion.parsed,
-        sectionId,
-        input.node.fingerprint,
-      );
-      patchOutput = patchCompletion.parsed;
-      await writeJson(path.join(scratchDirectory, sectionId, "patch-api-response.json"), patchCompletion.raw);
-      await writeJson(path.join(scratchDirectory, sectionId, "patch-output.json"), patchOutput);
-    } catch (error) {
-      records.push({ sectionId, status: "BLOCKED_MODEL", reason: errorMessage(error) });
-      continue;
-    }
-    if (patchOutput.status !== "PATCH") {
-      records.push({ sectionId, status: "BLOCKED_MODEL", reason: patchOutput.reason });
-      continue;
-    }
-    const normalizedInitialDiff = normalizeUnifiedDiffMechanics(patchOutput.diff);
-    if (normalizedInitialDiff !== patchOutput.diff) {
-      patchOutput = { ...patchOutput, diff: normalizedInitialDiff };
-      await writeJson(
-        path.join(scratchDirectory, sectionId, "patch-normalized-output.json"),
-        patchOutput,
-      );
-    }
+    let guarded: GuardedPatch | undefined;
+    let rejectedOutput: NodePatchOutput | undefined;
+    let rejectedGuardError: string | undefined;
+    let failureStatus: PatchRecord["status"] = "BLOCKED_MODEL";
+    let failureReason = "Patch generation did not return a usable result.";
 
-    let guarded: GuardedPatch;
-    try {
-      guarded = await guardPatch({
-        config: args.config,
-        manifest: args.manifest,
-        auditInput: input,
-        patchOutput,
-        scratchDirectory,
-      });
-    } catch (error) {
-      const initialGuardError = errorMessage(error);
-      if (!isRepairablePatchFormatError(error)) {
-        records.push({ sectionId, status: "BLOCKED_GUARD", reason: initialGuardError });
-        continue;
-      }
-
+    for (let attempt = 1; attempt <= args.config.patchGenerationAttempts; attempt += 1) {
+      const isRepairAttempt = rejectedOutput !== undefined && rejectedGuardError !== undefined;
+      const attemptId = `${patchRequestId}:attempt:${attempt}`;
+      const attemptDirectory = path.join(scratchDirectory, sectionId, `attempt-${attempt}`);
       patchCalls += 1;
-      let repairCompletion: CompletionResult;
-      let repairOutput: NodePatchOutput;
+      let completion: CompletionResult;
+      let output: NodePatchOutput;
       try {
-        repairCompletion = await args.client.completeJson({
+        completion = await args.client.completeJson({
           kind: "patch",
           sectionId,
           fingerprint: input.node.fingerprint,
-          requestId: `${patchRequestId}:repair:1`,
-          systemPrompt: PATCH_REPAIR_SYSTEM_PROMPT,
-          userPrompt: patchRepairUserPrompt({
-            auditInput: input,
-            auditOutput: resolved.output,
-            rejectedOutput: patchOutput,
-            guardError: initialGuardError,
-          }),
+          requestId: attemptId,
+          systemPrompt: isRepairAttempt ? PATCH_REPAIR_SYSTEM_PROMPT : PATCH_SYSTEM_PROMPT,
+          userPrompt: isRepairAttempt
+            ? patchRepairUserPrompt({
+              auditInput: input,
+              auditOutput: resolved.output,
+              rejectedOutput: rejectedOutput!,
+              guardError: rejectedGuardError!,
+            })
+            : patchUserPrompt({ auditInput: input, auditOutput: resolved.output }),
           outputSchema: args.patchOutputSchema,
         });
         assertPatchOutput(
           args.validatePatch,
-          repairCompletion.parsed,
+          completion.parsed,
           sectionId,
           input.node.fingerprint,
         );
-        repairOutput = repairCompletion.parsed;
-        await writeJson(
-          path.join(scratchDirectory, sectionId, "patch-repair-api-response.json"),
-          repairCompletion.raw,
-        );
-        await writeJson(
-          path.join(scratchDirectory, sectionId, "patch-repair-output.json"),
-          repairOutput,
-        );
-      } catch (repairError) {
-        records.push({
-          sectionId,
-          status: "BLOCKED_MODEL",
-          reason: `Unified-diff syntax repair request failed: ${errorMessage(repairError)}`,
-        });
+        output = completion.parsed;
+        await writeJson(path.join(attemptDirectory, "api-response.json"), completion.raw);
+        await writeJson(path.join(attemptDirectory, "output.json"), output);
+      } catch (error) {
+        failureStatus = "BLOCKED_MODEL";
+        failureReason = `Patch attempt ${attempt}/${args.config.patchGenerationAttempts} failed: ${errorMessage(error)}`;
+        rejectedOutput = undefined;
+        rejectedGuardError = undefined;
         continue;
       }
-      if (repairOutput.status !== "PATCH") {
-        records.push({
-          sectionId,
-          status: "BLOCKED_MODEL",
-          reason: `Unified-diff syntax repair declined: ${repairOutput.reason}`,
-        });
-        continue;
+
+      if (output.status !== "PATCH") {
+        failureStatus = "BLOCKED_MODEL";
+        failureReason = `Patch attempt ${attempt}/${args.config.patchGenerationAttempts} returned ${output.status}: ${output.reason}`;
+        if (isRepairAttempt && attempt < args.config.patchGenerationAttempts) {
+          rejectedOutput = undefined;
+          rejectedGuardError = undefined;
+          continue;
+        }
+        break;
       }
-      const normalizedRepairDiff = normalizeUnifiedDiffMechanics(repairOutput.diff);
-      if (normalizedRepairDiff !== repairOutput.diff) {
-        repairOutput = { ...repairOutput, diff: normalizedRepairDiff };
-        await writeJson(
-          path.join(scratchDirectory, sectionId, "patch-repair-normalized-output.json"),
-          repairOutput,
-        );
+
+      const normalizedDiff = normalizeUnifiedDiffMechanics(output.diff);
+      if (normalizedDiff !== output.diff) {
+        output = { ...output, diff: normalizedDiff };
+        await writeJson(path.join(attemptDirectory, "normalized-output.json"), output);
       }
-      patchOutput = repairOutput;
       try {
         guarded = await guardPatch({
           config: args.config,
           manifest: args.manifest,
           auditInput: input,
-          patchOutput,
-          scratchDirectory,
+          patchOutput: output,
+          scratchDirectory: attemptDirectory,
         });
-      } catch (repairGuardError) {
-        records.push({
-          sectionId,
-          status: "BLOCKED_GUARD",
-          reason: `Initial diff syntax error: ${initialGuardError} One repair attempt was rejected: ${errorMessage(repairGuardError)}`,
-        });
-        continue;
+        break;
+      } catch (error) {
+        failureStatus = "BLOCKED_GUARD";
+        failureReason = `Patch attempt ${attempt}/${args.config.patchGenerationAttempts} was rejected: ${errorMessage(error)}`;
+        if (!isRepairablePatchFormatError(error)) break;
+        rejectedOutput = output;
+        rejectedGuardError = errorMessage(error);
       }
+    }
+
+    if (!guarded) {
+      records.push({ sectionId, status: failureStatus, reason: failureReason });
+      continue;
     }
     const conflicts = guarded.changedPaths.filter((changedPath) => claimedPaths.has(changedPath));
     if (conflicts.length > 0) {

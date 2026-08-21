@@ -51,6 +51,7 @@ export async function verifyPatchedWorktree(
     NVIDIA_MOCK_PATCH_SECTIONS: "",
     NVIDIA_MOCK_VALID_PATCH_SECTIONS: "",
     NVIDIA_MOCK_MALFORMED_PATCH_SECTIONS: "",
+    NVIDIA_MOCK_INVALID_PATCH_SECTIONS: "",
   };
   const typecheck = await runCommand("npm", ["run", "typecheck"], {
     cwd: config.repositoryRoot,

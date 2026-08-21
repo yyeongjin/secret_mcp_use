@@ -289,6 +289,15 @@ function mockPatch(
   userPrompt: string,
   requestId: string,
 ): unknown {
+  const invalidPatchSections = new Set(
+    (process.env.NVIDIA_MOCK_INVALID_PATCH_SECTIONS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  if (invalidPatchSections.has(sectionId) && requestId.endsWith(":attempt:1")) {
+    return { status: "PATCH", reason: "Deliberately incomplete first mock response." };
+  }
   const validPatchSections = new Set(
     (process.env.NVIDIA_MOCK_VALID_PATCH_SECTIONS ?? "")
       .split(",")
