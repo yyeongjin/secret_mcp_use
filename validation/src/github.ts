@@ -21,6 +21,29 @@ interface GitReferenceResponse {
   object: { sha: string };
 }
 
+type CheckConclusion = "success" | "neutral" | "failure" | "action_required";
+
+interface NodeCheckSummary {
+  sectionId: string;
+  name: string;
+  fingerprint: string | null;
+  auditStatus: string;
+  executionState: string;
+  requirementIds: string[];
+  patch: {
+    status: string;
+    reason: string;
+    pullRequest?: { number: number; url: string; branch: string };
+  } | null;
+}
+
+interface TargetCheckSummary {
+  runId: string;
+  targetId: string;
+  triggerPath: string;
+  nodes: NodeCheckSummary[];
+}
+
 async function githubRequest<T>(
   config: PipelineConfig,
   method: "GET" | "POST" | "PATCH" | "DELETE",
@@ -58,6 +81,79 @@ export function branchName(input: NodeAuditInput): string {
   const target = input.run.targetId.toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 100);
   const fingerprint = input.node.fingerprint.slice("sha256:".length, "sha256:".length + 12);
   return `auto/${target}/${input.node.sectionId}/${fingerprint}`;
+}
+
+export function nodeCheckConclusion(node: Pick<NodeCheckSummary, "auditStatus" | "executionState" | "patch">): CheckConclusion {
+  if (
+    node.auditStatus === "FAILED_SCHEMA" ||
+    node.executionState.startsWith("FAILED_") ||
+    node.patch?.status.startsWith("FAILED_")
+  ) return "failure";
+  if (
+    node.auditStatus === "BLOCKED_MISSING_EVIDENCE" ||
+    node.auditStatus === "BLOCKED_CONTRACT_CONFLICT" ||
+    node.auditStatus === "UNKNOWN" ||
+    node.patch?.status.startsWith("BLOCKED_")
+  ) return "action_required";
+  if (
+    node.executionState === "PASS" ||
+    node.executionState === "CACHED_PASS"
+  ) return "success";
+  return "neutral";
+}
+
+function nodeDisplayStatus(node: NodeCheckSummary): string {
+  if (node.patch && node.patch.status !== "NOT_REQUIRED") return node.patch.status;
+  return node.executionState;
+}
+
+export async function publishNodeCheckRuns(args: {
+  config: PipelineConfig;
+  summaries: TargetCheckSummary[];
+}): Promise<void> {
+  if (!args.config.github.token) return;
+  const detailsUrl = args.config.runId
+    ? `${args.config.github.serverUrl}/${args.config.repository}/actions/runs/${args.config.runId}`
+    : undefined;
+  for (const summary of args.summaries) {
+    for (const node of summary.nodes) {
+      const status = nodeDisplayStatus(node);
+      const requirements = node.requirementIds.length > 0
+        ? node.requirementIds.map((id) => `\`${id}\``).join(", ")
+        : "none";
+      const patchReason = node.patch?.reason
+        ? node.patch.reason.slice(0, 4000)
+        : "No patch request was required.";
+      const pullRequest = node.patch?.pullRequest;
+      const checkSummary = [
+        `- Target: \`${summary.targetId}\``,
+        `- Trigger: \`${summary.triggerPath}\``,
+        `- Audit status: \`${node.auditStatus}\``,
+        `- Execution state: \`${node.executionState}\``,
+        `- Patch status: \`${node.patch?.status ?? "NOT_RUN"}\``,
+        `- Fingerprint: \`${node.fingerprint ?? "unavailable"}\``,
+        `- Requirement IDs: ${requirements}`,
+        `- Patch reason: ${patchReason}`,
+        pullRequest
+          ? `- Draft PR: [#${pullRequest.number}](${pullRequest.url}) on \`${pullRequest.branch}\``
+          : "- Draft PR: none",
+        "",
+        `Independent request: \`${summary.runId}:audit:${node.sectionId}\``,
+      ].join("\n");
+      await githubRequest(args.config, "POST", `/repos/${args.config.repository}/check-runs`, {
+        name: `Design Validation / ${node.sectionId} ${node.name}`.slice(0, 100),
+        head_sha: args.config.baseCommit,
+        status: "completed",
+        conclusion: nodeCheckConclusion(node),
+        external_id: `${summary.runId}:${summary.targetId}:${node.sectionId}`.slice(0, 255),
+        ...(detailsUrl ? { details_url: detailsUrl } : {}),
+        output: {
+          title: `${node.sectionId} ${status}`.slice(0, 255),
+          summary: checkSummary,
+        },
+      });
+    }
+  }
 }
 
 function keyMarker(key: Sha256): string {
@@ -180,6 +276,10 @@ function pullRequestBody(args: {
     evidence,
     "",
     "## Independent NVIDIA Requests",
+    "",
+    `- Audit: \`${args.manifest.runId}:audit:${args.input.node.sectionId}\``,
+    `- Patch: \`${args.manifest.runId}:patch:${args.input.node.sectionId}:attempt:<n>\``,
+    `- Patched-code audit: \`${args.manifest.runId}:reaudit:${args.input.node.sectionId}:attempt:<n>\``,
     "",
     "The audit, patch generation, patched-code audit, and affected PASS regressions were separate stateless requests. No prior Section response was included in another Section audit.",
     "",

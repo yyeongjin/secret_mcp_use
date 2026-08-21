@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { directDirtySections } from "../src/change.ts";
-import { manifestFromBody, pullRequestKey } from "../src/github.ts";
+import { manifestFromBody, nodeCheckConclusion, pullRequestKey } from "../src/github.ts";
 import { assertIsolatedAuditInput } from "../src/input.ts";
 import { buildSectionPayload, payloadKeys, requirementIdsForSection } from "../src/payload.ts";
 import type {
@@ -105,4 +105,23 @@ test("PR keys are deterministic and embedded manifests are recoverable", () => {
     manifestFromBody(`<!-- design-validation-pr-manifest: ${encoded} -->`),
     manifest,
   );
+});
+
+test("per-Section checks distinguish final PASS, waiting, blocked, and failed states", () => {
+  assert.equal(nodeCheckConclusion({ auditStatus: "PASS", executionState: "PASS", patch: null }), "success");
+  assert.equal(nodeCheckConclusion({
+    auditStatus: "PATCH_REQUIRED",
+    executionState: "PATCH_WAITING_DEPENDENCY",
+    patch: { status: "WAITING_DEPENDENCY", reason: "S02 is blocked." },
+  }), "neutral");
+  assert.equal(nodeCheckConclusion({
+    auditStatus: "BLOCKED_MISSING_EVIDENCE",
+    executionState: "BLOCKED_MISSING_EVIDENCE",
+    patch: null,
+  }), "action_required");
+  assert.equal(nodeCheckConclusion({
+    auditStatus: "PASS",
+    executionState: "PASS",
+    patch: { status: "FAILED_TEST", reason: "Playwright failed." },
+  }), "failure");
 });

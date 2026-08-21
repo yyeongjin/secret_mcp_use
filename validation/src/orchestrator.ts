@@ -4,6 +4,7 @@ import { createFreshAttestations, resolveCachedPassForNode } from "./cache.ts";
 import { buildChangeEvent, directDirtySections } from "./change.ts";
 import { sha256 } from "./hash.ts";
 import {
+  publishNodeCheckRuns,
   publishPatchPullRequest,
   pullRequestKey,
   reconcileStaleAutomationPullRequests,
@@ -93,7 +94,7 @@ interface PatchAttemptRecord {
   changedPaths?: string[];
 }
 
-interface PatchRecord {
+export interface PatchRecord {
   sectionId: SectionId;
   attempt?: number;
   status:
@@ -116,6 +117,16 @@ interface PatchRecord {
   attempts?: PatchAttemptRecord[];
 }
 
+export interface NodeRunSummary {
+  sectionId: SectionId;
+  name: string;
+  fingerprint: string | null;
+  auditStatus: NodeAuditOutput["status"] | "FAILED_SCHEMA";
+  executionState: string;
+  requirementIds: string[];
+  patch: PatchRecord | null;
+}
+
 export interface WorkRunSummary {
   runId: string;
   targetId: string;
@@ -128,6 +139,8 @@ export interface WorkRunSummary {
   reauditCalls: number;
   statusCounts: Record<string, number>;
   patchStatusCounts: Record<string, number>;
+  nodes: NodeRunSummary[];
+  patches: PatchRecord[];
   blocked: Array<{
     sectionId: SectionId;
     status: string;
@@ -182,6 +195,31 @@ function blockedNodes(outputs: NodeAuditOutput[]): WorkRunSummary["blocked"] {
           ? "Resolve the conflicting Specification and DESIGN_INDEX contract, then run this Section again."
           : "Run the isolated Section again after the provider returns a schema-valid grounded judgment.",
     }));
+}
+
+function buildNodeRunSummaries(args: {
+  manifest: Awaited<ReturnType<typeof readImpactManifest>>;
+  inputs: Map<SectionId, NodeAuditInput>;
+  outputs: NodeAuditOutput[];
+  nodeStates: Array<{ sectionId: SectionId; state: string }>;
+  patches: PatchRecord[];
+}): NodeRunSummary[] {
+  const outputs = new Map(args.outputs.map((output) => [output.sectionId, output]));
+  const states = new Map(args.nodeStates.map((node) => [node.sectionId, node.state]));
+  const patches = new Map(args.patches.map((patch) => [patch.sectionId, patch]));
+  return SECTION_IDS.map((sectionId) => {
+    const output = outputs.get(sectionId);
+    const input = args.inputs.get(sectionId);
+    return {
+      sectionId,
+      name: args.manifest.nodes[sectionId].name,
+      fingerprint: input?.node.fingerprint ?? null,
+      auditStatus: output?.status ?? "FAILED_SCHEMA",
+      executionState: states.get(sectionId) ?? "FAILED_SCHEMA",
+      requirementIds: output?.findings.map((finding) => finding.requirementId) ?? [],
+      patch: patches.get(sectionId) ?? null,
+    };
+  });
 }
 
 async function exists(pathname: string): Promise<boolean> {
@@ -1189,6 +1227,7 @@ async function runTrigger(args: {
 
   if (failures.length > 0 || resolved.size !== 19) {
     await writeGapReport(path.join(runDirectory, "GAP_REPORT.md"), orderedOutputs, []);
+    const patches: PatchRecord[] = [];
     const failedSummary: WorkRunSummary = {
       runId,
       targetId,
@@ -1201,6 +1240,14 @@ async function runTrigger(args: {
       reauditCalls: 0,
       statusCounts: countStatuses(orderedOutputs.map((output) => output.status)),
       patchStatusCounts: {},
+      nodes: buildNodeRunSummaries({
+        manifest: args.manifest,
+        inputs,
+        outputs: orderedOutputs,
+        nodeStates,
+        patches,
+      }),
+      patches,
       blocked: blockedNodes(orderedOutputs),
       errors: failures.map((failure) => `${failure.sectionId}: ${failure.error}`),
     };
@@ -1254,6 +1301,14 @@ async function runTrigger(args: {
     reauditCalls: patchResult.reauditCalls,
     statusCounts: countStatuses(orderedOutputs.map((output) => output.status)),
     patchStatusCounts: countStatuses(patchResult.records.map((record) => record.status)),
+    nodes: buildNodeRunSummaries({
+      manifest: args.manifest,
+      inputs,
+      outputs: orderedOutputs,
+      nodeStates,
+      patches: patchResult.records,
+    }),
+    patches: patchResult.records,
     blocked: blockedNodes(orderedOutputs),
     errors: [
       ...orderedOutputs
@@ -1347,6 +1402,11 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
     );
   }
 
+  await publishNodeCheckRuns({
+    config,
+    summaries,
+  });
+
   if (process.env.GITHUB_STEP_SUMMARY) {
     const lines = ["## DESIGN_INDEX validation", ""];
     for (const summary of summaries) {
@@ -1362,6 +1422,14 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
         lines.push(
           `  - ${blocked.sectionId} ${blocked.status}: ${blocked.requirementIds.join(", ") || "no Requirement ID"}`,
           `    Resume: ${blocked.resumeCondition}`,
+        );
+      }
+      for (const patch of summary.patches.filter((record) => record.status !== "NOT_REQUIRED")) {
+        lines.push(
+          `  - ${patch.sectionId} patch ${patch.status}: ${patch.reason}`,
+          ...(patch.pullRequest
+            ? [`    Draft PR: [#${patch.pullRequest.number}](${patch.pullRequest.url}) on \`${patch.pullRequest.branch}\``]
+            : []),
         );
       }
     }
