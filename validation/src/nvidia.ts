@@ -322,15 +322,20 @@ function mockPatch(
       files: Array<{ path: string; contentHash: Sha256; content: string | null }>;
       findings: Array<{ requirementId: string }>;
     };
-    const file = request.files.find((candidate) => candidate.path.endsWith("app.js") && candidate.content);
-    if (!file?.content) throw new Error(`${sectionId} mock patch requires frontend/app.js.`);
+    const file = request.files.find((candidate) => candidate.path.endsWith("app.js") && candidate.content) ??
+      request.files.find((candidate) => candidate.path.endsWith("styles.css") && candidate.content) ??
+      request.files.find((candidate) => candidate.content);
+    if (!file?.content) throw new Error(`${sectionId} mock patch requires a writable text file.`);
     const firstLine = file.content.split("\n", 1)[0];
+    const comment = file.path.endsWith(".html")
+      ? `<!-- Grounded mock patch for ${sectionId}. -->`
+      : `/* Grounded mock patch for ${sectionId}. */`;
     const diff = [
-      "diff --git a/frontend/app.js b/frontend/app.js",
-      "--- a/frontend/app.js",
-      "+++ b/frontend/app.js",
+      `diff --git a/${file.path} b/${file.path}`,
+      `--- a/${file.path}`,
+      `+++ b/${file.path}`,
       "@@ -1,1 +1,2 @@",
-      `+// Grounded mock patch for ${sectionId}.`,
+      `+${comment}`,
       ` ${firstLine}`,
       "",
     ].join("\n");

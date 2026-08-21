@@ -123,6 +123,16 @@ function countStatuses(values: string[]): Record<string, number> {
   }, {});
 }
 
+export function unresolvedPatchDependencies(
+  dependencies: SectionId[],
+  resolved: Map<SectionId, ResolvedNode>,
+  attestations: Map<SectionId, PassAttestation>,
+): SectionId[] {
+  return dependencies.filter((dependency) => (
+    !attestations.has(dependency) && resolved.get(dependency)?.output.status !== "PASS"
+  ));
+}
+
 function assertSafeOutputRoot(config: PipelineConfig): void {
   const relative = path.relative(config.repositoryRoot, config.outputRoot).replaceAll("\\", "/");
   if (relative === "" || relative.startsWith("../") || !relative.startsWith(".validation-runs/")) {
@@ -302,14 +312,16 @@ async function runPatches(args: {
       });
       continue;
     }
-    const missingDependencies = input.node.dependsOn.filter(
-      (dependency) => !args.attestations.has(dependency),
+    const missingDependencies = unresolvedPatchDependencies(
+      input.node.dependsOn,
+      args.resolved,
+      args.attestations,
     );
     if (missingDependencies.length > 0) {
       records.push({
         sectionId,
         status: "WAITING_DEPENDENCY",
-        reason: `Dependencies are not attested PASS: ${missingDependencies.join(", ")}.`,
+        reason: `Dependencies are neither current-run PASS nor attested PASS: ${missingDependencies.join(", ")}.`,
       });
       continue;
     }
