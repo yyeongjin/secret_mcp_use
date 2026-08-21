@@ -10,15 +10,54 @@ export interface PatchWorktree {
   cleanup: () => Promise<void>;
 }
 
+let worktreeMutation = Promise.resolve();
+
+async function serializeWorktreeMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = worktreeMutation;
+  let release = () => {};
+  worktreeMutation = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+  }
+}
+
+async function detachedWorktree(config: PipelineConfig, label: string): Promise<PatchWorktree> {
+  const worktreePath = await mkdtemp(path.join(os.tmpdir(), `secret-mcp-${label}-`));
+  await rm(worktreePath, { recursive: true, force: true });
+  await serializeWorktreeMutation(() => runCommand(
+    "git",
+    ["worktree", "add", "--detach", worktreePath, config.baseCommit],
+    { cwd: config.repositoryRoot },
+  ));
+  return {
+    path: worktreePath,
+    cleanup: async () => {
+      await serializeWorktreeMutation(() => runCommand(
+        "git",
+        ["worktree", "remove", "--force", worktreePath],
+        { cwd: config.repositoryRoot, allowFailure: true },
+      ));
+      await rm(worktreePath, { recursive: true, force: true });
+    },
+  };
+}
+
+export async function createAuditWorktree(
+  config: PipelineConfig,
+  sectionId: string,
+): Promise<PatchWorktree> {
+  return detachedWorktree(config, `audit-${sectionId}`);
+}
+
 export async function createPatchedWorktree(
   config: PipelineConfig,
   patch: GuardedPatch,
 ): Promise<PatchWorktree> {
-  const worktreePath = await mkdtemp(path.join(os.tmpdir(), `secret-mcp-${patch.sectionId}-`));
-  await rm(worktreePath, { recursive: true, force: true });
-  await runCommand("git", ["worktree", "add", "--detach", worktreePath, config.baseCommit], {
-    cwd: config.repositoryRoot,
-  });
+  const worktree = await detachedWorktree(config, `patch-${patch.sectionId}`);
+  const worktreePath = worktree.path;
   const patchPath = path.join(worktreePath, ".section.patch");
   await writeFile(patchPath, patch.diff, "utf8");
   await runCommand("git", ["apply", "--whitespace=error-all", patchPath], { cwd: worktreePath });
@@ -32,13 +71,7 @@ export async function createPatchedWorktree(
 
   return {
     path: worktreePath,
-    cleanup: async () => {
-      await runCommand("git", ["worktree", "remove", "--force", worktreePath], {
-        cwd: config.repositoryRoot,
-        allowFailure: true,
-      });
-      await rm(worktreePath, { recursive: true, force: true });
-    },
+    cleanup: worktree.cleanup,
   };
 }
 

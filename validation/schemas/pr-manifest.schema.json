@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secret-mcp.local/schemas/pr-manifest-v2.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "prKey", "targetId", "sectionId", "fingerprint", "triggerSource", "baseCommit", "baseBranch", "requirementIds", "evidenceRefs", "patchHash", "readSet", "writeSet", "affectedPassAttestations", "checks", "runId", "runUrl"],
+  "properties": {
+    "schemaVersion": { "const": "design-validation/pr-manifest/v2" },
+    "prKey": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "targetId": { "type": "string" },
+    "sectionId": { "type": "string", "pattern": "^S(?:0[1-9]|1[0-9])$" },
+    "fingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "triggerSource": { "type": "object" },
+    "baseCommit": { "type": "string" },
+    "baseBranch": { "type": "string" },
+    "requirementIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "evidenceRefs": { "type": "array", "items": { "type": "string" } },
+    "patchHash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "readSet": { "type": "array", "items": { "type": "object" } },
+    "writeSet": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+    "affectedPassAttestations": { "type": "array", "items": { "type": "string" } },
+    "checks": { "type": "object" },
+    "runId": { "type": "string" },
+    "runUrl": { "type": ["string", "null"] }
+  }
+}

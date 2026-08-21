@@ -8,12 +8,27 @@ immutableInputGlobs:
 globalAllowedWriteGlobs:
   - frontend/**
 
+sourceGlobs:
+  - trigger/**
+  - DESIGN_INDEX_SPECIFICATION.md
+  - DESIGN_INDEX_SPECIFICATION.ko.md
+  - frontend/**
+  - validation/**
+  - package.json
+  - package-lock.json
+  - tsconfig.json
+
+ignoredChangeGlobs:
+  - README.md
+  - README.ko.md
+  - docs/**
+
 nodes:
   S01:
     name: Goal and scope
     dependsOn: []
-    reads: [frontend/index.html, frontend/app.js]
-    writes: [frontend/index.html, frontend/app.js]
+    reads: [frontend/index.html, frontend/app.js, package.json]
+    writes: []
   S02:
     name: Evidence and coordinates
     dependsOn: [S01]
@@ -22,22 +37,22 @@ nodes:
   S03:
     name: Site map and routes
     dependsOn: [S01, S02]
-    reads: [frontend/index.html, frontend/app.js]
+    reads: [frontend/index.html, frontend/app.js, package.json, package-lock.json]
     writes: [frontend/index.html, frontend/app.js]
   S04:
     name: Shared application shell
     dependsOn: [S03, S09, S16]
-    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, package.json, package-lock.json]
     writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
   S05:
     name: Navigation and header
     dependsOn: [S03, S04, S09, S10]
-    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, package.json]
     writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
   S06:
     name: Page-by-page specifications
     dependsOn: [S02, S03, S04, S05, S09, S10, S11, S15]
-    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, package.json]
     writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
   S07:
     name: Sections and layout
@@ -47,7 +62,7 @@ nodes:
   S08:
     name: Component abstraction
     dependsOn: [S06, S07, S15, S16]
-    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, package.json, package-lock.json]
     writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
   S09:
     name: Design tokens and colors
@@ -62,17 +77,17 @@ nodes:
   S11:
     name: Assets and icons
     dependsOn: [S02, S03]
-    reads: [frontend/index.html, frontend/styles.css, frontend/assets/**]
+    reads: [frontend/index.html, frontend/styles.css, frontend/assets/**, package.json, package-lock.json]
     writes: [frontend/index.html, frontend/styles.css, frontend/assets/**]
   S12:
     name: Responsive behavior
     dependsOn: [S04, S05, S06, S07, S08, S09, S10, S11]
-    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, package.json]
     writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
   S13:
     name: Interaction and motion
     dependsOn: [S05, S08, S09, S12]
-    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, package.json]
     writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
   S14:
     name: Accessibility
@@ -87,18 +102,18 @@ nodes:
   S16:
     name: Frontend architecture
     dependsOn: [S01, S03, S15]
-    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, frontend/README.md]
-    writes: [frontend/index.html, frontend/styles.css, frontend/app.js, frontend/README.md]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, frontend/README.md, package.json, package-lock.json, tsconfig.json]
+    writes: []
   S17:
     name: Implementation task graph
     dependsOn: [S04, S05, S06, S07, S08, S09, S10, S11, S12, S13, S14, S15, S16]
-    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, frontend/README.md]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, frontend/README.md, validation/impact-manifest.yml]
     writes: []
   S18:
     name: Page acceptance criteria
     dependsOn: [S05, S06, S09, S10, S11, S12, S13, S14]
-    reads: [frontend/index.html, frontend/styles.css, frontend/app.js]
-    writes: [frontend/index.html, frontend/styles.css, frontend/app.js]
+    reads: [frontend/index.html, frontend/styles.css, frontend/app.js, frontend/tests/**, package.json, package-lock.json, validation/playwright.config.ts]
+    writes: [frontend/tests/**]
   S19:
     name: Uncertainties and decisions
     dependsOn: [S01, S02, S03, S04, S05, S06, S07, S08, S09, S10, S11, S12, S13, S14, S15, S16, S17, S18]

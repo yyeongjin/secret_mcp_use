@@ -1,18 +1,43 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import { hashJson } from "./hash.ts";
-import type { NodeAuditOutput, NodePatchOutput, PipelineConfig, SectionId, Sha256 } from "./types.ts";
+import type {
+  ChangeEvent,
+  NodeAuditInput,
+  NodeAuditOutput,
+  NodePatchOutput,
+  PassAttestation,
+  PipelineConfig,
+  PullRequestManifest,
+  SectionId,
+  Sha256,
+} from "./types.ts";
 
 export type JsonSchema = Record<string, unknown>;
 
 export interface Validators {
   audit: ValidateFunction<NodeAuditOutput>;
   patch: ValidateFunction<NodePatchOutput>;
+  input: ValidateFunction<NodeAuditInput>;
+  changeEvent: ValidateFunction<ChangeEvent>;
+  passAttestation: ValidateFunction<PassAttestation>;
+  prManifest: ValidateFunction<PullRequestManifest>;
   auditSchema: JsonSchema;
   patchSchema: JsonSchema;
   patchCandidateSchema: JsonSchema;
   contractSchemaHash: Sha256;
+}
+
+async function sourceContract(root: string, relativeDirectory: string): Promise<Record<string, string>> {
+  const result: Record<string, string> = {};
+  const entries = await readdir(path.join(root, relativeDirectory), { withFileTypes: true });
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const relativePath = path.posix.join(relativeDirectory, entry.name);
+    if (entry.isDirectory()) Object.assign(result, await sourceContract(root, relativePath));
+    if (entry.isFile()) result[relativePath] = (await readFile(path.join(root, relativePath))).toString("utf8");
+  }
+  return result;
 }
 
 export async function loadValidators(config: PipelineConfig): Promise<Validators> {
@@ -25,18 +50,56 @@ export async function loadValidators(config: PipelineConfig): Promise<Validators
   const patchCandidateSchemaBytes = await readFile(
     path.join(config.repositoryRoot, "validation/schemas/patch-candidate-output.schema.json"),
   );
+  const auditInputSchema = JSON.parse(await readFile(
+    path.join(config.repositoryRoot, "validation/schemas/audit-input.schema.json"),
+    "utf8",
+  )) as JsonSchema;
+  const changeEventSchema = JSON.parse(await readFile(
+    path.join(config.repositoryRoot, "validation/schemas/change-event.schema.json"),
+    "utf8",
+  )) as JsonSchema;
+  const passAttestationSchema = JSON.parse(await readFile(
+    path.join(config.repositoryRoot, "validation/schemas/pass-attestation.schema.json"),
+    "utf8",
+  )) as JsonSchema;
+  const prManifestSchema = JSON.parse(await readFile(
+    path.join(config.repositoryRoot, "validation/schemas/pr-manifest.schema.json"),
+    "utf8",
+  )) as JsonSchema;
   const auditSchema = JSON.parse(auditSchemaBytes.toString("utf8")) as JsonSchema;
   const patchSchema = JSON.parse(patchSchemaBytes.toString("utf8")) as JsonSchema;
   const patchCandidateSchema = JSON.parse(patchCandidateSchemaBytes.toString("utf8")) as JsonSchema;
+  const validatorSources = await sourceContract(config.repositoryRoot, "validation/src");
+  const manifestSource = await readFile(path.join(config.repositoryRoot, config.impactManifestPath), "utf8");
+  const packageSource = await readFile(path.join(config.repositoryRoot, "package.json"), "utf8");
   const ajv = new Ajv2020({ allErrors: true, strict: true });
   return {
     audit: ajv.compile<NodeAuditOutput>(auditSchema),
     patch: ajv.compile<NodePatchOutput>(patchSchema),
+    input: ajv.compile<NodeAuditInput>(auditInputSchema),
+    changeEvent: ajv.compile<ChangeEvent>(changeEventSchema),
+    passAttestation: ajv.compile<PassAttestation>(passAttestationSchema),
+    prManifest: ajv.compile<PullRequestManifest>(prManifestSchema),
     auditSchema,
     patchSchema,
     patchCandidateSchema,
-    contractSchemaHash: hashJson({ auditSchema, patchSchema, patchCandidateSchema }),
+    contractSchemaHash: hashJson({
+      auditSchema,
+      patchSchema,
+      patchCandidateSchema,
+      auditInputSchema,
+      changeEventSchema,
+      passAttestationSchema,
+      prManifestSchema,
+      validatorSources,
+      impactManifest: manifestSource,
+      packageContract: packageSource,
+    }),
   };
+}
+
+export function assertContract<T>(validate: ValidateFunction<T>, value: unknown, label: string): asserts value is T {
+  if (!validate(value)) throw new Error(`Invalid ${label}: ${schemaError(validate)}`);
 }
 
 function schemaError(validate: ValidateFunction): string {

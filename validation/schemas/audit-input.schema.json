@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secret-mcp.local/schemas/audit-input-v2.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "run", "node", "contract", "evidence", "implementation", "policy", "payload"],
+  "properties": {
+    "schemaVersion": { "const": "design-validation/audit-input/v2" },
+    "run": {
+      "type": "object",
+      "required": ["runId", "targetId", "repository", "baseCommit", "requestedAt"],
+      "properties": {
+        "runId": { "type": "string", "minLength": 1 },
+        "targetId": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "minLength": 1 },
+        "baseCommit": { "type": "string", "minLength": 1 },
+        "requestedAt": { "type": "string", "minLength": 1 }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": ["sectionId", "name", "requirementIds", "fingerprint", "dependsOn"],
+      "properties": {
+        "sectionId": { "type": "string", "pattern": "^S(?:0[1-9]|1[0-9])$" },
+        "name": { "type": "string" },
+        "requirementIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "fingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "dependsOn": { "type": "array", "items": { "type": "string", "pattern": "^S(?:0[1-9]|1[0-9])$" } }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "required": ["specificationSource", "specificationGlobalRules", "specificationFragment", "designIndexSource", "designIndexFragment", "requestContract"],
+      "properties": {
+        "specificationSource": { "type": "object" },
+        "specificationGlobalRules": { "type": "string" },
+        "specificationFragment": { "type": "string", "minLength": 1 },
+        "designIndexSource": { "type": "object" },
+        "designIndexFragment": { "type": "string", "minLength": 1 },
+        "requestContract": { "type": ["object", "null"] }
+      }
+    },
+    "evidence": { "type": "array", "items": { "type": "object" } },
+    "implementation": {
+      "type": "object",
+      "required": ["files", "runtimeFacts"],
+      "properties": {
+        "files": { "type": "array", "items": { "type": "object" } },
+        "runtimeFacts": { "type": "object" }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "required": ["allowedReadGlobs", "allowedWriteGlobs", "immutableInputGlobs", "forbiddenOperations", "maxChangedFiles", "maxChangedLines"],
+      "properties": {
+        "allowedReadGlobs": { "type": "array", "items": { "type": "string" } },
+        "allowedWriteGlobs": { "type": "array", "items": { "type": "string" } },
+        "immutableInputGlobs": { "type": "array", "items": { "type": "string" } },
+        "forbiddenOperations": { "type": "array", "items": { "type": "string" } },
+        "maxChangedFiles": { "type": "integer", "minimum": 1 },
+        "maxChangedLines": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "payload": { "type": "object" }
+  }
+}

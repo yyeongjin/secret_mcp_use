@@ -92,7 +92,7 @@ test("a validation-only Section cannot enter the patch pipeline", () => {
   assert.match(result.warning ?? "", /without an owned application write path/);
 });
 
-test("PATCH_REQUIRED must identify a supplied file owned by the isolated Section", () => {
+test("PATCH_REQUIRED must identify a supplied file or a safe owned text file", () => {
   const missingReference = enforcePatchGrounding(
     groundingInput(["frontend/styles.css"]),
     patchRequired([]),
@@ -105,4 +105,16 @@ test("PATCH_REQUIRED must identify a supplied file owned by the isolated Section
   );
   assert.equal(valid.output.status, "PATCH_REQUIRED");
   assert.equal(valid.warning, undefined);
+
+  const newOwnedFile = enforcePatchGrounding(
+    groundingInput(["frontend/tests/**"]),
+    patchRequired(["frontend/tests/home.spec.ts"]),
+  );
+  assert.equal(newOwnedFile.output.status, "PATCH_REQUIRED");
+
+  const unsafeNewFile = enforcePatchGrounding(
+    groundingInput(["frontend/**"]),
+    patchRequired(["frontend/../trigger/rewrite.md"]),
+  );
+  assert.equal(unsafeNewFile.output.status, "BLOCKED_MISSING_EVIDENCE");
 });

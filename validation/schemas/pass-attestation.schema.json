@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secret-mcp.local/schemas/pass-attestation-v2.json",
+  "type": "object",
+  "required": ["schemaVersion", "targetId", "sectionId", "fingerprint", "triggerSource", "specificationSource", "status", "baseCommit", "source", "requirementIds", "dependencyAttestations", "dependencyPublicDigests", "publicOutput", "publicDigest", "validator", "tests", "createdAt", "attestationHash"],
+  "properties": {
+    "schemaVersion": { "const": "design-validation/attestation/v2" },
+    "targetId": { "type": "string" },
+    "sectionId": { "type": "string", "pattern": "^S(?:0[1-9]|1[0-9])$" },
+    "fingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "triggerSource": { "type": "object" },
+    "specificationSource": { "type": "object" },
+    "status": { "const": "PASS" },
+    "baseCommit": { "type": "string" },
+    "source": { "enum": ["fresh-audit", "dependency-rebound", "post-merge-audit"] },
+    "requirementIds": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "dependencyAttestations": { "type": "object" },
+    "dependencyPublicDigests": { "type": "object" },
+    "publicOutput": { "type": "object" },
+    "publicDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "validator": { "type": "object" },
+    "tests": { "type": "array", "items": { "type": "object" } },
+    "createdAt": { "type": "string" },
+    "attestationHash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

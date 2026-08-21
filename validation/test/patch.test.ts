@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import {
   canonicalizePatchOutput,
+  guardPatch,
   inspectUnifiedDiff,
   isRetryablePatchCandidateError,
   normalizeUnifiedDiffMechanics,
   relocateUnifiedDiffHunks,
 } from "../src/patch.ts";
-import type { NodeAuditInput, NodeAuditOutput, Sha256 } from "../src/types.ts";
+import type { ImpactManifest, NodeAuditInput, NodeAuditOutput, PipelineConfig, Sha256 } from "../src/types.ts";
+
+const execFileAsync = promisify(execFile);
 
 test("unified diff inspection returns exact frontend write paths", () => {
   const result = inspectUnifiedDiff([
@@ -220,14 +228,14 @@ test("patch metadata is derived from the isolated audit input", () => {
         content: "body { color: black; }\n",
       }],
     },
-  } as NodeAuditInput;
+  } as unknown as NodeAuditInput;
   const auditOutput = {
     findings: [{
       requirementId: "S10-COLOR",
       evidenceRefs: ["E-D01"],
       implementationRefs: ["frontend/styles.css"],
     }],
-  } as NodeAuditOutput;
+  } as unknown as NodeAuditOutput;
 
   const output = canonicalizePatchOutput({
     value: {
@@ -252,4 +260,96 @@ test("patch metadata is derived from the isolated audit input", () => {
   assert.deepEqual(output.writeSet, [{ path: "frontend/styles.css", baseHash }]);
   assert.deepEqual(output.readSet, [{ path: "frontend/styles.css", baseHash }]);
   assert.match(output.diff, /^diff --git a\/frontend\/styles\.css b\/frontend\/styles\.css/m);
+});
+
+test("an owned declared text file can be created from an empty base", () => {
+  const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;
+  const auditInput = {
+    node: { sectionId: "S18", fingerprint },
+    implementation: { files: [] },
+    policy: { allowedWriteGlobs: ["frontend/tests/**"] },
+  } as unknown as NodeAuditInput;
+  const auditOutput = {
+    findings: [{
+      requirementId: "S18-TEST",
+      evidenceRefs: [],
+      implementationRefs: ["frontend/tests/home.spec.ts"],
+    }],
+  } as unknown as NodeAuditOutput;
+  const output = canonicalizePatchOutput({
+    value: {
+      status: "PATCH",
+      reason: "Add the grounded acceptance check.",
+      diff: [
+        "diff --git a/frontend/tests/home.spec.ts b/frontend/tests/home.spec.ts",
+        "new file mode 100644",
+        "--- /dev/null",
+        "+++ b/frontend/tests/home.spec.ts",
+        "@@ -0,0 +1 @@",
+        "+export {};",
+        "",
+      ].join("\n"),
+      writeSet: [{ path: "frontend/tests/home.spec.ts", baseHash: "model-value-is-ignored" }],
+    },
+    auditInput,
+    auditOutput,
+  });
+  assert.deepEqual(output.writeSet, [{
+    path: "frontend/tests/home.spec.ts",
+    baseHash: `sha256:${"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}`,
+  }]);
+});
+
+test("new text file guard requires an owned 100644 creation patch", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "secret-mcp-patch-test-"));
+  try {
+    await execFileAsync("git", ["init", "-q"], { cwd: root });
+    await mkdir(path.join(root, "scratch"));
+    const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;
+    const diff = [
+      "diff --git a/frontend/tests/home.spec.ts b/frontend/tests/home.spec.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/frontend/tests/home.spec.ts",
+      "@@ -0,0 +1 @@",
+      "+export {};",
+      "",
+    ].join("\n");
+    const input = {
+      node: { sectionId: "S18", fingerprint },
+      implementation: { files: [] },
+      policy: { allowedWriteGlobs: ["frontend/tests/**"] },
+    } as unknown as NodeAuditInput;
+    const guarded = await guardPatch({
+      config: {
+        repositoryRoot: root,
+        maxChangedFiles: 5,
+        maxChangedLines: 500,
+      } as PipelineConfig,
+      manifest: {
+        immutableInputGlobs: ["trigger/**"],
+        globalAllowedWriteGlobs: ["frontend/**"],
+      } as ImpactManifest,
+      auditInput: input,
+      patchOutput: {
+        schemaVersion: "design-validation/patch-output/v2",
+        sectionId: "S18",
+        fingerprint,
+        status: "PATCH",
+        requirementIds: ["S18-TEST"],
+        evidenceRefs: [],
+        readSet: [],
+        writeSet: [{
+          path: "frontend/tests/home.spec.ts",
+          baseHash: `sha256:${"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}`,
+        }],
+        reason: "Add test.",
+        diff,
+      },
+      scratchDirectory: path.join(root, "scratch"),
+    });
+    assert.deepEqual(guarded.changedPaths, ["frontend/tests/home.spec.ts"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

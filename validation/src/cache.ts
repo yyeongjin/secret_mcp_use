@@ -36,6 +36,8 @@ function validAttestationShape(value: unknown): value is PassAttestation {
     typeof item.targetId === "string" &&
     typeof item.sectionId === "string" &&
     typeof item.fingerprint === "string" &&
+    Array.isArray(item.requirementIds) &&
+    typeof item.dependencyPublicDigests === "object" &&
     typeof item.attestationHash === "string"
   );
 }
@@ -67,7 +69,7 @@ async function loadCandidates(
 function candidateMatches(
   candidate: PassAttestation,
   input: NodeAuditInput,
-  dependencies: Map<SectionId, CachedNode>,
+  dependencies: Map<SectionId, ResolvedNode>,
   expectedValidatorId: string,
   expectedValidatorContractHash: Sha256,
 ): boolean {
@@ -90,12 +92,53 @@ function candidateMatches(
 
   for (const dependencyId of input.node.dependsOn) {
     const dependency = dependencies.get(dependencyId);
-    if (!dependency) return false;
-    if (candidate.dependencyAttestations[dependencyId] !== dependency.attestation.attestationHash) {
+    if (!dependency || dependency.output.status !== "PASS") return false;
+    const currentPublicDigest = hashJson(dependency.output.publicOutput);
+    if (candidate.dependencyPublicDigests[dependencyId] !== currentPublicDigest) {
       return false;
     }
   }
   return true;
+}
+
+export async function resolveCachedPassForNode(args: {
+  config: PipelineConfig;
+  input: NodeAuditInput;
+  resolvedDependencies: Map<SectionId, ResolvedNode>;
+  validatorContractHash: Sha256;
+}): Promise<CachedNode | null> {
+  if (args.config.forceFullAudit) return null;
+  const candidates = await loadCandidates(
+    args.config.stateRoot,
+    args.input.run.targetId,
+    args.input.node.sectionId,
+    args.input.node.fingerprint,
+  );
+  const matches = candidates.filter((candidate) => candidateMatches(
+    candidate,
+    args.input,
+    args.resolvedDependencies,
+    `nvidia:${args.config.nvidia.model}`,
+    args.validatorContractHash,
+  ));
+  const publicDigests = new Set(matches.map((candidate) => candidate.publicDigest));
+  if (publicDigests.size > 1) {
+    throw new Error(`Conflicting immutable PASS attestations found for ${args.input.node.sectionId}.`);
+  }
+  const candidate = matches[0];
+  if (!candidate) return null;
+  return {
+    status: "CACHED_PASS",
+    attestation: candidate,
+    output: {
+      schemaVersion: "design-validation/audit-output/v2",
+      sectionId: args.input.node.sectionId,
+      fingerprint: args.input.node.fingerprint,
+      status: "PASS",
+      findings: [],
+      publicOutput: candidate.publicOutput,
+    },
+  };
 }
 
 export async function resolveCachedPasses(
@@ -110,34 +153,13 @@ export async function resolveCachedPasses(
   for (const sectionId of topologicalSections(manifest)) {
     const input = inputs.get(sectionId);
     if (!input) throw new Error(`Missing input for ${sectionId}.`);
-    const candidates = await loadCandidates(
-      config.stateRoot,
-      input.run.targetId,
-      sectionId,
-      input.node.fingerprint,
-    );
-    const expectedValidatorId = `nvidia:${config.nvidia.model}`;
-    const matches = candidates.filter((candidate) =>
-      candidateMatches(candidate, input, cached, expectedValidatorId, validatorContractHash),
-    );
-    const publicDigests = new Set(matches.map((candidate) => candidate.publicDigest));
-    if (publicDigests.size > 1) {
-      throw new Error(`Conflicting immutable PASS attestations found for ${sectionId}.`);
-    }
-    const candidate = matches[0];
-    if (!candidate) continue;
-    cached.set(sectionId, {
-      status: "CACHED_PASS",
-      attestation: candidate,
-      output: {
-        schemaVersion: "design-validation/audit-output/v2",
-        sectionId,
-        fingerprint: input.node.fingerprint,
-        status: "PASS",
-        findings: [],
-        publicOutput: candidate.publicOutput,
-      },
+    const candidate = await resolveCachedPassForNode({
+      config,
+      input,
+      resolvedDependencies: cached,
+      validatorContractHash,
     });
+    if (candidate) cached.set(sectionId, candidate);
   }
   return cached;
 }
@@ -149,6 +171,7 @@ export async function createFreshAttestations(args: {
   resolved: Map<SectionId, ResolvedNode>;
   validatorContractHash: Sha256;
   outputDirectory: string;
+  source: PassAttestation["source"];
 }): Promise<Map<SectionId, PassAttestation>> {
   const attestations = new Map<SectionId, PassAttestation>();
 
@@ -163,6 +186,7 @@ export async function createFreshAttestations(args: {
     if (resolved.output.status !== "PASS") continue;
 
     const dependencyAttestations: Partial<Record<SectionId, Sha256>> = {};
+    const dependencyPublicDigests: Partial<Record<SectionId, Sha256>> = {};
     let dependenciesComplete = true;
     for (const dependencyId of input.node.dependsOn) {
       const dependency = attestations.get(dependencyId);
@@ -171,6 +195,7 @@ export async function createFreshAttestations(args: {
         break;
       }
       dependencyAttestations[dependencyId] = dependency.attestationHash;
+      dependencyPublicDigests[dependencyId] = dependency.publicDigest;
     }
     if (!dependenciesComplete) continue;
 
@@ -192,8 +217,10 @@ export async function createFreshAttestations(args: {
       },
       status: "PASS",
       baseCommit: args.config.baseCommit,
-      source: "fresh-audit",
+      source: args.source,
+      requirementIds: input.node.requirementIds,
       dependencyAttestations,
+      dependencyPublicDigests,
       publicOutput: resolved.output.publicOutput,
       publicDigest: hashJson(resolved.output.publicOutput),
       validator: {

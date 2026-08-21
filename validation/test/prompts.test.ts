@@ -45,7 +45,7 @@ test("patch prompt includes only finding-referenced files and exact physical lin
   };
   assert.deepEqual(prompt.files.map((file) => file.path), ["frontend/styles.css"]);
   assert.deepEqual(prompt.files[0].canonicalLines[0], { line: 1, text: "body { color: black; }" });
-  assert.equal(prompt.maxDiffLines, 160);
+  assert.equal(prompt.maxDiffLines, 120);
 });
 
 test("retry prompt carries a bounded rejection summary instead of the rejected diff", () => {

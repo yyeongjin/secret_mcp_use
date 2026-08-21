@@ -259,9 +259,25 @@ export function canonicalizePatchOutput(args: {
   if (status === "PATCH" && diff.trim() !== "") {
     changedPaths = inspectUnifiedDiff(diff).changedPaths;
   }
+  const declaredWritePaths = new Set(declaredPaths(source.writeSet));
   for (const changedPath of changedPaths) {
     if (!fileByPath.has(changedPath)) {
-      throw new Error(`Patch references an implementation file outside the isolated input: ${changedPath}.`);
+      const allowedNewTextFile = (
+        declaredWritePaths.has(changedPath) &&
+        matchesAnyPath(changedPath, args.auditInput.policy.allowedWriteGlobs) &&
+        changedPath.startsWith("frontend/") &&
+        /\.(?:css|html|js|jsx|json|mjs|ts|tsx)$/.test(changedPath)
+      );
+      if (!allowedNewTextFile) {
+        throw new Error(`Patch references an implementation file outside the isolated input: ${changedPath}.`);
+      }
+      fileByPath.set(changedPath, {
+        path: changedPath,
+        contentHash: sha256(""),
+        byteLength: 0,
+        encoding: "utf8",
+        content: "",
+      });
     }
   }
 
@@ -390,6 +406,13 @@ export async function guardPatch(args: {
     }
     if (!matchesAnyPath(changedPath, args.auditInput.policy.allowedWriteGlobs)) {
       throw new Error(`${args.auditInput.node.sectionId} does not own ${changedPath}.`);
+    }
+    if (!(await exists(path.join(args.config.repositoryRoot, changedPath)))) {
+      const escapedPath = changedPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const safeCreation = new RegExp(
+        `(?:^|\\n)new file mode 100644\\n(?:--- /dev/null\\n\\+\\+\\+ b/${escapedPath}|diff --git a/${escapedPath} b/${escapedPath}[\\s\\S]*?--- /dev/null\\n\\+\\+\\+ b/${escapedPath})`,
+      ).test(args.patchOutput.diff);
+      if (!safeCreation) throw new Error(`Unsafe or undeclared new file patch: ${changedPath}.`);
     }
   }
 

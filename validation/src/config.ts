@@ -52,7 +52,6 @@ async function discoverTriggers(repositoryRoot: string): Promise<string[]> {
 }
 
 function currentCommit(repositoryRoot: string): string {
-  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA;
   return execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: repositoryRoot,
     encoding: "utf8",
@@ -91,6 +90,10 @@ export async function loadConfig(argv = process.argv.slice(2)): Promise<Pipeline
     triggerPaths,
     outputRoot: path.resolve(repositoryRoot, process.env.PIPELINE_OUTPUT_ROOT ?? ".validation-runs/current"),
     stateRoot: path.resolve(repositoryRoot, process.env.PIPELINE_STATE_ROOT ?? ".validation-state"),
+    eventName: process.env.GITHUB_EVENT_NAME ?? "manual",
+    eventPath: process.env.GITHUB_EVENT_PATH ?? null,
+    runId: process.env.GITHUB_RUN_ID ?? null,
+    runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
     forceFullAudit,
     dryRun,
     createPrs,

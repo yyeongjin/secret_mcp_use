@@ -62,6 +62,8 @@ export interface ImpactManifest {
   schemaVersion: "design-validation/impact-manifest/v1";
   immutableInputGlobs: string[];
   globalAllowedWriteGlobs: string[];
+  sourceGlobs: string[];
+  ignoredChangeGlobs: string[];
   nodes: Record<SectionId, ImpactNode>;
 }
 
@@ -75,9 +77,49 @@ export interface ImplementationFile {
 
 export interface EvidenceReference {
   evidenceId: string;
-  kind: "metadata";
+  kind: "image" | "crop" | "metadata" | "measurement";
   contentHash: Sha256;
   localRef: string;
+  byteLength?: number;
+  bounds?: { x: number; y: number; width: number; height: number };
+}
+
+export interface RequestContractReference {
+  path: string;
+  contentHash: Sha256;
+  fragment: string;
+}
+
+export interface ImportedArtifact {
+  producer: "secret_mcp";
+  kind: "design-index" | "request-contract" | "evidence";
+  referenceId: string;
+  path: string;
+  contentHash: Sha256;
+}
+
+export interface ChangedFile {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  beforePath?: string;
+  beforeHash: Sha256 | null;
+  afterHash: Sha256 | null;
+}
+
+export interface ChangeEvent {
+  schemaVersion: "design-validation/change-event/v2";
+  eventId: string;
+  source: "push" | "merge" | "manual" | "design-index-import";
+  repository: string;
+  beforeCommit: string | null;
+  afterCommit: string;
+  changedFiles: ChangedFile[];
+  importedArtifacts: ImportedArtifact[];
+  options: {
+    forceFullAudit: boolean;
+    allowCachedPass: boolean;
+    reason: string;
+  };
 }
 
 export interface NodeAuditInput {
@@ -92,6 +134,7 @@ export interface NodeAuditInput {
   node: {
     sectionId: SectionId;
     name: string;
+    requirementIds: string[];
     fingerprint: Sha256;
     dependsOn: SectionId[];
   };
@@ -113,12 +156,18 @@ export interface NodeAuditInput {
       sectionHeading: string;
     };
     designIndexFragment: string;
+    requestContract: RequestContractReference | null;
   };
   evidence: EvidenceReference[];
   implementation: {
     files: ImplementationFile[];
     runtimeFacts: {
       assets: Array<{ path: string; contentHash: Sha256; byteLength: number }>;
+      changeEvent: {
+        eventId: string;
+        source: ChangeEvent["source"];
+        changedPaths: string[];
+      };
     };
   };
   policy: {
@@ -129,6 +178,7 @@ export interface NodeAuditInput {
     maxChangedFiles: number;
     maxChangedLines: number;
   };
+  payload: Record<string, unknown>;
 }
 
 export type AuditStatus =
@@ -194,8 +244,10 @@ export interface PassAttestation {
   };
   status: "PASS";
   baseCommit: string;
-  source: "fresh-audit";
+  source: "fresh-audit" | "dependency-rebound" | "post-merge-audit";
+  requirementIds: string[];
   dependencyAttestations: Partial<Record<SectionId, Sha256>>;
+  dependencyPublicDigests: Partial<Record<SectionId, Sha256>>;
   publicOutput: NodeAuditOutput["publicOutput"];
   publicDigest: Sha256;
   validator: {
@@ -221,6 +273,40 @@ export interface FreshNode {
 
 export type ResolvedNode = CachedNode | FreshNode;
 
+export interface PullRequestManifest {
+  schemaVersion: "design-validation/pr-manifest/v2";
+  prKey: Sha256;
+  targetId: string;
+  sectionId: SectionId;
+  fingerprint: Sha256;
+  triggerSource: {
+    path: string;
+    documentHash: Sha256;
+    sectionHeading: string;
+  };
+  baseCommit: string;
+  baseBranch: string;
+  requirementIds: string[];
+  evidenceRefs: string[];
+  patchHash: Sha256;
+  readSet: FileSetEntry[];
+  writeSet: FileSetEntry[];
+  affectedPassAttestations: Sha256[];
+  checks: {
+    schema: "PASS";
+    scope: "PASS";
+    immutableInputs: "PASS";
+    build: "PASS";
+    test: "PASS";
+    visual: "PASS";
+    accessibility: "PASS";
+    regression: "PASS";
+    base: "PASS";
+  };
+  runId: string;
+  runUrl: string | null;
+}
+
 export interface PipelineConfig {
   repositoryRoot: string;
   repository: string;
@@ -230,6 +316,10 @@ export interface PipelineConfig {
   triggerPaths: string[];
   outputRoot: string;
   stateRoot: string;
+  eventName: string;
+  eventPath: string | null;
+  runId: string | null;
+  runAttempt: string | null;
   forceFullAudit: boolean;
   dryRun: boolean;
   createPrs: boolean;

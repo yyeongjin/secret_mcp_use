@@ -1,9 +1,15 @@
-import { appendFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createFreshAttestations, resolveCachedPasses } from "./cache.ts";
+import { createFreshAttestations, resolveCachedPassForNode } from "./cache.ts";
+import { buildChangeEvent, directDirtySections } from "./change.ts";
 import { sha256 } from "./hash.ts";
-import { publishPatchPullRequest } from "./github.ts";
 import {
+  publishPatchPullRequest,
+  pullRequestKey,
+  reconcileStaleAutomationPullRequests,
+} from "./github.ts";
+import {
+  assertIsolatedAuditInput,
   buildAuditInputs,
   modelContractHash,
   targetIdFor,
@@ -35,22 +41,24 @@ import {
 } from "./prompts.ts";
 import {
   assertAuditOutput,
+  assertContract,
   assertPatchOutput,
   loadValidators,
   type JsonSchema,
 } from "./schema.ts";
 import type {
-  FreshNode,
+  ChangeEvent,
   NodeAuditInput,
   NodeAuditOutput,
   NodePatchOutput,
   PassAttestation,
   PipelineConfig,
+  PullRequestManifest,
   ResolvedNode,
   SectionId,
 } from "./types.ts";
 import { SECTION_IDS } from "./types.ts";
-import { createPatchedWorktree, verifyPatchedWorktree } from "./worktree.ts";
+import { createAuditWorktree, createPatchedWorktree, verifyPatchedWorktree } from "./worktree.ts";
 
 interface AuditCallSuccess {
   ok: true;
@@ -108,7 +116,7 @@ interface PatchRecord {
   attempts?: PatchAttemptRecord[];
 }
 
-interface WorkRunSummary {
+export interface WorkRunSummary {
   runId: string;
   targetId: string;
   triggerPath: string;
@@ -120,6 +128,12 @@ interface WorkRunSummary {
   reauditCalls: number;
   statusCounts: Record<string, number>;
   patchStatusCounts: Record<string, number>;
+  blocked: Array<{
+    sectionId: SectionId;
+    status: string;
+    requirementIds: string[];
+    resumeCondition: string;
+  }>;
   errors: string[];
 }
 
@@ -138,11 +152,45 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function sanitizeArtifactText(value: string, config: PipelineConfig, worktreePath?: string): string {
+  return value
+    .replaceAll(config.repositoryRoot, "<repository>")
+    .replaceAll(worktreePath ?? "\0", "<isolated-worktree>");
+}
+
 function countStatuses(values: string[]): Record<string, number> {
   return values.reduce<Record<string, number>>((counts, status) => {
     counts[status] = (counts[status] ?? 0) + 1;
     return counts;
   }, {});
+}
+
+function blockedNodes(outputs: NodeAuditOutput[]): WorkRunSummary["blocked"] {
+  return outputs
+    .filter((output) => [
+      "BLOCKED_MISSING_EVIDENCE",
+      "BLOCKED_CONTRACT_CONFLICT",
+      "UNKNOWN",
+    ].includes(output.status))
+    .map((output) => ({
+      sectionId: output.sectionId,
+      status: output.status,
+      requirementIds: output.findings.map((finding) => finding.requirementId),
+      resumeCondition: output.status === "BLOCKED_MISSING_EVIDENCE"
+        ? "Add the exact missing value or evidence to the immutable DESIGN_INDEX artifact, then run this Section again."
+        : output.status === "BLOCKED_CONTRACT_CONFLICT"
+          ? "Resolve the conflicting Specification and DESIGN_INDEX contract, then run this Section again."
+          : "Run the isolated Section again after the provider returns a schema-valid grounded judgment.",
+    }));
+}
+
+async function exists(pathname: string): Promise<boolean> {
+  try {
+    await access(pathname);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function unresolvedPatchDependencies(
@@ -171,7 +219,13 @@ export function enforcePatchGrounding(
   const findingsAreWritable = output.findings.every((finding) => (
     finding.implementationRefs.length > 0 &&
     finding.implementationRefs.every((reference) => (
-      suppliedPaths.has(reference) && matchesAnyPath(reference, input.policy.allowedWriteGlobs)
+      matchesAnyPath(reference, input.policy.allowedWriteGlobs) && (
+        suppliedPaths.has(reference) || (
+          reference.startsWith("frontend/") &&
+          !reference.includes("..") &&
+          /\.(?:css|html|js|jsx|json|mjs|ts|tsx)$/.test(reference)
+        )
+      )
     ))
   ));
   if (!findingsAreWritable) {
@@ -308,6 +362,49 @@ async function saveAuditCall(
   }
 }
 
+async function isolatedAuditInput(args: {
+  config: PipelineConfig;
+  manifest: Awaited<ReturnType<typeof readImpactManifest>>;
+  contractSchemaHash: ReturnType<typeof sha256>;
+  triggerPath: string;
+  sectionId: SectionId;
+  runId: string;
+  requestedAt: string;
+  changeEvent: ChangeEvent;
+  expectedFingerprint: string;
+}): Promise<{ input: NodeAuditInput; cleanup: () => Promise<void> }> {
+  const worktree = await createAuditWorktree(args.config, args.sectionId);
+  try {
+    const workspaceConfig: PipelineConfig = {
+      ...args.config,
+      repositoryRoot: worktree.path,
+      outputRoot: path.join(worktree.path, ".validation-runs", "isolated-audit"),
+    };
+    const specification = await readSpecification(worktree.path, args.config.specificationPath);
+    const trigger = await readTrigger(worktree.path, args.triggerPath);
+    const inputs = await buildAuditInputs(
+      workspaceConfig,
+      args.manifest,
+      specification,
+      trigger,
+      args.contractSchemaHash,
+      args.runId,
+      args.requestedAt,
+      args.changeEvent,
+    );
+    const input = inputs.get(args.sectionId);
+    if (!input) throw new Error(`Isolated workspace did not build ${args.sectionId}.`);
+    if (input.node.fingerprint !== args.expectedFingerprint) {
+      throw new Error(`${args.sectionId} isolated workspace fingerprint differs from the scheduler input.`);
+    }
+    assertIsolatedAuditInput(input);
+    return { input, cleanup: worktree.cleanup };
+  } catch (error) {
+    await worktree.cleanup();
+    throw error;
+  }
+}
+
 async function patchedInputs(args: {
   originalConfig: PipelineConfig;
   worktreePath: string;
@@ -315,6 +412,7 @@ async function patchedInputs(args: {
   runId: string;
   manifest: Awaited<ReturnType<typeof readImpactManifest>>;
   contractSchemaHash: ReturnType<typeof sha256>;
+  changeEvent: ChangeEvent;
 }): Promise<Map<SectionId, NodeAuditInput>> {
   const patchedConfig: PipelineConfig = {
     ...args.originalConfig,
@@ -335,6 +433,7 @@ async function patchedInputs(args: {
     args.contractSchemaHash,
     `${args.runId}:patched`,
     new Date().toISOString(),
+    args.changeEvent,
   );
 }
 
@@ -349,10 +448,12 @@ async function runPatches(args: {
   validateAudit: Parameters<typeof assertAuditOutput>[0];
   patchCandidateOutputSchema: JsonSchema;
   auditOutputSchema: JsonSchema;
+  validatePrManifest: Awaited<ReturnType<typeof loadValidators>>["prManifest"];
   contractSchemaHash: ReturnType<typeof sha256>;
   runDirectory: string;
   triggerPath: string;
   runId: string;
+  changeEvent: ChangeEvent;
 }): Promise<{ records: PatchRecord[]; patchCalls: number; reauditCalls: number }> {
   const records: PatchRecord[] = [];
   const claimedPaths = new Set<string>();
@@ -405,6 +506,28 @@ async function runPatches(args: {
       let completion: CompletionResult | undefined;
       let output: NodePatchOutput;
       try {
+        const findingPaths = new Set(resolved.output.findings.flatMap((finding) => finding.implementationRefs));
+        const patchInputArtifact = {
+          schemaVersion: "design-validation/patch-input/v2",
+          runId: args.runId,
+          targetId: input.run.targetId,
+          sectionId,
+          fingerprint: input.node.fingerprint,
+          baseCommit: input.run.baseCommit,
+          findings: resolved.output.findings,
+          designIndexSource: input.contract.designIndexSource,
+          specificationFragment: input.contract.specificationFragment,
+          designIndexFragment: input.contract.designIndexFragment,
+          evidence: input.evidence,
+          files: input.implementation.files.filter((file) => findingPaths.has(file.path)),
+          allowedWriteGlobs: input.policy.allowedWriteGlobs,
+          payload: input.payload,
+        };
+        await writeJson(path.join(attemptDirectory, "patch-input.json"), patchInputArtifact);
+        await writeJson(
+          path.join(args.runDirectory, "nodes", sectionId, "patch-input.json"),
+          patchInputArtifact,
+        );
         completion = await args.client.completeJson({
           kind: "patch",
           sectionId,
@@ -434,6 +557,7 @@ async function runPatches(args: {
           input.node.fingerprint,
         );
         await writeJson(path.join(attemptDirectory, "output.json"), output);
+        await writeJson(path.join(args.runDirectory, "nodes", sectionId, "patch-output.json"), output);
       } catch (error) {
         if (completion) {
           await writeJson(path.join(attemptDirectory, "output-invalid.json"), completion.parsed);
@@ -488,6 +612,14 @@ async function runPatches(args: {
       }
 
       const conflicts = guarded.changedPaths.filter((changedPath) => claimedPaths.has(changedPath));
+      await writeJson(path.join(args.runDirectory, "locks", `${sectionId}-attempt-${attempt}.json`), {
+        schemaVersion: "design-validation/write-lock/v2",
+        sectionId,
+        attempt,
+        writeSet: guarded.changedPaths,
+        status: conflicts.length > 0 ? "BLOCKED_CONFLICT" : "ACQUIRED",
+        conflicts,
+      });
       if (conflicts.length > 0) {
         const attemptRecord: PatchAttemptRecord = {
           attempt,
@@ -522,7 +654,17 @@ async function runPatches(args: {
       try {
         try {
           const checks = await verifyPatchedWorktree(args.config, worktree.path);
-          await writeJson(path.join(attemptDirectory, "verification.json"), checks);
+          await writeJson(
+            path.join(attemptDirectory, "verification.json"),
+            checks.map((check) => ({
+              ...check,
+              output: sanitizeArtifactText(check.output, args.config, worktree.path),
+            })),
+          );
+          await writeJson(path.join(args.runDirectory, "nodes", sectionId, "verification.json"), {
+            checks: checks.map((check) => check.id),
+            status: "PASS",
+          });
         } catch (error) {
           const reason = errorMessage(error);
           const attemptRecord: PatchAttemptRecord = {
@@ -549,6 +691,7 @@ async function runPatches(args: {
           runId: args.runId,
           manifest: args.manifest,
           contractSchemaHash: args.contractSchemaHash,
+          changeEvent: args.changeEvent,
         });
         const nextInput = nextInputs.get(sectionId);
         if (!nextInput) throw new Error(`Patched input is missing ${sectionId}.`);
@@ -674,11 +817,65 @@ async function runPatches(args: {
         }
 
         try {
+          const prKey = pullRequestKey({
+            targetId: input.run.targetId,
+            sectionId,
+            fingerprint: input.node.fingerprint,
+            patchHash: guarded.patchHash,
+          });
+          const affectedPassAttestations = SECTION_IDS
+            .filter((candidateId) => candidateId !== sectionId)
+            .filter((candidateId) => {
+              const candidateInput = args.inputs.get(candidateId);
+              return candidateInput?.implementation.files.some((file) => guarded.changedPaths.includes(file.path));
+            })
+            .map((candidateId) => args.attestations.get(candidateId)?.attestationHash)
+            .filter((value): value is NonNullable<typeof value> => value !== undefined);
+          const runUrl = args.config.runId
+            ? `${args.config.github.serverUrl}/${args.config.repository}/actions/runs/${args.config.runId}`
+            : null;
+          const prManifest: PullRequestManifest = {
+            schemaVersion: "design-validation/pr-manifest/v2",
+            prKey,
+            targetId: input.run.targetId,
+            sectionId,
+            fingerprint: input.node.fingerprint,
+            triggerSource: {
+              path: input.contract.designIndexSource.path,
+              documentHash: input.contract.designIndexSource.documentHash,
+              sectionHeading: input.contract.designIndexSource.sectionHeading,
+            },
+            baseCommit: args.config.baseCommit,
+            baseBranch: args.config.github.baseBranch,
+            requirementIds: output.requirementIds,
+            evidenceRefs: output.evidenceRefs,
+            patchHash: guarded.patchHash,
+            readSet: output.readSet,
+            writeSet: output.writeSet,
+            affectedPassAttestations,
+            checks: {
+              schema: "PASS",
+              scope: "PASS",
+              immutableInputs: "PASS",
+              build: "PASS",
+              test: "PASS",
+              visual: "PASS",
+              accessibility: "PASS",
+              regression: "PASS",
+              base: "PASS",
+            },
+            runId: args.runId,
+            runUrl,
+          };
+          assertContract(args.validatePrManifest, prManifest, `${sectionId} PR manifest`);
+          await writeJson(path.join(attemptDirectory, "pr-manifest.json"), prManifest);
+          await writeJson(path.join(args.runDirectory, "nodes", sectionId, "pr-manifest.json"), prManifest);
           const pull = await publishPatchPullRequest({
             config: args.config,
             worktreePath: worktree.path,
             input,
             patch: guarded,
+            manifest: prManifest,
           });
           const attemptRecord: PatchAttemptRecord = {
             attempt,
@@ -732,6 +929,7 @@ async function runTrigger(args: {
   manifest: Awaited<ReturnType<typeof readImpactManifest>>;
   validators: Awaited<ReturnType<typeof loadValidators>>;
   contractSchemaHash: ReturnType<typeof sha256>;
+  changeEvent: ChangeEvent;
 }): Promise<WorkRunSummary> {
   const trigger = await readTrigger(args.config.repositoryRoot, args.triggerPath);
   const runId = safeRunId(trigger.referenceId);
@@ -740,35 +938,200 @@ async function runTrigger(args: {
   const requestedAt = new Date().toISOString();
   await mkdir(nodesDirectory, { recursive: true });
 
+  const targetId = targetIdFor(args.config.repository, trigger.referenceId);
+  const targetHasState = await exists(path.join(args.config.stateRoot, "attestations", targetId));
+  const changedPaths = args.changeEvent.changedFiles.map((file) => file.path);
+  const globalContractChanged = changedPaths.some((changedPath) => (
+    changedPath === args.config.specificationPath ||
+    changedPath === "DESIGN_INDEX_SPECIFICATION.ko.md" ||
+    changedPath.startsWith("validation/src/") ||
+    changedPath.startsWith("validation/schemas/") ||
+    changedPath === args.config.impactManifestPath
+  ));
+  const knownChange = args.changeEvent.changedFiles.every((file) => (
+    !matchesAnyPath(file.path, args.manifest.sourceGlobs) ||
+    matchesAnyPath(file.path, args.manifest.ignoredChangeGlobs) ||
+    Object.values(args.manifest.nodes).some((node) => matchesAnyPath(file.path, node.reads)) ||
+    file.path.startsWith("trigger/DESIGN_INDEX_gdweb-") ||
+    file.path.startsWith("trigger/request-contracts/") ||
+    file.path.startsWith("trigger/evidence/") ||
+    file.path.includes(".request-contract.") ||
+    file.path.startsWith("trigger/REQUEST_CONTRACT_") ||
+    file.path === args.config.specificationPath ||
+    file.path === "DESIGN_INDEX_SPECIFICATION.ko.md" ||
+    file.path.startsWith("validation/")
+  ));
+  const fullAudit = (
+    args.config.forceFullAudit ||
+    !targetHasState ||
+    changedPaths.includes(trigger.path) ||
+    globalContractChanged ||
+    !knownChange
+  );
+  const targetChangeEvent: ChangeEvent = {
+    ...args.changeEvent,
+    options: {
+      forceFullAudit: fullAudit,
+      allowCachedPass: !fullAudit,
+      reason: fullAudit
+        ? `Full audit required for ${trigger.referenceId} by target input, global contract, unknown source, or explicit force.`
+        : `Incremental audit allowed for unchanged target ${trigger.referenceId}.`,
+    },
+  };
+  const effectiveConfig: PipelineConfig = {
+    ...args.config,
+    forceFullAudit: fullAudit,
+  };
+
   const inputs = await buildAuditInputs(
-    args.config,
+    effectiveConfig,
     args.manifest,
     args.specification,
     trigger,
     args.contractSchemaHash,
     runId,
     requestedAt,
+    targetChangeEvent,
   );
   if (inputs.size !== 19 || SECTION_IDS.some((id) => !inputs.has(id))) {
     throw new Error("Audit fan-out manifest is not the exact S01-S19 set.");
   }
+  for (const [sectionId, input] of inputs) {
+    assertContract(args.validators.input, input, `${sectionId} audit input`);
+    assertIsolatedAuditInput(input);
+  }
 
   const contractHash = validatorContractHash(
-    args.config,
+    effectiveConfig,
     args.manifest,
     args.contractSchemaHash,
   );
-  const cached = await resolveCachedPasses(args.config, args.manifest, inputs, contractHash);
-  const pending = SECTION_IDS.filter((sectionId) => !cached.has(sectionId));
   const mode = args.config.forceFullAudit
     ? "forced-full"
-    : cached.size === 0
+    : fullAudit
       ? "full"
       : "incremental";
+  const directlyDirty = directDirtySections(targetChangeEvent, args.manifest);
+
+  await writeJson(path.join(runDirectory, "run.json"), {
+    schemaVersion: "design-validation/run/v2",
+    runId,
+    targetId,
+    mode,
+    repository: args.config.repository,
+    baseCommit: args.config.baseCommit,
+    event: targetChangeEvent,
+    requestedAt,
+  });
+  await writeJson(path.join(runDirectory, "graph.json"), {
+    schemaVersion: "design-validation/graph/v2",
+    nodes: SECTION_IDS.map((sectionId) => ({
+      sectionId,
+      name: args.manifest.nodes[sectionId].name,
+      dependsOn: args.manifest.nodes[sectionId].dependsOn,
+      reads: args.manifest.nodes[sectionId].reads,
+      writes: args.manifest.nodes[sectionId].writes,
+    })),
+  });
+  await writeJson(path.join(runDirectory, "impact.json"), {
+    schemaVersion: "design-validation/impact/v2",
+    changeEventId: targetChangeEvent.eventId,
+    forceFullAudit: fullAudit,
+    directDirtySections: [...directlyDirty].sort(),
+    safeFallback: targetChangeEvent.options.forceFullAudit,
+    reason: targetChangeEvent.options.reason,
+  });
+  await mkdir(path.join(runDirectory, "locks"), { recursive: true });
+
+  const cached = new Map<SectionId, Extract<ResolvedNode, { status: "CACHED_PASS" }>>();
+  const resolved = new Map<SectionId, ResolvedNode>();
+  const callResults: AuditCallResult[] = [];
+
+  const executeAudit = async (sectionId: SectionId): Promise<AuditCallResult> => {
+    const scheduledInput = inputs.get(sectionId);
+    if (!scheduledInput) return { ok: false, sectionId, error: `Missing ${sectionId} input.` };
+    let workspace: Awaited<ReturnType<typeof isolatedAuditInput>> | undefined;
+    try {
+      workspace = await isolatedAuditInput({
+        config: effectiveConfig,
+        manifest: args.manifest,
+        contractSchemaHash: args.contractSchemaHash,
+        triggerPath: args.triggerPath,
+        sectionId,
+        runId,
+        requestedAt,
+        changeEvent: targetChangeEvent,
+        expectedFingerprint: scheduledInput.node.fingerprint,
+      });
+      const result = await callAudit({
+        client: args.client,
+        input: workspace.input,
+        kind: "audit",
+        requestId: `${runId}:audit:${sectionId}`,
+        validate: args.validators.audit,
+        outputSchema: args.validators.auditSchema,
+      });
+      await saveAuditCall(nodesDirectory, workspace.input, result);
+      return result;
+    } catch (error) {
+      const result: AuditCallFailure = { ok: false, sectionId, error: errorMessage(error) };
+      await saveAuditCall(nodesDirectory, scheduledInput, result);
+      return result;
+    } finally {
+      await workspace?.cleanup();
+    }
+  };
+
+  if (fullAudit) {
+    const results = await runWithConcurrency(SECTION_IDS, args.config.nvidia.concurrency, executeAudit);
+    callResults.push(...results);
+    for (const result of results) {
+      if (!result.ok) continue;
+      resolved.set(result.sectionId, {
+        status: "FRESH",
+        output: result.output,
+        rawResponseHash: result.completion.rawHash,
+      });
+    }
+  } else {
+    for (const sectionId of topologicalSections(args.manifest)) {
+      const input = inputs.get(sectionId);
+      if (!input) throw new Error(`Missing ${sectionId} input.`);
+      const candidate = await resolveCachedPassForNode({
+        config: effectiveConfig,
+        input,
+        resolvedDependencies: resolved,
+        validatorContractHash: contractHash,
+      });
+      if (candidate) {
+        cached.set(sectionId, candidate);
+        resolved.set(sectionId, candidate);
+        await writeJson(path.join(nodesDirectory, sectionId, "audit-input.json"), input);
+        await writeJson(path.join(nodesDirectory, sectionId, "audit-output.json"), candidate.output);
+        await writeJson(path.join(nodesDirectory, sectionId, "cache-hit.json"), {
+          status: "CACHED_PASS",
+          fingerprint: input.node.fingerprint,
+          attestationHash: candidate.attestation.attestationHash,
+          dependencyPublicDigests: candidate.attestation.dependencyPublicDigests,
+        });
+        continue;
+      }
+      const result = await executeAudit(sectionId);
+      callResults.push(result);
+      if (result.ok) {
+        resolved.set(sectionId, {
+          status: "FRESH",
+          output: result.output,
+          rawResponseHash: result.completion.rawHash,
+        });
+      }
+    }
+  }
+
   await writeJson(path.join(runDirectory, "audit-batch-manifest.json"), {
     schemaVersion: "design-validation/audit-batch/v2",
     runId,
-    targetId: targetIdFor(args.config.repository, trigger.referenceId),
+    targetId,
     mode,
     triggerSource: { path: trigger.path, documentHash: trigger.documentHash },
     specificationSource: {
@@ -780,67 +1143,44 @@ async function runTrigger(args: {
     requests: SECTION_IDS.map((sectionId) => ({
       requestId: `${runId}:audit:${sectionId}`,
       sectionId,
-      status: cached.has(sectionId) ? "CACHED_PASS" : "PENDING",
+      status: cached.has(sectionId)
+        ? "CACHED_PASS"
+        : resolved.has(sectionId)
+          ? "COMPLETED"
+          : "FAILED",
       inputPath: `nodes/${sectionId}/audit-input.json`,
       outputPath: `nodes/${sectionId}/audit-output.json`,
     })),
   });
 
-  for (const sectionId of SECTION_IDS) {
-    const input = inputs.get(sectionId);
-    if (!input) throw new Error(`Missing ${sectionId} input.`);
-    await writeJson(path.join(nodesDirectory, sectionId, "audit-input.json"), input);
-    const cachedNode = cached.get(sectionId);
-    if (cachedNode) {
-      await writeJson(path.join(nodesDirectory, sectionId, "audit-output.json"), cachedNode.output);
-      await writeJson(path.join(nodesDirectory, sectionId, "cache-hit.json"), {
-        status: "CACHED_PASS",
-        fingerprint: input.node.fingerprint,
-        attestationHash: cachedNode.attestation.attestationHash,
-      });
-    }
-  }
-
-  const callResults = await runWithConcurrency(
-    pending,
-    args.config.nvidia.concurrency,
-    async (sectionId): Promise<AuditCallResult> => {
-      const input = inputs.get(sectionId);
-      if (!input) return { ok: false, sectionId, error: `Missing ${sectionId} input.` };
-      const result = await callAudit({
-        client: args.client,
-        input,
-        kind: "audit",
-        requestId: `${runId}:audit:${sectionId}`,
-        validate: args.validators.audit,
-        outputSchema: args.validators.auditSchema,
-      });
-      await saveAuditCall(nodesDirectory, input, result);
-      return result;
-    },
-  );
-
   const failures = callResults.filter((result): result is AuditCallFailure => !result.ok);
-  const resolved = new Map<SectionId, ResolvedNode>();
-  for (const [sectionId, item] of cached) resolved.set(sectionId, item);
-  for (const result of callResults) {
-    if (!result.ok) continue;
-    const fresh: FreshNode = {
-      status: "FRESH",
-      output: result.output,
-      rawResponseHash: result.completion.rawHash,
-    };
-    resolved.set(result.sectionId, fresh);
-  }
 
   const orderedOutputs = SECTION_IDS.map((sectionId) => resolved.get(sectionId)?.output).filter(
     (output): output is NodeAuditOutput => output !== undefined,
   );
+  const nodeStates = SECTION_IDS.map((sectionId) => {
+    const item = resolved.get(sectionId);
+    if (!item) return { sectionId, state: "FAILED_SCHEMA" };
+    if (item.status === "CACHED_PASS") return { sectionId, state: "CACHED_PASS" };
+    const dependenciesPassing = inputs.get(sectionId)?.node.dependsOn.every(
+      (dependencyId) => resolved.get(dependencyId)?.output.status === "PASS",
+    ) ?? false;
+    const state = item.output.status === "PASS"
+      ? dependenciesPassing ? "PASS" : "PASS_PENDING_DEPENDENCY"
+      : item.output.status === "PATCH_REQUIRED"
+        ? dependenciesPassing ? "PATCH_REQUIRED" : "PATCH_WAITING_DEPENDENCY"
+        : item.output.status;
+    return { sectionId, state };
+  });
   await writeJson(path.join(runDirectory, "audit-matrix.json"), {
     schemaVersion: "design-validation/audit-matrix/v2",
     runId,
     sections: orderedOutputs,
     errors: failures,
+  });
+  await writeJson(path.join(runDirectory, "node-states.json"), {
+    schemaVersion: "design-validation/node-states/v2",
+    nodes: nodeStates,
   });
   await writeJson(
     path.join(runDirectory, "gap-report.json"),
@@ -849,33 +1189,40 @@ async function runTrigger(args: {
 
   if (failures.length > 0 || resolved.size !== 19) {
     await writeGapReport(path.join(runDirectory, "GAP_REPORT.md"), orderedOutputs, []);
-    return {
+    const failedSummary: WorkRunSummary = {
       runId,
-      targetId: targetIdFor(args.config.repository, trigger.referenceId),
+      targetId,
       triggerPath: trigger.path,
       mode,
       expectedSections: 19,
       cachedPasses: cached.size,
-      auditCalls: pending.length,
+      auditCalls: callResults.length,
       patchCalls: 0,
       reauditCalls: 0,
       statusCounts: countStatuses(orderedOutputs.map((output) => output.status)),
       patchStatusCounts: {},
+      blocked: blockedNodes(orderedOutputs),
       errors: failures.map((failure) => `${failure.sectionId}: ${failure.error}`),
     };
+    await writeJson(path.join(runDirectory, "summary.json"), failedSummary);
+    return failedSummary;
   }
 
   const attestations = await createFreshAttestations({
-    config: args.config,
+    config: effectiveConfig,
     manifest: args.manifest,
     inputs,
     resolved,
     validatorContractHash: contractHash,
     outputDirectory: path.join(args.config.outputRoot, "attestations"),
+    source: targetChangeEvent.source === "merge" ? "post-merge-audit" : "fresh-audit",
   });
+  for (const [sectionId, attestation] of attestations) {
+    assertContract(args.validators.passAttestation, attestation, `${sectionId} PASS attestation`);
+  }
 
   const patchResult = await runPatches({
-    config: args.config,
+    config: effectiveConfig,
     client: args.client,
     manifest: args.manifest,
     inputs,
@@ -885,28 +1232,46 @@ async function runTrigger(args: {
     validateAudit: args.validators.audit,
     patchCandidateOutputSchema: args.validators.patchCandidateSchema,
     auditOutputSchema: args.validators.auditSchema,
+    validatePrManifest: args.validators.prManifest,
     contractSchemaHash: args.contractSchemaHash,
     runDirectory,
     triggerPath: trigger.path,
     runId,
+    changeEvent: targetChangeEvent,
   });
   await writeJson(path.join(runDirectory, "patch-matrix.json"), patchResult.records);
   await writeGapReport(path.join(runDirectory, "GAP_REPORT.md"), orderedOutputs, patchResult.records);
 
   const summary: WorkRunSummary = {
     runId,
-    targetId: targetIdFor(args.config.repository, trigger.referenceId),
+    targetId,
     triggerPath: trigger.path,
     mode,
     expectedSections: 19,
     cachedPasses: cached.size,
-    auditCalls: pending.length,
+    auditCalls: callResults.length,
     patchCalls: patchResult.patchCalls,
     reauditCalls: patchResult.reauditCalls,
     statusCounts: countStatuses(orderedOutputs.map((output) => output.status)),
     patchStatusCounts: countStatuses(patchResult.records.map((record) => record.status)),
-    errors: [],
+    blocked: blockedNodes(orderedOutputs),
+    errors: [
+      ...orderedOutputs
+        .filter((output) => output.status === "UNKNOWN")
+        .map((output) => `${output.sectionId}: audit response was quarantined as UNKNOWN.`),
+      ...patchResult.records
+        .filter((record) => [
+          "BLOCKED_MODEL",
+          "BLOCKED_GUARD",
+          "BLOCKED_CONFLICT",
+          "FAILED_TEST",
+          "FAILED_REAUDIT",
+          "FAILED_PUBLISH",
+        ].includes(record.status))
+        .map((record) => `${record.sectionId}: ${record.status} - ${record.reason}`),
+    ],
   };
+  await writeJson(path.join(runDirectory, "summary.json"), summary);
   await writeJson(path.join(runDirectory, "batch-summary.json"), summary);
   return summary;
 }
@@ -918,10 +1283,22 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
 
   const specification = await readSpecification(config.repositoryRoot, config.specificationPath);
   const manifest = await readImpactManifest(config.repositoryRoot, config.impactManifestPath);
+  const triggers = await Promise.all(
+    config.triggerPaths.map((triggerPath) => readTrigger(config.repositoryRoot, triggerPath)),
+  );
+  const changeEvent = await buildChangeEvent(config, manifest, triggers);
   const validators = await loadValidators(config);
+  assertContract(validators.changeEvent, changeEvent, "ChangeEvent");
   const contractSchemaHash = validators.contractSchemaHash;
   const client = new NvidiaClient(config);
   const summaries: WorkRunSummary[] = [];
+
+  const closedStalePullRequests = await reconcileStaleAutomationPullRequests(config);
+  await writeJson(path.join(config.outputRoot, "change-event.json"), changeEvent);
+  await writeJson(path.join(config.outputRoot, "stale-pr-reconciliation.json"), {
+    baseCommit: config.baseCommit,
+    closedPullRequests: closedStalePullRequests,
+  });
 
   for (const triggerPath of config.triggerPaths) {
     summaries.push(
@@ -933,6 +1310,7 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
         manifest,
         validators,
         contractSchemaHash,
+        changeEvent,
       }),
     );
   }
@@ -948,19 +1326,43 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
     },
     validatorContractHash: validatorContractHash(config, manifest, contractSchemaHash),
     modelContractHash: modelContractHash(config),
+    changeEvent,
     dryRun: config.dryRun,
     createPrs: config.createPrs,
     summaries,
   });
+  const stateRunId = `${config.runId ?? `local-${Date.now()}`}.${config.runAttempt ?? "1"}`;
+  for (const summary of summaries) {
+    await writeJson(
+      path.join(config.outputRoot, "state-records", stateRunId, `${summary.targetId}.json`),
+      {
+        schemaVersion: "design-validation/state-run/v2",
+        githubRunId: config.runId,
+        githubRunAttempt: config.runAttempt,
+        repository: config.repository,
+        baseCommit: config.baseCommit,
+        changeEvent,
+        summary,
+      },
+    );
+  }
 
   if (process.env.GITHUB_STEP_SUMMARY) {
     const lines = ["## DESIGN_INDEX validation", ""];
     for (const summary of summaries) {
       lines.push(
         `- **${summary.targetId}**: ${summary.cachedPasses} cached, ${summary.auditCalls} audit calls, ${summary.patchCalls} patch calls, ${summary.reauditCalls} re-audit calls`,
+        `  - Audit statuses: ${Object.entries(summary.statusCounts).map(([status, count]) => `${status}=${count}`).join(", ") || "none"}`,
+        `  - Patch statuses: ${Object.entries(summary.patchStatusCounts).map(([status, count]) => `${status}=${count}`).join(", ") || "none"}`,
       );
       if (summary.errors.length > 0) {
         for (const error of summary.errors) lines.push(`  - Error: ${error}`);
+      }
+      for (const blocked of summary.blocked) {
+        lines.push(
+          `  - ${blocked.sectionId} ${blocked.status}: ${blocked.requirementIds.join(", ") || "no Requirement ID"}`,
+          `    Resume: ${blocked.resumeCondition}`,
+        );
       }
     }
     await appendFile(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`, "utf8");

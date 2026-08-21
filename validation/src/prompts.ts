@@ -56,7 +56,8 @@ export function patchUserPrompt(input: {
     findings: input.auditOutput.findings,
     contract: input.auditInput.contract,
     evidence: input.auditInput.evidence,
-    maxDiffLines: Math.min(input.auditInput.policy.maxChangedLines + 40, 160),
+    payload: input.auditInput.payload,
+    maxDiffLines: input.auditInput.policy.maxChangedLines,
     files: files.map(patchFilePayload),
     policy: input.auditInput.policy,
   });
@@ -85,7 +86,8 @@ export function patchRetryUserPrompt(input: {
     findings: input.auditOutput.findings,
     contract: input.auditInput.contract,
     evidence: input.auditInput.evidence,
-    maxDiffLines: Math.min(input.auditInput.policy.maxChangedLines + 40, 160),
+    payload: input.auditInput.payload,
+    maxDiffLines: input.auditInput.policy.maxChangedLines,
     files: files.map(patchFilePayload),
     policy: input.auditInput.policy,
   });
@@ -123,6 +125,7 @@ export function regressionAuditUserPrompt(input: {
       fingerprint: input.before.node.fingerprint,
     },
     contract: input.after.contract,
+    payload: input.after.payload,
     changedPaths: input.changedPaths,
     beforeImplementation: input.before.implementation,
     afterImplementation: input.after.implementation,

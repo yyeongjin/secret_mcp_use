@@ -1,7 +1,10 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { evidenceForSection, requestContractForSection } from "./artifacts.ts";
 import { hashJson, sha256 } from "./hash.ts";
 import { matchesAnyPath } from "./manifest.ts";
+import { buildSectionPayload, requirementIdsForSection } from "./payload.ts";
+import { runCommand } from "./process.ts";
 import {
   AUDIT_SYSTEM_PROMPT,
   PATCH_RETRY_SYSTEM_PROMPT,
@@ -9,7 +12,7 @@ import {
   REGRESSION_AUDIT_SYSTEM_PROMPT,
 } from "./prompts.ts";
 import type {
-  EvidenceReference,
+  ChangeEvent,
   ImpactManifest,
   ImplementationFile,
   NodeAuditInput,
@@ -35,30 +38,23 @@ const TEXT_EXTENSIONS = new Set([
   ".yaml",
 ]);
 
-async function walkFiles(root: string, relativeDirectory: string): Promise<string[]> {
-  const absoluteDirectory = path.join(root, relativeDirectory);
-  const entries = await readdir(absoluteDirectory, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    const relativePath = path.posix.join(relativeDirectory.replaceAll("\\", "/"), entry.name);
-    if (entry.isDirectory()) files.push(...(await walkFiles(root, relativePath)));
-    if (entry.isFile()) files.push(relativePath);
-  }
-  return files;
-}
-
-export async function repositoryFrontendFiles(repositoryRoot: string): Promise<string[]> {
-  return walkFiles(repositoryRoot, "frontend");
+export async function repositoryInputFiles(repositoryRoot: string): Promise<string[]> {
+  const result = await runCommand(
+    "git",
+    ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    { cwd: repositoryRoot },
+  );
+  return result.stdout.split("\0").filter(Boolean).sort();
 }
 
 export async function implementationFilesForNode(
   config: PipelineConfig,
   manifest: ImpactManifest,
   sectionId: SectionId,
-  allFrontendFiles: string[],
+  allRepositoryFiles: string[],
 ): Promise<{ files: ImplementationFile[]; assets: NodeAuditInput["implementation"]["runtimeFacts"]["assets"] }> {
   const patterns = manifest.nodes[sectionId].reads;
-  const selected = allFrontendFiles.filter((file) => matchesAnyPath(file, patterns)).sort();
+  const selected = allRepositoryFiles.filter((file) => matchesAnyPath(file, patterns)).sort();
   const files: ImplementationFile[] = [];
   const assets: NodeAuditInput["implementation"]["runtimeFacts"]["assets"] = [];
 
@@ -87,32 +83,6 @@ export async function implementationFilesForNode(
     }
   }
   return { files, assets };
-}
-
-function evidenceIds(fragment: string): string[] {
-  return [...new Set(fragment.match(/\bE-[A-Z][A-Z0-9-]*\b/g) ?? [])].sort();
-}
-
-function evidenceMetadata(trigger: TriggerSnapshot, evidenceId: string): string {
-  const inventory = trigger.sections.get("S02")?.fragment ?? "";
-  const lines = inventory
-    .split("\n")
-    .filter((line) => line.includes(evidenceId))
-    .map((line) => line.trim())
-    .filter(Boolean);
-  return lines.length > 0 ? lines.join("\n") : evidenceId;
-}
-
-function buildEvidence(trigger: TriggerSnapshot, fragment: string): EvidenceReference[] {
-  return evidenceIds(fragment).map((evidenceId) => {
-    const metadata = evidenceMetadata(trigger, evidenceId);
-    return {
-      evidenceId,
-      kind: "metadata",
-      contentHash: sha256(metadata),
-      localRef: `${trigger.path}#${evidenceId}`,
-    };
-  });
 }
 
 export function validatorContractHash(
@@ -167,8 +137,9 @@ export async function buildAuditInputs(
   contractSchemaHash: Sha256,
   runId: string,
   requestedAt: string,
+  changeEvent: ChangeEvent,
 ): Promise<Map<SectionId, NodeAuditInput>> {
-  const allFrontendFiles = await repositoryFrontendFiles(config.repositoryRoot);
+  const allRepositoryFiles = await repositoryInputFiles(config.repositoryRoot);
   const validatorHash = validatorContractHash(config, manifest, contractSchemaHash);
   const modelHash = modelContractHash(config);
   const targetId = targetIdFor(config.repository, trigger.referenceId);
@@ -181,9 +152,19 @@ export async function buildAuditInputs(
       config,
       manifest,
       sectionId,
-      allFrontendFiles,
+      allRepositoryFiles,
     );
-    const evidence = buildEvidence(trigger, designSection.fragment);
+    const evidence = await evidenceForSection({
+      repositoryRoot: config.repositoryRoot,
+      trigger,
+      fragment: designSection.fragment,
+    });
+    const requestContract = await requestContractForSection(
+      config.repositoryRoot,
+      trigger,
+      sectionId,
+    );
+    const requirementIds = requirementIdsForSection(sectionId, designSection.fragment);
     const node = manifest.nodes[sectionId];
     const fingerprint = hashJson({
       schemaVersion: "design-validation/v2",
@@ -195,6 +176,7 @@ export async function buildAuditInputs(
       specificationFragmentHash: specificationSection.hash,
       designIndexFragmentHash: designSection.hash,
       evidenceSubsetHash: hashJson(evidence),
+      requestContractHash: requestContract?.contentHash ?? null,
       implementationSliceHash: hashJson(
         implementation.files.map(({ path: filePath, contentHash, byteLength, encoding }) => ({
           path: filePath,
@@ -219,6 +201,7 @@ export async function buildAuditInputs(
       node: {
         sectionId,
         name: node.name,
+        requirementIds,
         fingerprint,
         dependsOn: node.dependsOn,
       },
@@ -240,11 +223,19 @@ export async function buildAuditInputs(
           sectionHeading: designSection.heading,
         },
         designIndexFragment: designSection.fragment,
+        requestContract,
       },
       evidence,
       implementation: {
         files: implementation.files,
-        runtimeFacts: { assets: implementation.assets },
+        runtimeFacts: {
+          assets: implementation.assets,
+          changeEvent: {
+            eventId: changeEvent.eventId,
+            source: changeEvent.source,
+            changedPaths: changeEvent.changedFiles.map((file) => file.path),
+          },
+        },
       },
       policy: {
         allowedReadGlobs: node.reads,
@@ -260,6 +251,12 @@ export async function buildAuditInputs(
         maxChangedFiles: config.maxChangedFiles,
         maxChangedLines: config.maxChangedLines,
       },
+      payload: buildSectionPayload({
+        sectionId,
+        trigger,
+        fragment: designSection.fragment,
+        evidence,
+      }),
     };
 
     const conservativeTokenUpperBound = Buffer.byteLength(JSON.stringify(input), "utf8");
@@ -271,4 +268,23 @@ export async function buildAuditInputs(
     inputs.set(sectionId, input);
   }
   return inputs;
+}
+
+export function assertIsolatedAuditInput(input: NodeAuditInput): void {
+  const ownNumber = Number(input.node.sectionId.slice(1));
+  const numberedHeadings = [
+    ...input.contract.specificationFragment.matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
+    ...input.contract.designIndexFragment.matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
+    ...(input.contract.requestContract?.fragment ?? "").matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
+  ].map((match) => Number(match[1]));
+  if (numberedHeadings.some((number) => number !== ownNumber)) {
+    throw new Error(`${input.node.sectionId} input contains another numbered Section.`);
+  }
+  if (input.node.requirementIds.some((id) => !id.startsWith(`${input.node.sectionId}-`))) {
+    throw new Error(`${input.node.sectionId} input contains a foreign Requirement ID.`);
+  }
+  const invalidFile = input.implementation.files.find(
+    (file) => !matchesAnyPath(file.path, input.policy.allowedReadGlobs),
+  );
+  if (invalidFile) throw new Error(`${input.node.sectionId} input contains out-of-scope file ${invalidFile.path}.`);
 }

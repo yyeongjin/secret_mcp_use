@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secret-mcp.local/schemas/change-event-v2.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "eventId", "source", "repository", "beforeCommit", "afterCommit", "changedFiles", "importedArtifacts", "options"],
+  "properties": {
+    "schemaVersion": { "const": "design-validation/change-event/v2" },
+    "eventId": { "type": "string", "minLength": 1 },
+    "source": { "enum": ["push", "merge", "manual", "design-index-import"] },
+    "repository": { "type": "string", "minLength": 1 },
+    "beforeCommit": { "type": ["string", "null"] },
+    "afterCommit": { "type": "string", "minLength": 1 },
+    "changedFiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "status", "beforeHash", "afterHash"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["added", "modified", "deleted", "renamed"] },
+          "beforePath": { "type": "string" },
+          "beforeHash": { "type": ["string", "null"] },
+          "afterHash": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "importedArtifacts": { "type": "array", "items": { "type": "object" } },
+    "options": {
+      "type": "object",
+      "required": ["forceFullAudit", "allowCachedPass", "reason"],
+      "properties": {
+        "forceFullAudit": { "type": "boolean" },
+        "allowCachedPass": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}
