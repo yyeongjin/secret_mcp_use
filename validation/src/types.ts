@@ -233,7 +233,6 @@ export interface PipelineConfig {
   forceFullAudit: boolean;
   dryRun: boolean;
   createPrs: boolean;
-  mock: boolean;
   maxChangedFiles: number;
   maxChangedLines: number;
   patchGenerationAttempts: number;

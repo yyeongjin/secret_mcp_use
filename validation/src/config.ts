@@ -63,7 +63,6 @@ export async function loadConfig(argv = process.argv.slice(2)): Promise<Pipeline
   const repositoryRoot = path.resolve(process.cwd());
   const triggerArgs = argValues(argv, "--trigger");
   const triggerPaths = triggerArgs.length > 0 ? triggerArgs : await discoverTriggers(repositoryRoot);
-  const mock = hasArg(argv, "--mock") || bool(process.env.NVIDIA_MOCK, false);
   const forceFullAudit = hasArg(argv, "--force-full-audit") || bool(process.env.PIPELINE_FORCE_FULL_AUDIT, false);
   const explicitDryRun = hasArg(argv, "--dry-run");
   const dryRun = explicitDryRun || bool(process.env.PIPELINE_DRY_RUN, true);
@@ -72,9 +71,7 @@ export async function loadConfig(argv = process.argv.slice(2)): Promise<Pipeline
   if (createPrs && dryRun) {
     throw new Error("PIPELINE_CREATE_PRS=true requires PIPELINE_DRY_RUN=false.");
   }
-  if (!mock && !process.env.NVIDIA_API_KEY) {
-    throw new Error("NVIDIA_API_KEY is required unless --mock is enabled.");
-  }
+  if (!process.env.NVIDIA_API_KEY) throw new Error("NVIDIA_API_KEY is required.");
 
   const contextWindowTokens = integer(process.env.NVIDIA_CONTEXT_WINDOW_TOKENS, 1000000, 1);
   const maxInputTokens = integer(process.env.NVIDIA_MAX_INPUT_TOKENS, 980000, 1);
@@ -97,7 +94,6 @@ export async function loadConfig(argv = process.argv.slice(2)): Promise<Pipeline
     forceFullAudit,
     dryRun,
     createPrs,
-    mock,
     maxChangedFiles: integer(process.env.PIPELINE_MAX_CHANGED_FILES, 5, 1),
     maxChangedLines: integer(process.env.PIPELINE_MAX_CHANGED_LINES, 500, 1),
     patchGenerationAttempts: integer(process.env.PIPELINE_PATCH_ATTEMPTS, 5, 1),

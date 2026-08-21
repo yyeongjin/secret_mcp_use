@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "design-validation/patch-candidate-output/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "reason", "diff"],
+  "properties": {
+    "status": { "enum": ["PATCH", "BLOCKED_MISSING_VALUE", "BLOCKED_PATCH_TOO_LARGE"] },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "diff": { "type": "string" }
+  }
+}

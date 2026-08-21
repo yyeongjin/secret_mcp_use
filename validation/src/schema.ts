@@ -10,6 +10,7 @@ export interface Validators {
   patch: ValidateFunction<NodePatchOutput>;
   auditSchema: JsonSchema;
   patchSchema: JsonSchema;
+  patchCandidateSchema: JsonSchema;
   auditSchemaBytes: Uint8Array;
 }
 
@@ -20,14 +21,19 @@ export async function loadValidators(config: PipelineConfig): Promise<Validators
   const patchSchemaBytes = await readFile(
     path.join(config.repositoryRoot, "validation/schemas/patch-output.schema.json"),
   );
+  const patchCandidateSchemaBytes = await readFile(
+    path.join(config.repositoryRoot, "validation/schemas/patch-candidate-output.schema.json"),
+  );
   const auditSchema = JSON.parse(auditSchemaBytes.toString("utf8")) as JsonSchema;
   const patchSchema = JSON.parse(patchSchemaBytes.toString("utf8")) as JsonSchema;
+  const patchCandidateSchema = JSON.parse(patchCandidateSchemaBytes.toString("utf8")) as JsonSchema;
   const ajv = new Ajv2020({ allErrors: true, strict: true });
   return {
     audit: ajv.compile<NodeAuditOutput>(auditSchema),
     patch: ajv.compile<NodePatchOutput>(patchSchema),
     auditSchema,
     patchSchema,
+    patchCandidateSchema,
     auditSchemaBytes,
   };
 }

@@ -18,9 +18,9 @@ import {
   type CompletionResult,
 } from "./nvidia.ts";
 import {
+  canonicalizePatchOutput,
   guardPatch,
   isRetryablePatchCandidateError,
-  normalizeUnifiedDiffMechanics,
   type GuardedPatch,
 } from "./patch.ts";
 import {
@@ -306,7 +306,7 @@ async function runPatches(args: {
   attestations: Map<SectionId, PassAttestation>;
   validatePatch: Parameters<typeof assertPatchOutput>[0];
   validateAudit: Parameters<typeof assertAuditOutput>[0];
-  patchOutputSchema: JsonSchema;
+  patchCandidateOutputSchema: JsonSchema;
   auditOutputSchema: JsonSchema;
   auditSchemaHash: ReturnType<typeof sha256>;
   runDirectory: string;
@@ -378,16 +378,20 @@ async function runPatches(args: {
               failure: retryContext.failure,
             })
             : patchUserPrompt({ auditInput: input, auditOutput: resolved.output }),
-          outputSchema: args.patchOutputSchema,
+          outputSchema: args.patchCandidateOutputSchema,
         });
         await writeJson(path.join(attemptDirectory, "api-response.json"), completion.raw);
+        output = canonicalizePatchOutput({
+          value: completion.parsed,
+          auditInput: input,
+          auditOutput: resolved.output,
+        });
         assertPatchOutput(
           args.validatePatch,
-          completion.parsed,
+          output,
           sectionId,
           input.node.fingerprint,
         );
-        output = completion.parsed;
         await writeJson(path.join(attemptDirectory, "output.json"), output);
       } catch (error) {
         if (completion) {
@@ -418,12 +422,6 @@ async function runPatches(args: {
         if (attempt < args.config.patchGenerationAttempts) continue;
         finalRecord = { sectionId, ...attemptRecord, attempts };
         break;
-      }
-
-      const normalizedDiff = normalizeUnifiedDiffMechanics(output.diff);
-      if (normalizedDiff !== output.diff) {
-        output = { ...output, diff: normalizedDiff };
-        await writeJson(path.join(attemptDirectory, "normalized-output.json"), output);
       }
 
       let guarded: GuardedPatch;
@@ -844,7 +842,7 @@ async function runTrigger(args: {
     attestations,
     validatePatch: args.validators.patch,
     validateAudit: args.validators.audit,
-    patchOutputSchema: args.validators.patchSchema,
+    patchCandidateOutputSchema: args.validators.patchCandidateSchema,
     auditOutputSchema: args.validators.auditSchema,
     auditSchemaHash: args.auditSchemaHash,
     runDirectory,
@@ -909,7 +907,6 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
     },
     validatorContractHash: validatorContractHash(config, manifest, auditSchemaHash),
     modelContractHash: modelContractHash(config),
-    mock: config.mock,
     dryRun: config.dryRun,
     createPrs: config.createPrs,
     summaries,

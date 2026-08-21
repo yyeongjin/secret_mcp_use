@@ -116,7 +116,7 @@ export async function resolveCachedPasses(
       sectionId,
       input.node.fingerprint,
     );
-    const expectedValidatorId = config.mock ? "mock" : `nvidia:${config.nvidia.model}`;
+    const expectedValidatorId = `nvidia:${config.nvidia.model}`;
     const matches = candidates.filter((candidate) =>
       candidateMatches(candidate, input, cached, expectedValidatorId, validatorContractHash),
     );
@@ -197,7 +197,7 @@ export async function createFreshAttestations(args: {
       publicOutput: resolved.output.publicOutput,
       publicDigest: hashJson(resolved.output.publicOutput),
       validator: {
-        id: args.config.mock ? "mock" : `nvidia:${args.config.nvidia.model}`,
+        id: `nvidia:${args.config.nvidia.model}`,
         contractHash: args.validatorContractHash,
       },
       tests: [{ id: "audit-schema", status: "PASS", artifactHash: resolved.rawResponseHash }],

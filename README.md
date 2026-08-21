@@ -126,9 +126,9 @@ The Specification is not compiled into the runner. Every execution parses the cu
 
 ### 4. First-run safety settings
 
-The committed push workflow runs with `PIPELINE_DRY_RUN=false` and `PIPELINE_CREATE_PRS=true`. It still cannot publish arbitrary model output: a patch must pass request isolation, response schema validation, immutable-path rejection, base-hash validation, write ownership, diff size limits, `git apply --check`, type checks, unit tests, desktop/mobile browser tests, accessibility regression checks, patched-Section re-audit, affected PASS regression audits, open-PR conflict checks, and idempotency checks. Only then is an unmerged draft PR created. Before `git apply`, deterministic code may remove context-only hunks, restore empty context prefixes, discard untrusted index metadata, and recompute hunk counts; it never changes an added or deleted source line.
+The committed push workflow runs with `PIPELINE_DRY_RUN=false` and `PIPELINE_CREATE_PRS=true`. It still cannot publish arbitrary model output: a patch must pass request isolation, response schema validation, immutable-path rejection, base-hash validation, write ownership, diff size limits, `git apply --check`, type checks, unit tests, desktop/mobile browser tests, accessibility regression checks, patched-Section re-audit, affected PASS regression audits, open-PR conflict checks, and idempotency checks. Only then is an unmerged draft PR created. Before `git apply`, deterministic code may remove context-only or exact no-op hunks, restore repository-rooted path prefixes, discard untrusted index metadata, and recompute hunk counts; it never changes a meaningful added or deleted source line. Requirement IDs, Evidence refs, base hashes, and read/write sets are derived from the isolated audit input and the inspected diff instead of trusting duplicated model metadata.
 
-One `PATCH_REQUIRED` Section may receive up to `PIPELINE_PATCH_ATTEMPTS` complete patch candidates. Every candidate is a separate NVIDIA request with a distinct deterministic seed, the same isolated Section contract, and the unchanged base files. Invalid JSON or schema, repairable diff/file-set mechanics, failed tests, a non-PASS patched-Section re-audit, or a failed affected-PASS regression audit discards that candidate and may start the next bounded candidate. A retry receives only its own rejected output and failure diagnostic; it never receives another Section's contract or response. Immutable-path writes, cross-owner writes, unsafe paths or file operations, excessive scope, write-set conflicts, and publication conflicts stop the Section instead of weakening a guard. Every attempt is stored under `patches/SXX/attempt-N/`. PASS, UNKNOWN, and evidence-blocked Sections never create patch requests or PRs.
+One `PATCH_REQUIRED` Section may receive up to `PIPELINE_PATCH_ATTEMPTS` complete patch candidates. Every candidate is a separate NVIDIA request with a distinct deterministic seed, the same isolated Section contract, and the unchanged base files. The request contains only implementation files named by that Section's findings, together with a numbered physical-line view so a one-line source rule remains one exact diff line. Invalid JSON or schema, repairable diff mechanics, failed tests, a non-PASS patched-Section re-audit, or a failed affected-PASS regression audit discards that candidate and may start the next bounded candidate. A retry receives a bounded summary of only its own rejected output plus its failure diagnostic; it never receives another Section's contract, response, or diff. Immutable-path writes, cross-owner writes, unsafe paths or file operations, excessive scope, write-set conflicts, and publication conflicts stop the Section instead of weakening a guard. Every attempt is stored under `patches/SXX/attempt-N/`. PASS, UNKNOWN, and evidence-blocked Sections never create patch requests or PRs.
 
 An affected prior-PASS regression request is a before/after delta audit, not another fresh completeness audit. It receives only that prior-PASS Section's unchanged contract, its own implementation slice before and after the candidate, the changed path list, and a PASS fingerprint proof. A pre-existing omission or a requirement unchanged by the candidate cannot block the PR as a new regression. The patching Section's findings and response are never included.
 
@@ -142,7 +142,6 @@ Manual inputs have the following meaning:
 - `force_full_audit`: ignores valid PASS cache and sends all 19 audit requests.
 - `dry_run`: applies a proposed diff only in an isolated temporary worktree and never publishes it.
 - `create_prs`: after every guard, browser test, and patched-code re-audit passes, publishes an idempotent draft PR. This requires `dry_run=false`.
-- `mock`: performs deterministic local responses without NVIDIA. Mock attestations are never persisted to `validation-state`.
 
 The end-to-end order is fixed:
 
@@ -164,7 +163,7 @@ parse current Specification and trigger
 
 PASS attestations are written to the orphan `validation-state` branch. Raw isolated inputs, validated outputs, gap reports, patch guards, test results, and re-audit results are uploaded as a 30-day GitHub Actions artifact. The workflow never auto-approves or auto-merges a PR.
 
-For a local call-free integration test:
+For local deterministic checks that do not execute the pipeline:
 
 ```bash
 npm ci
@@ -172,10 +171,9 @@ npx playwright install chromium
 npm run typecheck
 npm test
 npm run test:frontend
-npm run audit -- --mock --dry-run --trigger trigger/DESIGN_INDEX_gdweb-26357.md
 ```
 
-The mock run must report `auditCalls: 19` without existing state. Copying its generated attestations into a temporary state directory and repeating the same run is covered by the integration tests and must report `cachedPasses: 19` with `auditCalls: 0`.
+There is no local mock provider or mock workflow mode. An end-to-end pipeline run always requires the real NVIDIA API. To verify it locally without publishing a PR, export `NVIDIA_API_KEY` and run `npm run audit -- --dry-run --trigger trigger/DESIGN_INDEX_gdweb-26357.md`. GitHub Actions remains the authoritative publication test because it also exercises repository permissions and draft PR creation.
 
 ## Live Frontend Preview
 

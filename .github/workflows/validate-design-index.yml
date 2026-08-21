@@ -23,11 +23,6 @@ on:
         required: true
         default: false
         type: boolean
-      mock:
-        description: Use deterministic local mock responses instead of NVIDIA
-        required: true
-        default: false
-        type: boolean
   push:
     branches:
       - main
@@ -73,7 +68,6 @@ jobs:
       PIPELINE_DRY_RUN: ${{ vars.PIPELINE_DRY_RUN || 'true' }}
       PIPELINE_CREATE_PRS: ${{ vars.PIPELINE_CREATE_PRS || 'false' }}
       PIPELINE_PATCH_ATTEMPTS: ${{ vars.PIPELINE_PATCH_ATTEMPTS || '5' }}
-      NVIDIA_MOCK: "false"
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
@@ -94,21 +88,18 @@ jobs:
           INPUT_FORCE_FULL_AUDIT: ${{ inputs.force_full_audit }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           INPUT_CREATE_PRS: ${{ inputs.create_prs }}
-          INPUT_MOCK: ${{ inputs.mock }}
         run: |
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             {
               echo "PIPELINE_FORCE_FULL_AUDIT=false"
               echo "PIPELINE_DRY_RUN=false"
               echo "PIPELINE_CREATE_PRS=true"
-              echo "NVIDIA_MOCK=false"
             } >> "${GITHUB_ENV}"
           else
             {
               echo "PIPELINE_FORCE_FULL_AUDIT=${INPUT_FORCE_FULL_AUDIT}"
               echo "PIPELINE_DRY_RUN=${INPUT_DRY_RUN}"
               echo "PIPELINE_CREATE_PRS=${INPUT_CREATE_PRS}"
-              echo "NVIDIA_MOCK=${INPUT_MOCK}"
             } >> "${GITHUB_ENV}"
           fi
 
@@ -145,9 +136,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${NVIDIA_MOCK}" == "true" ]]; then
-            exit 0
-          fi
           if [[ -z "${NVIDIA_API_KEY}" ]]; then
             echo 'NVIDIA_API_KEY is not configured as an Actions secret.' >&2
             exit 1
@@ -177,9 +165,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${NVIDIA_MOCK}" == "true" ]]; then
-            exit 0
-          fi
           if [[ -d .validation-runs/current/attestations ]]; then
             mkdir -p .validation-state/attestations
             cp -R .validation-runs/current/attestations/. .validation-state/attestations/

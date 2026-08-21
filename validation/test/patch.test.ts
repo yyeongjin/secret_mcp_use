@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canonicalizePatchOutput,
   inspectUnifiedDiff,
   isRetryablePatchCandidateError,
   normalizeUnifiedDiffMechanics,
 } from "../src/patch.ts";
+import type { NodeAuditInput, NodeAuditOutput, Sha256 } from "../src/types.ts";
 
 test("unified diff inspection returns exact frontend write paths", () => {
   const result = inspectUnifiedDiff([
@@ -112,4 +114,85 @@ test("mechanical normalization fixes hunk counts and removes context-only hunks"
     " }",
     "",
   ].join("\n"));
+});
+
+test("mechanical normalization adds repository-rooted git headers", () => {
+  const normalized = normalizeUnifiedDiffMechanics([
+    "--- frontend/styles.css",
+    "+++ frontend/styles.css",
+    "@@ -1 +1 @@",
+    "-body { color: black; }",
+    "+body { color: white; }",
+    "",
+  ].join("\n"));
+
+  assert.equal(normalized, [
+    "diff --git a/frontend/styles.css b/frontend/styles.css",
+    "--- a/frontend/styles.css",
+    "+++ b/frontend/styles.css",
+    "@@ -1,1 +1,1 @@",
+    "-body { color: black; }",
+    "+body { color: white; }",
+    "",
+  ].join("\n"));
+});
+
+test("mechanical normalization rejects a patch containing only no-op replacements", () => {
+  const normalized = normalizeUnifiedDiffMechanics([
+    "--- frontend/styles.css",
+    "+++ frontend/styles.css",
+    "@@ -1 +1 @@",
+    "-body { color: black; }",
+    "+body { color: black; }",
+    "",
+  ].join("\n"));
+  assert.equal(normalized, "");
+});
+
+test("patch metadata is derived from the isolated audit input", () => {
+  const baseHash = `sha256:${"a".repeat(64)}` as Sha256;
+  const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;
+  const auditInput = {
+    node: { sectionId: "S10", fingerprint },
+    implementation: {
+      files: [{
+        path: "frontend/styles.css",
+        contentHash: baseHash,
+        byteLength: 22,
+        encoding: "utf8",
+        content: "body { color: black; }\n",
+      }],
+    },
+  } as NodeAuditInput;
+  const auditOutput = {
+    findings: [{
+      requirementId: "S10-COLOR",
+      evidenceRefs: ["E-D01"],
+      implementationRefs: ["frontend/styles.css"],
+    }],
+  } as NodeAuditOutput;
+
+  const output = canonicalizePatchOutput({
+    value: {
+      status: "PATCH",
+      reason: "Apply the grounded value.",
+      diff: [
+        "--- frontend/styles.css",
+        "+++ frontend/styles.css",
+        "@@ -1 +1 @@",
+        "-body { color: black; }",
+        "+body { color: white; }",
+        "",
+      ].join("\n"),
+      writeSet: [{ path: "frontend/index.html", baseHash: "invalid" }],
+    },
+    auditInput,
+    auditOutput,
+  });
+
+  assert.deepEqual(output.requirementIds, ["S10-COLOR"]);
+  assert.deepEqual(output.evidenceRefs, ["E-D01"]);
+  assert.deepEqual(output.writeSet, [{ path: "frontend/styles.css", baseHash }]);
+  assert.deepEqual(output.readSet, [{ path: "frontend/styles.css", baseHash }]);
+  assert.match(output.diff, /^diff --git a\/frontend\/styles\.css b\/frontend\/styles\.css/m);
 });

@@ -126,9 +126,9 @@ Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마
 
 ### 4. 최초 실행 안전 설정
 
-커밋된 push workflow는 `PIPELINE_DRY_RUN=false`, `PIPELINE_CREATE_PRS=true`로 실행합니다. 그렇더라도 모델 출력을 바로 게시할 수는 없습니다. 요청 격리, 응답 schema 검증, 불변 경로 거부, base hash 검증, write 소유권, diff 크기 제한, `git apply --check`, typecheck, 단위 테스트, 데스크톱·모바일 브라우저 테스트, 접근성 회귀 검사, 수정 Section 재감사, 영향받은 기존 PASS 회귀 감사, 열린 PR 충돌 검사와 멱등성 검사를 모두 통과해야 병합되지 않은 draft PR 하나를 생성합니다. `git apply` 전에는 결정적 코드가 변경 없는 hunk 제거, 빈 context 접두사 복원, 신뢰하지 않는 index metadata 제거와 hunk 개수 재계산만 수행할 수 있으며 추가·삭제되는 소스 줄 자체는 바꾸지 않습니다.
+커밋된 push workflow는 `PIPELINE_DRY_RUN=false`, `PIPELINE_CREATE_PRS=true`로 실행합니다. 그렇더라도 모델 출력을 바로 게시할 수는 없습니다. 요청 격리, 응답 schema 검증, 불변 경로 거부, base hash 검증, write 소유권, diff 크기 제한, `git apply --check`, typecheck, 단위 테스트, 데스크톱·모바일 브라우저 테스트, 접근성 회귀 검사, 수정 Section 재감사, 영향받은 기존 PASS 회귀 감사, 열린 PR 충돌 검사와 멱등성 검사를 모두 통과해야 병합되지 않은 draft PR 하나를 생성합니다. `git apply` 전에는 결정적 코드가 변경 없는 hunk 또는 완전히 동일한 no-op hunk 제거, 저장소 기준 경로 접두사 복원, 신뢰하지 않는 index metadata 제거와 hunk 개수 재계산만 수행할 수 있으며 의미 있는 추가·삭제 소스 줄은 바꾸지 않습니다. Requirement ID, Evidence ref, base hash와 read/write set은 모델이 중복 작성한 metadata를 신뢰하지 않고 격리 audit 입력과 검사한 diff에서 계산합니다.
 
-하나의 `PATCH_REQUIRED` Section에는 최대 `PIPELINE_PATCH_ATTEMPTS`개의 완전한 patch 후보를 허용합니다. 후보마다 서로 다른 결정적 seed를 쓰는 별도 NVIDIA 요청이며, 같은 격리 Section 계약과 변경되지 않은 원본 파일에서 시작합니다. JSON·schema 오류, 보정 가능한 diff 또는 file-set 형식 오류, 테스트 실패, 수정 Section 재감사 실패, 영향받은 기존 PASS 회귀 감사 실패가 발생하면 해당 후보만 폐기하고 제한 횟수 안에서 다음 후보를 시작할 수 있습니다. 재시도에는 자기 후보의 거부 출력과 실패 진단만 전달하며 다른 Section의 계약이나 응답은 전달하지 않습니다. 불변 경로 쓰기, 소유권 밖 쓰기, 위험한 경로·파일 작업, 과도한 변경 범위, write-set 충돌과 게시 충돌은 guard를 완화하지 않고 해당 Section을 중단합니다. 모든 시도는 `patches/SXX/attempt-N/` 아래에 기록합니다. PASS, UNKNOWN, 근거 부족 Section에는 patch 요청과 PR을 만들지 않습니다.
+하나의 `PATCH_REQUIRED` Section에는 최대 `PIPELINE_PATCH_ATTEMPTS`개의 완전한 patch 후보를 허용합니다. 후보마다 서로 다른 결정적 seed를 쓰는 별도 NVIDIA 요청이며, 같은 격리 Section 계약과 변경되지 않은 원본 파일에서 시작합니다. 요청에는 해당 Section finding이 지목한 구현 파일만 넣고, 한 줄짜리 원본 규칙을 정확한 diff 한 줄로 유지할 수 있도록 번호가 붙은 물리 소스 줄도 함께 제공합니다. JSON·schema 오류, 보정 가능한 diff 형식 오류, 테스트 실패, 수정 Section 재감사 실패, 영향받은 기존 PASS 회귀 감사 실패가 발생하면 해당 후보만 폐기하고 제한 횟수 안에서 다음 후보를 시작할 수 있습니다. 재시도에는 자기 거부 출력의 제한된 요약과 실패 진단만 전달하며 다른 Section의 계약, 응답 또는 diff는 전달하지 않습니다. 불변 경로 쓰기, 소유권 밖 쓰기, 위험한 경로·파일 작업, 과도한 변경 범위, write-set 충돌과 게시 충돌은 guard를 완화하지 않고 해당 Section을 중단합니다. 모든 시도는 `patches/SXX/attempt-N/` 아래에 기록합니다. PASS, UNKNOWN, 근거 부족 Section에는 patch 요청과 PR을 만들지 않습니다.
 
 영향받은 기존 PASS 회귀 요청은 새 전체 감사가 아니라 수정 전후 delta 감사입니다. 해당 기존 PASS Section의 동일한 계약, 후보 적용 전후 자기 구현 slice, 변경 경로 목록과 PASS fingerprint 증명만 받습니다. 후보가 만들지 않은 기존 누락이나 수정 전후 그대로인 Requirement는 새 회귀로 PR을 막을 수 없습니다. patch 담당 Section의 finding과 응답은 전달하지 않습니다.
 
@@ -142,7 +142,6 @@ Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마
 - `force_full_audit`: 유효한 PASS cache를 무시하고 audit 요청 19개를 모두 전송합니다.
 - `dry_run`: 제안 diff를 격리된 임시 worktree에만 적용하고 게시하지 않습니다.
 - `create_prs`: 모든 guard, 브라우저 테스트와 수정 코드 재감사를 통과한 뒤 멱등적인 draft PR을 게시합니다. 이때 `dry_run=false`여야 합니다.
-- `mock`: NVIDIA 없이 결정적인 로컬 응답을 사용합니다. Mock 증명서는 `validation-state`에 저장하지 않습니다.
 
 end-to-end 순서는 다음으로 고정합니다.
 
@@ -164,7 +163,7 @@ end-to-end 순서는 다음으로 고정합니다.
 
 PASS 증명서는 orphan `validation-state` branch에 기록합니다. 격리된 원본 입력, 검증된 출력, gap report, patch guard, 테스트 결과와 재감사 결과는 30일 동안 보존되는 GitHub Actions artifact로 올립니다. workflow는 PR을 자동 승인하거나 자동 병합하지 않습니다.
 
-API를 호출하지 않는 로컬 통합 테스트:
+파이프라인을 실행하지 않는 로컬 결정적 검사:
 
 ```bash
 npm ci
@@ -172,10 +171,9 @@ npx playwright install chromium
 npm run typecheck
 npm test
 npm run test:frontend
-npm run audit -- --mock --dry-run --trigger trigger/DESIGN_INDEX_gdweb-26357.md
 ```
 
-기존 상태가 없는 mock 실행은 `auditCalls: 19`를 반환해야 합니다. 생성된 증명서를 임시 상태 디렉터리로 옮겨 같은 실행을 반복했을 때 `cachedPasses: 19`, `auditCalls: 0`이 되는 과정은 통합 테스트에 포함되어 있습니다.
+로컬 mock provider와 mock workflow mode는 존재하지 않습니다. end-to-end pipeline은 항상 실제 NVIDIA API를 요구합니다. PR을 게시하지 않고 로컬에서 검증하려면 `NVIDIA_API_KEY`를 export한 뒤 `npm run audit -- --dry-run --trigger trigger/DESIGN_INDEX_gdweb-26357.md`를 실행합니다. 저장소 권한과 draft PR 생성까지 확인하는 최종 게시 검증은 GitHub Actions 결과를 기준으로 합니다.
 
 ## 프론트엔드 라이브 미리보기
 

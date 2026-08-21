@@ -48,11 +48,6 @@ export async function verifyPatchedWorktree(
 ): Promise<Array<{ id: string; output: string }>> {
   const verificationEnv = {
     ...process.env,
-    NVIDIA_MOCK_PATCH_SECTIONS: "",
-    NVIDIA_MOCK_VALID_PATCH_SECTIONS: "",
-    NVIDIA_MOCK_MALFORMED_PATCH_SECTIONS: "",
-    NVIDIA_MOCK_INVALID_PATCH_SECTIONS: "",
-    NVIDIA_MOCK_FAIL_FIRST_REAUDIT_SECTIONS: "",
     PIPELINE_FORCE_FULL_AUDIT: "false",
   };
   const typecheck = await runCommand("npm", ["run", "typecheck"], {
