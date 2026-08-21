@@ -151,6 +151,7 @@ end-to-end 순서는 다음으로 고정합니다.
   -> API 호출 전에 유효한 불변 PASS 증명서 재사용
   -> 남은 Section마다 stateless NVIDIA audit 요청 하나 전송
   -> 결정적 코드로 JSON 출력 병합
+  -> 모든 PATCH_REQUIRED finding이 해당 Section 소유의 supplied file을 지목하는지 검증
   -> 근거가 있는 PATCH_REQUIRED 노드만 별도 patch 요청 전송
   -> 같은 Section 안에서 서로 다른 seed의 후보를 PIPELINE_PATCH_ATTEMPTS 횟수까지 시도
   -> old-side context가 원본 파일의 한 위치에만 매칭될 때 diff 기계 요소만 복구

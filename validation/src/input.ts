@@ -126,7 +126,7 @@ export function validatorContractHash(
     patchPromptHash: sha256(PATCH_SYSTEM_PROMPT),
     patchRetryPromptHash: sha256(PATCH_RETRY_SYSTEM_PROMPT),
     regressionAuditPromptHash: sha256(REGRESSION_AUDIT_SYSTEM_PROMPT),
-    normalizerVersion: "nvidia-output-normalizer/v8-guided-json-hunk-repair",
+    normalizerVersion: "nvidia-output-normalizer/v9-grounded-write-reference",
     structuredOutputTransport: "nvidia-guided-json-compatible/v2",
     contractSchemaHash,
     impactManifest: manifest,

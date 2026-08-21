@@ -9,7 +9,7 @@ import {
   targetIdFor,
   validatorContractHash,
 } from "./input.ts";
-import { readImpactManifest, topologicalSections } from "./manifest.ts";
+import { matchesAnyPath, readImpactManifest, topologicalSections } from "./manifest.ts";
 import { readSpecification, readTrigger } from "./markdown.ts";
 import {
   NvidiaClient,
@@ -155,6 +155,34 @@ export function unresolvedPatchDependencies(
   ));
 }
 
+export function enforcePatchGrounding(
+  input: NodeAuditInput,
+  output: NodeAuditOutput,
+): { output: NodeAuditOutput; warning?: string } {
+  if (output.status !== "PATCH_REQUIRED") return { output };
+  if (input.policy.allowedWriteGlobs.length === 0) {
+    return {
+      output: { ...output, status: "BLOCKED_CONTRACT_CONFLICT" },
+      warning: `${input.node.sectionId} returned PATCH_REQUIRED without an owned application write path.`,
+    };
+  }
+
+  const suppliedPaths = new Set(input.implementation.files.map((file) => file.path));
+  const findingsAreWritable = output.findings.every((finding) => (
+    finding.implementationRefs.length > 0 &&
+    finding.implementationRefs.every((reference) => (
+      suppliedPaths.has(reference) && matchesAnyPath(reference, input.policy.allowedWriteGlobs)
+    ))
+  ));
+  if (!findingsAreWritable) {
+    return {
+      output: { ...output, status: "BLOCKED_MISSING_EVIDENCE" },
+      warning: `${input.node.sectionId} returned PATCH_REQUIRED without grounding every finding in a supplied writable file.`,
+    };
+  }
+  return { output };
+}
+
 function assertSafeOutputRoot(config: PipelineConfig): void {
   const relative = path.relative(config.repositoryRoot, config.outputRoot).replaceAll("\\", "/");
   if (relative === "" || relative.startsWith("../") || !relative.startsWith(".validation-runs/")) {
@@ -224,7 +252,20 @@ async function callAudit(args: {
       sectionId,
       args.input.node.fingerprint,
     );
-    return { ok: true, sectionId, completion, output: completion.parsed };
+    const grounded = enforcePatchGrounding(args.input, completion.parsed);
+    assertAuditOutput(args.validate, grounded.output, sectionId, args.input.node.fingerprint);
+    return {
+      ok: true,
+      sectionId,
+      completion: grounded.warning
+        ? {
+          ...completion,
+          parsed: grounded.output,
+          warning: [completion.warning, grounded.warning].filter(Boolean).join(" "),
+        }
+        : completion,
+      output: grounded.output,
+    };
   } catch (error) {
     const warning = `${errorMessage(error)} The response was quarantined as UNKNOWN.`;
     const output = quarantineAuditOutput(sectionId, args.input.node.fingerprint);

@@ -151,6 +151,7 @@ parse current Specification and trigger
   -> reuse valid immutable PASS attestations before API calls
   -> send one stateless NVIDIA audit request per remaining Section
   -> merge JSON outputs with deterministic code
+  -> require every PATCH_REQUIRED finding to name a supplied file owned by that Section
   -> send a separate patch request only for grounded PATCH_REQUIRED nodes
   -> try at most PIPELINE_PATCH_ATTEMPTS independently seeded candidates inside that Section
   -> repair only diff mechanics when old-side context maps to one unique base-file location
