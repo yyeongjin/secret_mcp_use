@@ -245,7 +245,12 @@ function retryAfterMs(response: Response, attempt: number): number {
   return Math.min(30_000, 1000 * 2 ** attempt);
 }
 
-function mockAudit(sectionId: SectionId, fingerprint: Sha256, patched: boolean): unknown {
+function mockAudit(
+  sectionId: SectionId,
+  fingerprint: Sha256,
+  patched: boolean,
+  requestId: string,
+): unknown {
   const patchSections = new Set(
     (process.env.NVIDIA_MOCK_PATCH_SECTIONS ?? "")
       .split(",")
@@ -267,6 +272,37 @@ function mockAudit(sectionId: SectionId, fingerprint: Sha256, patched: boolean):
           finding: `Mock omission for ${sectionId}.`,
           evidenceRefs: [],
           implementationRefs: ["frontend/index.html"],
+          proposedValue: null,
+        },
+      ],
+      publicOutput: { mock: true },
+    };
+  }
+  const failFirstReauditSections = new Set(
+    (process.env.NVIDIA_MOCK_FAIL_FIRST_REAUDIT_SECTIONS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  if (
+    patched &&
+    failFirstReauditSections.has(sectionId) &&
+    requestId.includes(`:reaudit:${sectionId}:attempt:1`)
+  ) {
+    return {
+      schemaVersion: "design-validation/audit-output/v2",
+      sectionId,
+      fingerprint,
+      status: "PATCH_REQUIRED",
+      findings: [
+        {
+          requirementId: `${sectionId}-MOCK-RETRY-001`,
+          pageId: null,
+          componentId: null,
+          status: "MISSING",
+          finding: `Mock first-candidate re-audit failure for ${sectionId}.`,
+          evidenceRefs: [],
+          implementationRefs: ["frontend/styles.css"],
           proposedValue: null,
         },
       ],
@@ -310,7 +346,7 @@ function mockPatch(
       .map((value) => value.trim())
       .filter(Boolean),
   );
-  if (malformedPatchSections.has(sectionId) && !requestId.includes(":repair:")) {
+  if (malformedPatchSections.has(sectionId) && requestId.endsWith(":attempt:1")) {
     const request = JSON.parse(userPrompt) as {
       files: Array<{ path: string; contentHash: Sha256; content: string | null }>;
       findings: Array<{ requirementId: string }>;
@@ -398,7 +434,7 @@ export class NvidiaClient {
     if (this.config.mock) {
       const parsed = args.kind === "patch"
         ? mockPatch(args.sectionId, args.fingerprint, args.userPrompt, args.requestId)
-        : mockAudit(args.sectionId, args.fingerprint, args.kind === "reaudit");
+        : mockAudit(args.sectionId, args.fingerprint, args.kind === "reaudit", args.requestId);
       const raw: ChatCompletionResponse = {
         id: `mock-${args.requestId}`,
         choices: [{ message: { content: JSON.stringify(parsed) }, finish_reason: "stop" }],

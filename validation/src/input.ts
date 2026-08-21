@@ -4,7 +4,7 @@ import { hashJson, sha256 } from "./hash.ts";
 import { matchesAnyPath } from "./manifest.ts";
 import {
   AUDIT_SYSTEM_PROMPT,
-  PATCH_REPAIR_SYSTEM_PROMPT,
+  PATCH_RETRY_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
 } from "./prompts.ts";
 import type {
@@ -123,7 +123,7 @@ export function validatorContractHash(
     schemaVersion: "design-validation/validator-contract/v2",
     auditPromptHash: sha256(AUDIT_SYSTEM_PROMPT),
     patchPromptHash: sha256(PATCH_SYSTEM_PROMPT),
-    patchRepairPromptHash: sha256(PATCH_REPAIR_SYSTEM_PROMPT),
+    patchRetryPromptHash: sha256(PATCH_RETRY_SYSTEM_PROMPT),
     normalizerVersion: "nvidia-output-normalizer/v4-quarantine",
     auditSchemaHash,
     impactManifest: manifest,

@@ -73,7 +73,7 @@ Open **Settings → Secrets and variables → Actions → Variables → New repo
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | Preserves valid cached PASS results during ordinary code validation |
 | `PIPELINE_DRY_RUN` | `false` | Allows verified patches to be published after temporary-worktree validation |
 | `PIPELINE_CREATE_PRS` | `true` | Automatically creates idempotent draft PRs for verified `PATCH_REQUIRED` nodes |
-| `PIPELINE_PATCH_ATTEMPTS` | `3` | Maximum isolated patch/repair requests for one `PATCH_REQUIRED` Section before blocking it |
+| `PIPELINE_PATCH_ATTEMPTS` | `3` | Maximum independently seeded patch candidates, including full verification retries, for one `PATCH_REQUIRED` Section |
 
 These are runner configuration variables, not all direct NVIDIA request fields. In particular, `NVIDIA_MAX_INPUT_TOKENS` is enforced before the HTTP request is sent. The `980000` limit deliberately keeps approximately 20,000 tokens available for the system message, chat template, and up to 4,096 output tokens instead of filling the entire one-million-token window with input.
 
@@ -126,7 +126,9 @@ The Specification is not compiled into the runner. Every execution parses the cu
 
 ### 4. First-run safety settings
 
-The committed push workflow runs with `PIPELINE_DRY_RUN=false` and `PIPELINE_CREATE_PRS=true`. It still cannot publish arbitrary model output: a patch must pass request isolation, response schema validation, immutable-path rejection, base-hash validation, write ownership, diff size limits, `git apply --check`, type checks, unit tests, desktop/mobile browser tests, accessibility regression checks, patched-Section re-audit, affected PASS regression audits, open-PR conflict checks, and idempotency checks. Only then is an unmerged draft PR created. Before `git apply`, deterministic code may remove context-only hunks, restore empty context prefixes, discard untrusted index metadata, and recompute hunk counts; it never changes an added or deleted source line. If the resulting diff is still malformed or does not apply to the supplied base files, the same Section receives one isolated mechanical repair request with a distinct deterministic seed. Security, ownership, evidence, tests, and re-audit failures are never repair-retried, and a second rejected diff is quarantined.
+The committed push workflow runs with `PIPELINE_DRY_RUN=false` and `PIPELINE_CREATE_PRS=true`. It still cannot publish arbitrary model output: a patch must pass request isolation, response schema validation, immutable-path rejection, base-hash validation, write ownership, diff size limits, `git apply --check`, type checks, unit tests, desktop/mobile browser tests, accessibility regression checks, patched-Section re-audit, affected PASS regression audits, open-PR conflict checks, and idempotency checks. Only then is an unmerged draft PR created. Before `git apply`, deterministic code may remove context-only hunks, restore empty context prefixes, discard untrusted index metadata, and recompute hunk counts; it never changes an added or deleted source line.
+
+One `PATCH_REQUIRED` Section may receive up to `PIPELINE_PATCH_ATTEMPTS` complete patch candidates. Every candidate is a separate NVIDIA request with a distinct deterministic seed, the same isolated Section contract, and the unchanged base files. Invalid JSON or schema, repairable diff/file-set mechanics, failed tests, a non-PASS patched-Section re-audit, or a failed affected-PASS regression audit discards that candidate and may start the next bounded candidate. A retry receives only its own rejected output and failure diagnostic; it never receives another Section's contract or response. Immutable-path writes, cross-owner writes, unsafe paths or file operations, excessive scope, write-set conflicts, and publication conflicts stop the Section instead of weakening a guard. Every attempt is stored under `patches/SXX/attempt-N/`. PASS, UNKNOWN, and evidence-blocked Sections never create patch requests or PRs.
 
 ### 5. Run and inspect the pipeline
 
@@ -149,11 +151,12 @@ parse current Specification and trigger
   -> send one stateless NVIDIA audit request per remaining Section
   -> merge JSON outputs with deterministic code
   -> send a separate patch request only for grounded PATCH_REQUIRED nodes
-  -> retry the same Section once only for malformed or non-applying unified diff mechanics
+  -> try at most PIPELINE_PATCH_ATTEMPTS independently seeded candidates inside that Section
   -> reject trigger/spec writes, stale hashes, excessive diffs, and ownership violations
-  -> apply in a temporary worktree
-  -> type-check, unit-test, render desktop/mobile, check accessibility
-  -> re-audit the patched Section in another stateless request
+  -> apply each candidate from the unchanged base in its own temporary worktree
+  -> type-check, unit-test, render desktop/mobile, and check accessibility per candidate
+  -> re-audit the patched Section and affected prior PASS Sections with separate stateless requests
+  -> discard a failed candidate and continue the bounded Section-local loop
   -> optionally create one idempotent draft PR for the verified node
 ```
 

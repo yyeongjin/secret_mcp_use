@@ -73,7 +73,7 @@ unset NVIDIA_API_KEY
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | 일반 코드 검증에서 유효한 PASS cache를 유지 |
 | `PIPELINE_DRY_RUN` | `false` | 임시 worktree 검증을 통과한 patch 게시 허용 |
 | `PIPELINE_CREATE_PRS` | `true` | 검증된 `PATCH_REQUIRED` 노드의 멱등적인 draft PR 자동 생성 |
-| `PIPELINE_PATCH_ATTEMPTS` | `3` | `PATCH_REQUIRED` Section 하나가 차단되기 전 허용하는 격리 patch/보정 요청 최대 횟수 |
+| `PIPELINE_PATCH_ATTEMPTS` | `3` | `PATCH_REQUIRED` Section 하나에 허용하는 전체 검증 재시도를 포함한 독립 seed patch 후보 최대 횟수 |
 
 이 값들은 runner 설정이며 전부 NVIDIA 요청에 그대로 전달되는 필드는 아닙니다. 특히 `NVIDIA_MAX_INPUT_TOKENS`는 HTTP 요청을 보내기 전에 runner가 검사합니다. 입력을 100만 token으로 가득 채우지 않고 `980000`으로 제한해 system message, chat template과 최대 4,096 output token을 위한 약 20,000 token의 여유를 둡니다.
 
@@ -126,7 +126,9 @@ Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마
 
 ### 4. 최초 실행 안전 설정
 
-커밋된 push workflow는 `PIPELINE_DRY_RUN=false`, `PIPELINE_CREATE_PRS=true`로 실행합니다. 그렇더라도 모델 출력을 바로 게시할 수는 없습니다. 요청 격리, 응답 schema 검증, 불변 경로 거부, base hash 검증, write 소유권, diff 크기 제한, `git apply --check`, typecheck, 단위 테스트, 데스크톱·모바일 브라우저 테스트, 접근성 회귀 검사, 수정 Section 재감사, 영향받은 기존 PASS 회귀 감사, 열린 PR 충돌 검사와 멱등성 검사를 모두 통과해야 병합되지 않은 draft PR 하나를 생성합니다. `git apply` 전에는 결정적 코드가 변경 없는 hunk 제거, 빈 context 접두사 복원, 신뢰하지 않는 index metadata 제거와 hunk 개수 재계산만 수행할 수 있으며 추가·삭제되는 소스 줄 자체는 바꾸지 않습니다. 그래도 diff가 잘못됐거나 제공된 원본 파일에 적용되지 않으면 같은 Section에 한해 서로 다른 결정적 seed를 사용한 격리 보정 요청을 한 번 보냅니다. 보안, 소유권, 근거, 테스트 또는 재감사 실패는 보정 재시도 대상이 아니며 두 번째 diff도 거부되면 격리합니다.
+커밋된 push workflow는 `PIPELINE_DRY_RUN=false`, `PIPELINE_CREATE_PRS=true`로 실행합니다. 그렇더라도 모델 출력을 바로 게시할 수는 없습니다. 요청 격리, 응답 schema 검증, 불변 경로 거부, base hash 검증, write 소유권, diff 크기 제한, `git apply --check`, typecheck, 단위 테스트, 데스크톱·모바일 브라우저 테스트, 접근성 회귀 검사, 수정 Section 재감사, 영향받은 기존 PASS 회귀 감사, 열린 PR 충돌 검사와 멱등성 검사를 모두 통과해야 병합되지 않은 draft PR 하나를 생성합니다. `git apply` 전에는 결정적 코드가 변경 없는 hunk 제거, 빈 context 접두사 복원, 신뢰하지 않는 index metadata 제거와 hunk 개수 재계산만 수행할 수 있으며 추가·삭제되는 소스 줄 자체는 바꾸지 않습니다.
+
+하나의 `PATCH_REQUIRED` Section에는 최대 `PIPELINE_PATCH_ATTEMPTS`개의 완전한 patch 후보를 허용합니다. 후보마다 서로 다른 결정적 seed를 쓰는 별도 NVIDIA 요청이며, 같은 격리 Section 계약과 변경되지 않은 원본 파일에서 시작합니다. JSON·schema 오류, 보정 가능한 diff 또는 file-set 형식 오류, 테스트 실패, 수정 Section 재감사 실패, 영향받은 기존 PASS 회귀 감사 실패가 발생하면 해당 후보만 폐기하고 제한 횟수 안에서 다음 후보를 시작할 수 있습니다. 재시도에는 자기 후보의 거부 출력과 실패 진단만 전달하며 다른 Section의 계약이나 응답은 전달하지 않습니다. 불변 경로 쓰기, 소유권 밖 쓰기, 위험한 경로·파일 작업, 과도한 변경 범위, write-set 충돌과 게시 충돌은 guard를 완화하지 않고 해당 Section을 중단합니다. 모든 시도는 `patches/SXX/attempt-N/` 아래에 기록합니다. PASS, UNKNOWN, 근거 부족 Section에는 patch 요청과 PR을 만들지 않습니다.
 
 ### 5. 파이프라인 실행과 결과 확인
 
@@ -149,11 +151,12 @@ end-to-end 순서는 다음으로 고정합니다.
   -> 남은 Section마다 stateless NVIDIA audit 요청 하나 전송
   -> 결정적 코드로 JSON 출력 병합
   -> 근거가 있는 PATCH_REQUIRED 노드만 별도 patch 요청 전송
-  -> unified diff 문법 또는 원본 문맥 적용 오류일 때만 같은 Section을 한 번 보정 요청
+  -> 같은 Section 안에서 서로 다른 seed의 후보를 PIPELINE_PATCH_ATTEMPTS 횟수까지 시도
   -> trigger/spec 쓰기, 오래된 hash, 과도한 diff와 소유권 위반 거부
-  -> 임시 worktree에 적용
-  -> typecheck, 단위 테스트, 데스크톱·모바일 렌더링, 접근성 검사
-  -> 별도 stateless 요청으로 수정된 Section 재감사
+  -> 후보마다 변경되지 않은 원본에서 별도 임시 worktree에 적용
+  -> 후보마다 typecheck, 단위 테스트, 데스크톱·모바일 렌더링, 접근성 검사
+  -> 별도 stateless 요청으로 수정 Section과 영향받은 기존 PASS Section 재감사
+  -> 실패 후보를 폐기하고 제한된 Section 내부 반복 계속
   -> 검증된 노드에만 멱등적인 draft PR 하나를 선택적으로 생성
 ```
 

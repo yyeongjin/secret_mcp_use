@@ -171,7 +171,7 @@ test("downgrades an ungrounded PATCH_REQUIRED envelope to UNKNOWN", () => {
   assert.equal(normalized.findings.length, 1);
 });
 
-test("patch repair receives a deterministic seed distinct from the initial patch", () => {
+test("each patch candidate receives a deterministic seed distinct from the previous candidate", () => {
   const fingerprint = `sha256:${"a".repeat(64)}` as const;
   assert.equal(completionSeed(fingerprint, "run:patch:S09"), completionSeed(fingerprint, "run:patch:S09"));
   assert.notEqual(

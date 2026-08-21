@@ -19,16 +19,16 @@ import {
 } from "./nvidia.ts";
 import {
   guardPatch,
-  isRepairablePatchFormatError,
+  isRetryablePatchCandidateError,
   normalizeUnifiedDiffMechanics,
   type GuardedPatch,
 } from "./patch.ts";
 import {
   AUDIT_SYSTEM_PROMPT,
-  PATCH_REPAIR_SYSTEM_PROMPT,
+  PATCH_RETRY_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
   auditUserPrompt,
-  patchRepairUserPrompt,
+  patchRetryUserPrompt,
   patchUserPrompt,
 } from "./prompts.ts";
 import {
@@ -66,8 +66,26 @@ interface AuditCallFailure {
 
 type AuditCallResult = AuditCallSuccess | AuditCallFailure;
 
+interface PatchAttemptRecord {
+  attempt: number;
+  status:
+    | "BLOCKED_MODEL"
+    | "BLOCKED_GUARD"
+    | "BLOCKED_CONFLICT"
+    | "FAILED_TEST"
+    | "FAILED_REAUDIT"
+    | "FAILED_PUBLISH"
+    | "PATCH_VERIFIED"
+    | "PR_CREATED"
+    | "PR_REUSED";
+  reason: string;
+  patchHash?: string;
+  changedPaths?: string[];
+}
+
 interface PatchRecord {
   sectionId: SectionId;
+  attempt?: number;
   status:
     | "NOT_REQUIRED"
     | "WAITING_DEPENDENCY"
@@ -85,6 +103,7 @@ interface PatchRecord {
   patchHash?: string;
   changedPaths?: string[];
   pullRequest?: { number: number; url: string; branch: string };
+  attempts?: PatchAttemptRecord[];
 }
 
 interface WorkRunSummary {
@@ -327,19 +346,18 @@ async function runPatches(args: {
       continue;
     }
 
-    const patchRequestId = `${args.runId}:patch:${sectionId}`;
-    let guarded: GuardedPatch | undefined;
-    let rejectedOutput: NodePatchOutput | undefined;
-    let rejectedGuardError: string | undefined;
-    let failureStatus: PatchRecord["status"] = "BLOCKED_MODEL";
-    let failureReason = "Patch generation did not return a usable result.";
+    const attempts: PatchAttemptRecord[] = [];
+    let retryContext: {
+      output: NodePatchOutput;
+      failure: { stage: "guard" | "test" | "reaudit" | "regression"; reason: string };
+    } | undefined;
+    let finalRecord: PatchRecord | undefined;
 
     for (let attempt = 1; attempt <= args.config.patchGenerationAttempts; attempt += 1) {
-      const isRepairAttempt = rejectedOutput !== undefined && rejectedGuardError !== undefined;
-      const attemptId = `${patchRequestId}:attempt:${attempt}`;
+      const attemptId = `${args.runId}:patch:${sectionId}:attempt:${attempt}`;
       const attemptDirectory = path.join(scratchDirectory, sectionId, `attempt-${attempt}`);
       patchCalls += 1;
-      let completion: CompletionResult;
+      let completion: CompletionResult | undefined;
       let output: NodePatchOutput;
       try {
         completion = await args.client.completeJson({
@@ -347,17 +365,18 @@ async function runPatches(args: {
           sectionId,
           fingerprint: input.node.fingerprint,
           requestId: attemptId,
-          systemPrompt: isRepairAttempt ? PATCH_REPAIR_SYSTEM_PROMPT : PATCH_SYSTEM_PROMPT,
-          userPrompt: isRepairAttempt
-            ? patchRepairUserPrompt({
+          systemPrompt: retryContext ? PATCH_RETRY_SYSTEM_PROMPT : PATCH_SYSTEM_PROMPT,
+          userPrompt: retryContext
+            ? patchRetryUserPrompt({
               auditInput: input,
               auditOutput: resolved.output,
-              rejectedOutput: rejectedOutput!,
-              guardError: rejectedGuardError!,
+              rejectedOutput: retryContext.output,
+              failure: retryContext.failure,
             })
             : patchUserPrompt({ auditInput: input, auditOutput: resolved.output }),
           outputSchema: args.patchOutputSchema,
         });
+        await writeJson(path.join(attemptDirectory, "api-response.json"), completion.raw);
         assertPatchOutput(
           args.validatePatch,
           completion.parsed,
@@ -365,24 +384,35 @@ async function runPatches(args: {
           input.node.fingerprint,
         );
         output = completion.parsed;
-        await writeJson(path.join(attemptDirectory, "api-response.json"), completion.raw);
         await writeJson(path.join(attemptDirectory, "output.json"), output);
       } catch (error) {
-        failureStatus = "BLOCKED_MODEL";
-        failureReason = `Patch attempt ${attempt}/${args.config.patchGenerationAttempts} failed: ${errorMessage(error)}`;
-        rejectedOutput = undefined;
-        rejectedGuardError = undefined;
-        continue;
+        if (completion) {
+          await writeJson(path.join(attemptDirectory, "output-invalid.json"), completion.parsed);
+        }
+        const attemptRecord: PatchAttemptRecord = {
+          attempt,
+          status: "BLOCKED_MODEL",
+          reason: `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} failed: ${errorMessage(error)}`,
+        };
+        attempts.push(attemptRecord);
+        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+        retryContext = undefined;
+        if (attempt < args.config.patchGenerationAttempts) continue;
+        finalRecord = { sectionId, ...attemptRecord, attempts };
+        break;
       }
 
       if (output.status !== "PATCH") {
-        failureStatus = "BLOCKED_MODEL";
-        failureReason = `Patch attempt ${attempt}/${args.config.patchGenerationAttempts} returned ${output.status}: ${output.reason}`;
-        if (isRepairAttempt && attempt < args.config.patchGenerationAttempts) {
-          rejectedOutput = undefined;
-          rejectedGuardError = undefined;
-          continue;
-        }
+        const attemptRecord: PatchAttemptRecord = {
+          attempt,
+          status: "BLOCKED_MODEL",
+          reason: `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} returned ${output.status}: ${output.reason}`,
+        };
+        attempts.push(attemptRecord);
+        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+        retryContext = undefined;
+        if (attempt < args.config.patchGenerationAttempts) continue;
+        finalRecord = { sectionId, ...attemptRecord, attempts };
         break;
       }
 
@@ -391,6 +421,8 @@ async function runPatches(args: {
         output = { ...output, diff: normalizedDiff };
         await writeJson(path.join(attemptDirectory, "normalized-output.json"), output);
       }
+
+      let guarded: GuardedPatch;
       try {
         guarded = await guardPatch({
           config: args.config,
@@ -399,179 +431,242 @@ async function runPatches(args: {
           patchOutput: output,
           scratchDirectory: attemptDirectory,
         });
+      } catch (error) {
+        const reason = `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} was rejected: ${errorMessage(error)}`;
+        const attemptRecord: PatchAttemptRecord = { attempt, status: "BLOCKED_GUARD", reason };
+        attempts.push(attemptRecord);
+        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+        if (attempt < args.config.patchGenerationAttempts && isRetryablePatchCandidateError(error)) {
+          retryContext = { output, failure: { stage: "guard", reason: errorMessage(error) } };
+          continue;
+        }
+        finalRecord = { sectionId, ...attemptRecord, attempts };
         break;
-      } catch (error) {
-        failureStatus = "BLOCKED_GUARD";
-        failureReason = `Patch attempt ${attempt}/${args.config.patchGenerationAttempts} was rejected: ${errorMessage(error)}`;
-        if (!isRepairablePatchFormatError(error)) break;
-        rejectedOutput = output;
-        rejectedGuardError = errorMessage(error);
       }
-    }
 
-    if (!guarded) {
-      records.push({ sectionId, status: failureStatus, reason: failureReason });
-      continue;
-    }
-    const conflicts = guarded.changedPaths.filter((changedPath) => claimedPaths.has(changedPath));
-    if (conflicts.length > 0) {
-      records.push({
-        sectionId,
-        status: "BLOCKED_CONFLICT",
-        reason: `Another patch in this run owns: ${conflicts.join(", ")}.`,
-        patchHash: guarded.patchHash,
-        changedPaths: guarded.changedPaths,
-      });
-      continue;
-    }
+      const conflicts = guarded.changedPaths.filter((changedPath) => claimedPaths.has(changedPath));
+      if (conflicts.length > 0) {
+        const attemptRecord: PatchAttemptRecord = {
+          attempt,
+          status: "BLOCKED_CONFLICT",
+          reason: `Another verified patch in this run owns: ${conflicts.join(", ")}.`,
+          patchHash: guarded.patchHash,
+          changedPaths: guarded.changedPaths,
+        };
+        attempts.push(attemptRecord);
+        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+        finalRecord = { sectionId, ...attemptRecord, attempts };
+        break;
+      }
 
-    const worktree = await createPatchedWorktree(args.config, guarded);
-    try {
+      let worktree: Awaited<ReturnType<typeof createPatchedWorktree>>;
       try {
-        const checks = await verifyPatchedWorktree(args.config, worktree.path);
-        await writeJson(path.join(scratchDirectory, sectionId, "verification.json"), checks);
+        worktree = await createPatchedWorktree(args.config, guarded);
       } catch (error) {
-        records.push({
-          sectionId,
-          status: "FAILED_TEST",
-          reason: errorMessage(error),
+        const attemptRecord: PatchAttemptRecord = {
+          attempt,
+          status: "BLOCKED_GUARD",
+          reason: `Unable to create an isolated patched worktree: ${errorMessage(error)}`,
           patchHash: guarded.patchHash,
           changedPaths: guarded.changedPaths,
-        });
-        continue;
+        };
+        attempts.push(attemptRecord);
+        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+        finalRecord = { sectionId, ...attemptRecord, attempts };
+        break;
       }
 
-      const nextInputs = await patchedInputs({
-        originalConfig: args.config,
-        worktreePath: worktree.path,
-        triggerPath: args.triggerPath,
-        runId: args.runId,
-        manifest: args.manifest,
-        auditSchemaHash: args.auditSchemaHash,
-      });
-      const nextInput = nextInputs.get(sectionId);
-      if (!nextInput) throw new Error(`Patched input is missing ${sectionId}.`);
-      reauditCalls += 1;
-      const reaudit = await callAudit({
-        client: args.client,
-        input: nextInput,
-        kind: "reaudit",
-        requestId: `${args.runId}:reaudit:${sectionId}`,
-        validate: args.validateAudit,
-        outputSchema: args.auditOutputSchema,
-      });
-      await saveAuditCall(path.join(scratchDirectory, sectionId, "reaudit"), nextInput, reaudit);
-      if (!reaudit.ok || reaudit.output.status !== "PASS") {
-        records.push({
-          sectionId,
-          status: "FAILED_REAUDIT",
-          reason: reaudit.ok ? `Patched code remained ${reaudit.output.status}.` : reaudit.error,
-          patchHash: guarded.patchHash,
-          changedPaths: guarded.changedPaths,
-        });
-        continue;
-      }
-
-      const regressionSectionIds = SECTION_IDS.filter((candidateId) => {
-        if (candidateId === sectionId) return false;
-        const before = args.inputs.get(candidateId);
-        const after = nextInputs.get(candidateId);
-        const previousResult = args.resolved.get(candidateId);
-        return (
-          before !== undefined &&
-          after !== undefined &&
-          previousResult?.output.status === "PASS" &&
-          before.node.fingerprint !== after.node.fingerprint
-        );
-      });
-      const regressionResults = await runWithConcurrency(
-        regressionSectionIds,
-        args.config.nvidia.concurrency,
-        async (regressionSectionId): Promise<AuditCallResult> => {
-          const regressionInput = nextInputs.get(regressionSectionId);
-          if (!regressionInput) {
-            return {
-              ok: false,
-              sectionId: regressionSectionId,
-              error: `Patched regression input is missing ${regressionSectionId}.`,
-            };
+      try {
+        try {
+          const checks = await verifyPatchedWorktree(args.config, worktree.path);
+          await writeJson(path.join(attemptDirectory, "verification.json"), checks);
+        } catch (error) {
+          const reason = errorMessage(error);
+          const attemptRecord: PatchAttemptRecord = {
+            attempt,
+            status: "FAILED_TEST",
+            reason,
+            patchHash: guarded.patchHash,
+            changedPaths: guarded.changedPaths,
+          };
+          attempts.push(attemptRecord);
+          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+          if (attempt < args.config.patchGenerationAttempts) {
+            retryContext = { output, failure: { stage: "test", reason } };
+            continue;
           }
-          const result = await callAudit({
-            client: args.client,
-            input: regressionInput,
-            kind: "reaudit",
-            requestId: `${args.runId}:regression:${sectionId}:${regressionSectionId}`,
-            validate: args.validateAudit,
-            outputSchema: args.auditOutputSchema,
-          });
-          await saveAuditCall(
-            path.join(scratchDirectory, sectionId, "regressions"),
-            regressionInput,
-            result,
-          );
-          return result;
-        },
-      );
-      reauditCalls += regressionResults.length;
-      const regressionFailures = regressionResults.filter(
-        (result) => !result.ok || result.output.status !== "PASS",
-      );
-      if (regressionFailures.length > 0) {
-        records.push({
-          sectionId,
-          status: "FAILED_REAUDIT",
-          reason: `Patch regressed previously PASS Sections: ${regressionFailures
-            .map((result) => result.sectionId)
-            .join(", ")}.`,
-          patchHash: guarded.patchHash,
-          changedPaths: guarded.changedPaths,
-        });
-        continue;
-      }
+          finalRecord = { sectionId, ...attemptRecord, attempts };
+          break;
+        }
 
-      for (const changedPath of guarded.changedPaths) claimedPaths.add(changedPath);
-      if (!args.config.createPrs) {
-        records.push({
-          sectionId,
-          status: "PATCH_VERIFIED",
-          reason: args.config.dryRun
-            ? "Patch passed all guards and re-audit; dry-run prevented publication."
-            : "Patch passed all guards; PR creation is disabled.",
-          patchHash: guarded.patchHash,
-          changedPaths: guarded.changedPaths,
-        });
-        continue;
-      }
-
-      let pull: Awaited<ReturnType<typeof publishPatchPullRequest>>;
-      try {
-        pull = await publishPatchPullRequest({
-          config: args.config,
+        const nextInputs = await patchedInputs({
+          originalConfig: args.config,
           worktreePath: worktree.path,
-          input,
-          patch: guarded,
+          triggerPath: args.triggerPath,
+          runId: args.runId,
+          manifest: args.manifest,
+          auditSchemaHash: args.auditSchemaHash,
         });
-      } catch (error) {
-        records.push({
-          sectionId,
-          status: "FAILED_PUBLISH",
-          reason: errorMessage(error),
-          patchHash: guarded.patchHash,
-          changedPaths: guarded.changedPaths,
+        const nextInput = nextInputs.get(sectionId);
+        if (!nextInput) throw new Error(`Patched input is missing ${sectionId}.`);
+        reauditCalls += 1;
+        const reaudit = await callAudit({
+          client: args.client,
+          input: nextInput,
+          kind: "reaudit",
+          requestId: `${args.runId}:reaudit:${sectionId}:attempt:${attempt}`,
+          validate: args.validateAudit,
+          outputSchema: args.auditOutputSchema,
         });
-        continue;
+        await saveAuditCall(path.join(attemptDirectory, "reaudit"), nextInput, reaudit);
+        if (!reaudit.ok || reaudit.output.status !== "PASS") {
+          const reason = reaudit.ok ? `Patched code remained ${reaudit.output.status}.` : reaudit.error;
+          const attemptRecord: PatchAttemptRecord = {
+            attempt,
+            status: "FAILED_REAUDIT",
+            reason,
+            patchHash: guarded.patchHash,
+            changedPaths: guarded.changedPaths,
+          };
+          attempts.push(attemptRecord);
+          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+          if (attempt < args.config.patchGenerationAttempts) {
+            retryContext = { output, failure: { stage: "reaudit", reason } };
+            continue;
+          }
+          finalRecord = { sectionId, ...attemptRecord, attempts };
+          break;
+        }
+
+        const regressionSectionIds = SECTION_IDS.filter((candidateId) => {
+          if (candidateId === sectionId) return false;
+          const before = args.inputs.get(candidateId);
+          const after = nextInputs.get(candidateId);
+          const previousResult = args.resolved.get(candidateId);
+          return (
+            before !== undefined &&
+            after !== undefined &&
+            previousResult?.output.status === "PASS" &&
+            before.node.fingerprint !== after.node.fingerprint
+          );
+        });
+        const regressionResults = await runWithConcurrency(
+          regressionSectionIds,
+          args.config.nvidia.concurrency,
+          async (regressionSectionId): Promise<AuditCallResult> => {
+            const regressionInput = nextInputs.get(regressionSectionId);
+            if (!regressionInput) {
+              return {
+                ok: false,
+                sectionId: regressionSectionId,
+                error: `Patched regression input is missing ${regressionSectionId}.`,
+              };
+            }
+            const result = await callAudit({
+              client: args.client,
+              input: regressionInput,
+              kind: "reaudit",
+              requestId: `${args.runId}:regression:${sectionId}:attempt:${attempt}:${regressionSectionId}`,
+              validate: args.validateAudit,
+              outputSchema: args.auditOutputSchema,
+            });
+            await saveAuditCall(
+              path.join(attemptDirectory, "regressions"),
+              regressionInput,
+              result,
+            );
+            return result;
+          },
+        );
+        reauditCalls += regressionResults.length;
+        const regressionFailures = regressionResults.filter(
+          (result) => !result.ok || result.output.status !== "PASS",
+        );
+        if (regressionFailures.length > 0) {
+          const reason = `Patch regressed previously PASS Sections: ${regressionFailures
+            .map((result) => result.ok ? `${result.sectionId}:${result.output.status}` : `${result.sectionId}:ERROR`)
+            .join(", ")}.`;
+          const attemptRecord: PatchAttemptRecord = {
+            attempt,
+            status: "FAILED_REAUDIT",
+            reason,
+            patchHash: guarded.patchHash,
+            changedPaths: guarded.changedPaths,
+          };
+          attempts.push(attemptRecord);
+          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+          if (attempt < args.config.patchGenerationAttempts) {
+            retryContext = { output, failure: { stage: "regression", reason } };
+            continue;
+          }
+          finalRecord = { sectionId, ...attemptRecord, attempts };
+          break;
+        }
+
+        for (const changedPath of guarded.changedPaths) claimedPaths.add(changedPath);
+        if (!args.config.createPrs) {
+          const attemptRecord: PatchAttemptRecord = {
+            attempt,
+            status: "PATCH_VERIFIED",
+            reason: args.config.dryRun
+              ? "Patch passed all guards and re-audits; dry-run prevented publication."
+              : "Patch passed all guards and re-audits; PR creation is disabled.",
+            patchHash: guarded.patchHash,
+            changedPaths: guarded.changedPaths,
+          };
+          attempts.push(attemptRecord);
+          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+          finalRecord = { sectionId, ...attemptRecord, attempts };
+          break;
+        }
+
+        try {
+          const pull = await publishPatchPullRequest({
+            config: args.config,
+            worktreePath: worktree.path,
+            input,
+            patch: guarded,
+          });
+          const attemptRecord: PatchAttemptRecord = {
+            attempt,
+            status: pull.reused ? "PR_REUSED" : "PR_CREATED",
+            reason: pull.reused ? "Reused the existing idempotent draft PR." : "Created a verified draft PR.",
+            patchHash: guarded.patchHash,
+            changedPaths: guarded.changedPaths,
+          };
+          attempts.push(attemptRecord);
+          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+          finalRecord = {
+            sectionId,
+            ...attemptRecord,
+            attempts,
+            pullRequest: { number: pull.number, url: pull.url, branch: pull.branch },
+          };
+          break;
+        } catch (error) {
+          const attemptRecord: PatchAttemptRecord = {
+            attempt,
+            status: "FAILED_PUBLISH",
+            reason: errorMessage(error),
+            patchHash: guarded.patchHash,
+            changedPaths: guarded.changedPaths,
+          };
+          attempts.push(attemptRecord);
+          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+          finalRecord = { sectionId, ...attemptRecord, attempts };
+          break;
+        }
+      } finally {
+        await worktree.cleanup();
       }
-      records.push({
-        sectionId,
-        status: pull.reused ? "PR_REUSED" : "PR_CREATED",
-        reason: pull.reused ? "Reused the existing idempotent draft PR." : "Created a verified draft PR.",
-        patchHash: guarded.patchHash,
-        changedPaths: guarded.changedPaths,
-        pullRequest: { number: pull.number, url: pull.url, branch: pull.branch },
-      });
-    } finally {
-      await worktree.cleanup();
     }
+
+    records.push(finalRecord ?? {
+      sectionId,
+      status: "BLOCKED_MODEL",
+      reason: "Patch candidate generation ended without a terminal result.",
+      attempts,
+    });
   }
   return { records, patchCalls, reauditCalls };
 }

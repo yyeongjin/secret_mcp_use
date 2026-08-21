@@ -21,13 +21,17 @@ export interface GuardedPatch {
   patchHash: Sha256;
 }
 
-export function isRepairablePatchFormatError(error: unknown): boolean {
+export function isRetryablePatchCandidateError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  if (message === "Malformed unified diff file headers.") return true;
-  if (!message.includes("git apply --check")) return false;
-  return /(?:corrupt patch|patch fragment without header|malformed patch|unexpected end of file|unrecognized input|No valid patches in input|patch failed:|patch does not apply)/i.test(
-    message,
-  );
+  if (
+    message === "Malformed unified diff file headers." ||
+    message === "Patch contains no changed files." ||
+    message === "Patch writeSet does not exactly match unified diff paths." ||
+    message.startsWith("Stale or incorrect base hash for ")
+  ) {
+    return true;
+  }
+  return message.includes("git apply --check");
 }
 
 export function normalizeUnifiedDiffMechanics(diff: string): string {

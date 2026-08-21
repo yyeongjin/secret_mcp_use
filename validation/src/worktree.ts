@@ -52,13 +52,15 @@ export async function verifyPatchedWorktree(
     NVIDIA_MOCK_VALID_PATCH_SECTIONS: "",
     NVIDIA_MOCK_MALFORMED_PATCH_SECTIONS: "",
     NVIDIA_MOCK_INVALID_PATCH_SECTIONS: "",
+    NVIDIA_MOCK_FAIL_FIRST_REAUDIT_SECTIONS: "",
+    PIPELINE_FORCE_FULL_AUDIT: "false",
   };
   const typecheck = await runCommand("npm", ["run", "typecheck"], {
-    cwd: config.repositoryRoot,
+    cwd: worktreePath,
     env: verificationEnv,
   });
   const tests = await runCommand("npm", ["test"], {
-    cwd: config.repositoryRoot,
+    cwd: worktreePath,
     env: verificationEnv,
   });
   const frontend = await runCommand("npm", ["run", "test:frontend"], {

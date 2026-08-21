@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   inspectUnifiedDiff,
-  isRepairablePatchFormatError,
+  isRetryablePatchCandidateError,
   normalizeUnifiedDiffMechanics,
 } from "../src/patch.ts";
 
@@ -41,31 +41,42 @@ test("file deletion and path traversal are rejected", () => {
   );
 });
 
-test("only mechanical unified-diff failures qualify for one-shot repair", () => {
+test("only bounded candidate failures qualify for isolated retry", () => {
   assert.equal(
-    isRepairablePatchFormatError(new Error("Malformed unified diff file headers.")),
+    isRetryablePatchCandidateError(new Error("Malformed unified diff file headers.")),
     true,
   );
   assert.equal(
-    isRepairablePatchFormatError(
+    isRetryablePatchCandidateError(
       new Error("git apply --check patch.diff failed with 128: error: corrupt patch at line 9"),
     ),
     true,
   );
   assert.equal(
-    isRepairablePatchFormatError(
+    isRetryablePatchCandidateError(
       new Error("git apply --check patch.diff failed with 1: error: patch failed: frontend/app.js:1"),
     ),
     true,
   );
   assert.equal(
-    isRepairablePatchFormatError(
+    isRetryablePatchCandidateError(
       new Error("git apply --check patch.diff failed with 1: error: frontend/app.js: patch does not apply"),
     ),
     true,
   );
-  assert.equal(isRepairablePatchFormatError(new Error("Unsafe diff path: ../trigger/a.md")), false);
-  assert.equal(isRepairablePatchFormatError(new Error("Stale or incorrect base hash")), false);
+  assert.equal(
+    isRetryablePatchCandidateError(new Error("Patch writeSet does not exactly match unified diff paths.")),
+    true,
+  );
+  assert.equal(
+    isRetryablePatchCandidateError(new Error("Stale or incorrect base hash for frontend/app.js.")),
+    true,
+  );
+  assert.equal(isRetryablePatchCandidateError(new Error("Unsafe diff path: ../trigger/a.md")), false);
+  assert.equal(
+    isRetryablePatchCandidateError(new Error("S15 does not own frontend/styles.css.")),
+    false,
+  );
 });
 
 test("mechanical normalization fixes hunk counts and removes context-only hunks", () => {
