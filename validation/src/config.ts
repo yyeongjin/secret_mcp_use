@@ -118,6 +118,7 @@ export async function loadConfig(argv = process.argv.slice(2)): Promise<Pipeline
       apiUrl: process.env.GITHUB_API_URL ?? "https://api.github.com",
       serverUrl: process.env.GITHUB_SERVER_URL ?? "https://github.com",
       actor: process.env.GITHUB_ACTOR ?? "secret-mcp-validation[bot]",
+      baseBranch: process.env.PIPELINE_PR_BASE_BRANCH ?? process.env.GITHUB_REF_NAME ?? "main",
     },
   };
 }

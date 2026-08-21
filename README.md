@@ -142,6 +142,7 @@ Manual inputs have the following meaning:
 - `force_full_audit`: ignores valid PASS cache and sends all 19 audit requests.
 - `dry_run`: applies a proposed diff only in an isolated temporary worktree and never publishes it.
 - `create_prs`: after every guard, browser test, and patched-code re-audit passes, publishes an idempotent draft PR. This requires `dry_run=false`.
+- A published PR targets the branch/ref that ran the workflow. A `main` push therefore targets `main`, while an explicitly dispatched validation branch can test publication without modifying `main`.
 
 The end-to-end order is fixed:
 

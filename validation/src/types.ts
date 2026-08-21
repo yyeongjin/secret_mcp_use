@@ -257,5 +257,6 @@ export interface PipelineConfig {
     apiUrl: string;
     serverUrl: string;
     actor: string;
+    baseBranch: string;
   };
 }

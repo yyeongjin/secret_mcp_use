@@ -68,6 +68,7 @@ jobs:
       PIPELINE_DRY_RUN: ${{ vars.PIPELINE_DRY_RUN || 'true' }}
       PIPELINE_CREATE_PRS: ${{ vars.PIPELINE_CREATE_PRS || 'false' }}
       PIPELINE_PATCH_ATTEMPTS: ${{ vars.PIPELINE_PATCH_ATTEMPTS || '5' }}
+      PIPELINE_PR_BASE_BRANCH: ${{ github.ref_name }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:

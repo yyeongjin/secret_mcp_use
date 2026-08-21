@@ -144,7 +144,7 @@ export async function publishPatchPullRequest(args: {
     args.config,
     "POST",
     `/repos/${args.config.repository}/pulls`,
-    { title, head: branch, base: "main", body, draft: true },
+    { title, head: branch, base: args.config.github.baseBranch, body, draft: true },
   );
   return { branch, number: pull.number, url: pull.html_url, reused: false };
 }

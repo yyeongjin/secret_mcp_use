@@ -142,6 +142,7 @@ Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마
 - `force_full_audit`: 유효한 PASS cache를 무시하고 audit 요청 19개를 모두 전송합니다.
 - `dry_run`: 제안 diff를 격리된 임시 worktree에만 적용하고 게시하지 않습니다.
 - `create_prs`: 모든 guard, 브라우저 테스트와 수정 코드 재감사를 통과한 뒤 멱등적인 draft PR을 게시합니다. 이때 `dry_run=false`여야 합니다.
+- 게시 PR은 workflow를 실행한 branch/ref를 대상으로 합니다. 따라서 `main` push는 `main`을 대상으로 하고, 명시적으로 dispatch한 검증 branch에서는 `main`을 변경하지 않고 게시를 시험할 수 있습니다.
 
 end-to-end 순서는 다음으로 고정합니다.
 
