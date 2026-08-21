@@ -5,6 +5,7 @@ import {
   inspectUnifiedDiff,
   isRetryablePatchCandidateError,
   normalizeUnifiedDiffMechanics,
+  relocateUnifiedDiffHunks,
 } from "../src/patch.ts";
 import type { NodeAuditInput, NodeAuditOutput, Sha256 } from "../src/types.ts";
 
@@ -147,6 +148,62 @@ test("mechanical normalization rejects a patch containing only no-op replacement
     "",
   ].join("\n"));
   assert.equal(normalized, "");
+});
+
+test("relocates a uniquely matching hunk without changing model-authored lines", () => {
+  const diff = [
+    "diff --git a/frontend/styles.css b/frontend/styles.css",
+    "--- a/frontend/styles.css",
+    "+++ b/frontend/styles.css",
+    "@@ -1,2 +1,3 @@",
+    "   :root {",
+    "+  --color-success: #1B7F4B;",
+    "   }",
+    "",
+  ].join("\n");
+  const relocated = relocateUnifiedDiffHunks(diff, new Map([
+    ["frontend/styles.css", "@layer tokens {\n  :root {\n  }\n}\n"],
+  ]));
+  assert.match(relocated, /@@ -2,2 \+2,3 @@/);
+  assert.match(relocated, /\+  --color-success: #1B7F4B;/);
+});
+
+test("does not guess a hunk location when base context is ambiguous", () => {
+  const diff = [
+    "diff --git a/frontend/styles.css b/frontend/styles.css",
+    "--- a/frontend/styles.css",
+    "+++ b/frontend/styles.css",
+    "@@ -9,1 +9,2 @@",
+    " .item {}",
+    "+.new {}",
+    "",
+  ].join("\n");
+  const relocated = relocateUnifiedDiffHunks(diff, new Map([
+    ["frontend/styles.css", ".item {}\n.item {}\n"],
+  ]));
+  assert.match(relocated, /@@ -9,1 \+9,2 @@/);
+});
+
+test("repairs a bare hunk header and source-only context whitespace", () => {
+  const raw = [
+    "diff --git a/frontend/styles.css b/frontend/styles.css",
+    "--- a/frontend/styles.css",
+    "+++ b/frontend/styles.css",
+    "@@",
+    "@@",
+    " :root {",
+    "     --color-black: #000;",
+    "+    --color-success: #1B7F4B;",
+    "   }",
+    "",
+  ].join("\n");
+  const normalized = normalizeUnifiedDiffMechanics(raw);
+  const relocated = relocateUnifiedDiffHunks(normalized, new Map([
+    ["frontend/styles.css", "@layer tokens {\n  :root {\n    --color-black: #000;\n  }\n}\n"],
+  ]));
+  assert.match(relocated, /@@ -2,3 \+2,4 @@/);
+  assert.match(relocated, /\n   :root \{\n/);
+  assert.match(relocated, /\+    --color-success: #1B7F4B;/);
 });
 
 test("patch metadata is derived from the isolated audit input", () => {

@@ -153,6 +153,7 @@ end-to-end 순서는 다음으로 고정합니다.
   -> 결정적 코드로 JSON 출력 병합
   -> 근거가 있는 PATCH_REQUIRED 노드만 별도 patch 요청 전송
   -> 같은 Section 안에서 서로 다른 seed의 후보를 PIPELINE_PATCH_ATTEMPTS 횟수까지 시도
+  -> old-side context가 원본 파일의 한 위치에만 매칭될 때 diff 기계 요소만 복구
   -> trigger/spec 쓰기, 오래된 hash, 과도한 diff와 소유권 위반 거부
   -> 후보마다 변경되지 않은 원본에서 별도 임시 worktree에 적용
   -> 후보마다 typecheck, 단위 테스트, 데스크톱·모바일 렌더링, 접근성 검사

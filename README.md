@@ -153,6 +153,7 @@ parse current Specification and trigger
   -> merge JSON outputs with deterministic code
   -> send a separate patch request only for grounded PATCH_REQUIRED nodes
   -> try at most PIPELINE_PATCH_ATTEMPTS independently seeded candidates inside that Section
+  -> repair only diff mechanics when old-side context maps to one unique base-file location
   -> reject trigger/spec writes, stale hashes, excessive diffs, and ownership violations
   -> apply each candidate from the unchanged base in its own temporary worktree
   -> type-check, unit-test, render desktop/mobile, and check accessibility per candidate

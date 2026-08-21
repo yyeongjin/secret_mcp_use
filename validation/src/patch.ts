@@ -78,17 +78,24 @@ export function normalizeUnifiedDiffMechanics(diff: string): string {
 
   for (let index = 0; index < lines.length;) {
     const line = lines[index];
-    if (!line.startsWith("@@ ")) {
+    const bareHunkHeader = line.trim() === "@@";
+    if (!line.startsWith("@@ ") && !bareHunkHeader) {
       normalized.push(line);
       index += 1;
       continue;
     }
 
     const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(line);
-    if (!header) return diff;
+    if (!header && !bareHunkHeader) return diff;
+    while (bareHunkHeader && lines[index + 1]?.trim() === "@@") index += 1;
     index += 1;
     const body: string[] = [];
-    while (index < lines.length && !lines[index].startsWith("@@ ") && !lines[index].startsWith("diff --git ")) {
+    while (
+      index < lines.length &&
+      !lines[index].startsWith("@@ ") &&
+      lines[index].trim() !== "@@" &&
+      !lines[index].startsWith("diff --git ")
+    ) {
       if (lines[index].startsWith("--- ") && lines[index + 1]?.startsWith("+++ ")) break;
       const bodyLine = lines[index] === "" ? " " : lines[index];
       if (!/^[ +\\-]/.test(bodyLine) && bodyLine !== "\\ No newline at end of file") return diff;
@@ -131,13 +138,85 @@ export function normalizeUnifiedDiffMechanics(diff: string): string {
       (bodyLine) => bodyLine.startsWith(" ") || bodyLine.startsWith("+"),
     ).length;
     normalized.push(
-      `@@ -${header[1]},${oldCount} +${header[2]},${newCount} @@${header[3]}`,
+      `@@ -${header?.[1] ?? "1"},${oldCount} +${header?.[2] ?? "1"},${newCount} @@${header?.[3] ?? ""}`,
       ...meaningfulBody,
     );
     changedHunks += 1;
   }
 
   return changedHunks > 0 ? `${normalized.join("\n")}\n` : "";
+}
+
+export function relocateUnifiedDiffHunks(
+  diff: string,
+  baseFiles: ReadonlyMap<string, string>,
+): string {
+  const lines = diff.replaceAll("\r\n", "\n").split("\n");
+  let currentPath: string | null = null;
+  let sourceLines: string[] = [];
+  let cumulativeDelta = 0;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const fileHeader = /^diff --git (\S+) (\S+)$/.exec(lines[index]);
+    if (fileHeader) {
+      currentPath = normalizedDiffPath(fileHeader[2]) ?? normalizedDiffPath(fileHeader[1]);
+      const source = currentPath ? baseFiles.get(currentPath) : undefined;
+      sourceLines = source === undefined ? [] : source.replaceAll("\r\n", "\n").split("\n");
+      cumulativeDelta = 0;
+      continue;
+    }
+
+    const header = /^@@ -(\d+),(\d+) \+(\d+),(\d+) @@(.*)$/.exec(lines[index]);
+    if (!header || !currentPath || sourceLines.length === 0) continue;
+    const body: Array<{ lineIndex: number; text: string }> = [];
+    let cursor = index + 1;
+    while (cursor < lines.length && !lines[cursor].startsWith("@@ ") && !lines[cursor].startsWith("diff --git ")) {
+      if (lines[cursor].startsWith("--- ") && lines[cursor + 1]?.startsWith("+++ ")) break;
+      if (lines[cursor] !== "\\ No newline at end of file") {
+        body.push({ lineIndex: cursor, text: lines[cursor] });
+      }
+      cursor += 1;
+    }
+    const oldLines = body
+      .filter(({ text }) => text.startsWith(" ") || text.startsWith("-"))
+      .map(({ text }) => text.slice(1));
+    if (oldLines.length === 0) continue;
+
+    const findMatches = (whitespaceInsensitive: boolean): number[] => {
+      const matches: number[] = [];
+      for (let start = 0; start + oldLines.length <= sourceLines.length; start += 1) {
+        const matchesAtStart = oldLines.every((line, offset) => (
+          whitespaceInsensitive
+            ? sourceLines[start + offset].trim() === line.trim()
+            : sourceLines[start + offset] === line
+        ));
+        if (matchesAtStart) matches.push(start);
+      }
+      return matches;
+    };
+    let matches = findMatches(false);
+    let restoreSourceWhitespace = false;
+    if (matches.length === 0) {
+      matches = findMatches(true);
+      restoreSourceWhitespace = matches.length === 1;
+    }
+    if (matches.length !== 1) continue;
+
+    const oldStart = matches[0] + 1;
+    const newStart = oldStart + cumulativeDelta;
+    lines[index] = `@@ -${oldStart},${header[2]} +${newStart},${header[4]} @@${header[5]}`;
+    if (restoreSourceWhitespace) {
+      let oldOffset = 0;
+      for (const entry of body) {
+        if (!entry.text.startsWith(" ") && !entry.text.startsWith("-")) continue;
+        lines[entry.lineIndex] = `${entry.text[0]}${sourceLines[matches[0] + oldOffset]}`;
+        oldOffset += 1;
+      }
+    }
+    cumulativeDelta += Number(header[4]) - Number(header[2]);
+  }
+
+  return lines.join("\n");
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -166,9 +245,16 @@ export function canonicalizePatchOutput(args: {
     throw new Error(`Unsupported patch status: ${String(status)}.`);
   }
 
-  const rawDiff = typeof source.diff === "string" ? source.diff : "";
-  const diff = status === "PATCH" ? normalizeUnifiedDiffMechanics(rawDiff) : rawDiff;
   const fileByPath = new Map(args.auditInput.implementation.files.map((file) => [file.path, file]));
+  const baseTextByPath = new Map(
+    args.auditInput.implementation.files.flatMap((file) => (
+      file.content === null ? [] : [[file.path, file.content] as const]
+    )),
+  );
+  const rawDiff = typeof source.diff === "string" ? source.diff : "";
+  const diff = status === "PATCH"
+    ? relocateUnifiedDiffHunks(normalizeUnifiedDiffMechanics(rawDiff), baseTextByPath)
+    : rawDiff;
   let changedPaths: string[] = [];
   if (status === "PATCH" && diff.trim() !== "") {
     changedPaths = inspectUnifiedDiff(diff).changedPaths;
