@@ -20,6 +20,7 @@ import {
 import {
   guardPatch,
   isRepairablePatchFormatError,
+  normalizeUnifiedDiffMechanics,
   type GuardedPatch,
 } from "./patch.ts";
 import {
@@ -357,6 +358,14 @@ async function runPatches(args: {
       records.push({ sectionId, status: "BLOCKED_MODEL", reason: patchOutput.reason });
       continue;
     }
+    const normalizedInitialDiff = normalizeUnifiedDiffMechanics(patchOutput.diff);
+    if (normalizedInitialDiff !== patchOutput.diff) {
+      patchOutput = { ...patchOutput, diff: normalizedInitialDiff };
+      await writeJson(
+        path.join(scratchDirectory, sectionId, "patch-normalized-output.json"),
+        patchOutput,
+      );
+    }
 
     let guarded: GuardedPatch;
     try {
@@ -422,6 +431,14 @@ async function runPatches(args: {
           reason: `Unified-diff syntax repair declined: ${repairOutput.reason}`,
         });
         continue;
+      }
+      const normalizedRepairDiff = normalizeUnifiedDiffMechanics(repairOutput.diff);
+      if (normalizedRepairDiff !== repairOutput.diff) {
+        repairOutput = { ...repairOutput, diff: normalizedRepairDiff };
+        await writeJson(
+          path.join(scratchDirectory, sectionId, "patch-repair-normalized-output.json"),
+          repairOutput,
+        );
       }
       patchOutput = repairOutput;
       try {

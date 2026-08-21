@@ -30,6 +30,48 @@ export function isRepairablePatchFormatError(error: unknown): boolean {
   );
 }
 
+export function normalizeUnifiedDiffMechanics(diff: string): string {
+  const lines = diff.replaceAll("\r\n", "\n").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  const normalized: string[] = [];
+  let changedHunks = 0;
+
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index];
+    if (line.startsWith("index ")) {
+      index += 1;
+      continue;
+    }
+    if (!line.startsWith("@@ ")) {
+      normalized.push(line);
+      index += 1;
+      continue;
+    }
+
+    const header = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(line);
+    if (!header) return diff;
+    index += 1;
+    const body: string[] = [];
+    while (index < lines.length && !lines[index].startsWith("@@ ") && !lines[index].startsWith("diff --git ")) {
+      if (lines[index].startsWith("--- ") && lines[index + 1]?.startsWith("+++ ")) break;
+      const bodyLine = lines[index] === "" ? " " : lines[index];
+      if (!/^[ +\\-]/.test(bodyLine) && bodyLine !== "\\ No newline at end of file") return diff;
+      body.push(bodyLine);
+      index += 1;
+    }
+
+    const additions = body.filter((bodyLine) => bodyLine.startsWith("+")).length;
+    const deletions = body.filter((bodyLine) => bodyLine.startsWith("-")).length;
+    if (additions === 0 && deletions === 0) continue;
+    const oldCount = body.filter((bodyLine) => bodyLine.startsWith(" ") || bodyLine.startsWith("-")).length;
+    const newCount = body.filter((bodyLine) => bodyLine.startsWith(" ") || bodyLine.startsWith("+")).length;
+    normalized.push(`@@ -${header[1]},${oldCount} +${header[2]},${newCount} @@${header[3]}`, ...body);
+    changedHunks += 1;
+  }
+
+  return changedHunks > 0 ? `${normalized.join("\n")}\n` : diff;
+}
+
 async function exists(pathname: string): Promise<boolean> {
   try {
     await access(pathname);

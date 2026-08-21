@@ -135,6 +135,7 @@ export function validatorContractHash(
 export function modelContractHash(config: PipelineConfig): Sha256 {
   return hashJson({
     provider: "nvidia",
+    seedPolicy: "fingerprint-and-request-id/v2",
     baseUrl: config.nvidia.baseUrl,
     model: config.nvidia.model,
     contextWindowTokens: config.nvidia.contextWindowTokens,

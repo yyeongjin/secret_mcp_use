@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { inspectUnifiedDiff, isRepairablePatchFormatError } from "../src/patch.ts";
+import {
+  inspectUnifiedDiff,
+  isRepairablePatchFormatError,
+  normalizeUnifiedDiffMechanics,
+} from "../src/patch.ts";
 
 test("unified diff inspection returns exact frontend write paths", () => {
   const result = inspectUnifiedDiff([
@@ -62,4 +66,33 @@ test("only mechanical unified-diff failures qualify for one-shot repair", () => 
   );
   assert.equal(isRepairablePatchFormatError(new Error("Unsafe diff path: ../trigger/a.md")), false);
   assert.equal(isRepairablePatchFormatError(new Error("Stale or incorrect base hash")), false);
+});
+
+test("mechanical normalization fixes hunk counts and removes context-only hunks", () => {
+  const normalized = normalizeUnifiedDiffMechanics([
+    "diff --git a/frontend/styles.css b/frontend/styles.css",
+    "index old..new 100644",
+    "--- a/frontend/styles.css",
+    "+++ b/frontend/styles.css",
+    "@@ -1,1 +1,1 @@",
+    " :root {",
+    "+  --color-focus: #4169f5;",
+    " }",
+    "@@ -20,2 +21,2 @@",
+    " .unchanged {",
+    "",
+    " }",
+    "",
+  ].join("\n"));
+
+  assert.equal(normalized, [
+    "diff --git a/frontend/styles.css b/frontend/styles.css",
+    "--- a/frontend/styles.css",
+    "+++ b/frontend/styles.css",
+    "@@ -1,2 +1,3 @@",
+    " :root {",
+    "+  --color-focus: #4169f5;",
+    " }",
+    "",
+  ].join("\n"));
 });

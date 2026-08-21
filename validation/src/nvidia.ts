@@ -29,6 +29,10 @@ export interface CompletionResult {
   warning?: string;
 }
 
+export function completionSeed(fingerprint: Sha256, requestId: string): number {
+  return Number.parseInt(hashHex(sha256(`${fingerprint}\0${requestId}`)).slice(0, 8), 16);
+}
+
 class StartRateLimiter {
   private nextStart = 0;
   private chain = Promise.resolve();
@@ -411,7 +415,7 @@ export class NvidiaClient {
 
     await this.limiter.wait();
     const endpoint = `${this.config.nvidia.baseUrl.replace(/\/$/, "")}/chat/completions`;
-    const seed = Number.parseInt(hashHex(args.fingerprint).slice(0, 8), 16);
+    const seed = completionSeed(args.fingerprint, args.requestId);
     const body = {
       model: this.config.nvidia.model,
       messages: [

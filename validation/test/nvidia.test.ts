@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   bindOutputSchema,
+  completionSeed,
   normalizeCompletionOutput,
   parseJsonContent,
   quarantineAuditOutput,
@@ -168,4 +169,13 @@ test("downgrades an ungrounded PATCH_REQUIRED envelope to UNKNOWN", () => {
   }, sectionId, fingerprint) as { status: string; findings: unknown[] };
   assert.equal(normalized.status, "UNKNOWN");
   assert.equal(normalized.findings.length, 1);
+});
+
+test("patch repair receives a deterministic seed distinct from the initial patch", () => {
+  const fingerprint = `sha256:${"a".repeat(64)}` as const;
+  assert.equal(completionSeed(fingerprint, "run:patch:S09"), completionSeed(fingerprint, "run:patch:S09"));
+  assert.notEqual(
+    completionSeed(fingerprint, "run:patch:S09"),
+    completionSeed(fingerprint, "run:patch:S09:repair:1"),
+  );
 });
