@@ -29,6 +29,7 @@ interface NodeCheckSummary {
   fingerprint: string | null;
   auditStatus: string;
   executionState: string;
+  auditAttempts: number;
   requirementIds: string[];
   patch: {
     status: string;
@@ -130,6 +131,7 @@ export async function publishNodeCheckRuns(args: {
         `- Trigger: \`${summary.triggerPath}\``,
         `- Audit status: \`${node.auditStatus}\``,
         `- Execution state: \`${node.executionState}\``,
+        `- Provider audit calls: \`${node.auditAttempts}\``,
         `- Patch status: \`${node.patch?.status ?? "NOT_RUN"}\``,
         `- Fingerprint: \`${node.fingerprint ?? "unavailable"}\``,
         `- Requirement IDs: ${requirements}`,

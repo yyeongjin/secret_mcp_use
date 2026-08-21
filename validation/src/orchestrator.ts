@@ -66,6 +66,7 @@ interface AuditCallSuccess {
   sectionId: SectionId;
   completion: CompletionResult;
   output: NodeAuditOutput;
+  attempts: AuditCallAttempt[];
 }
 
 interface AuditCallFailure {
@@ -73,9 +74,18 @@ interface AuditCallFailure {
   sectionId: SectionId;
   error: string;
   completion?: CompletionResult;
+  attempts: AuditCallAttempt[];
 }
 
 type AuditCallResult = AuditCallSuccess | AuditCallFailure;
+
+interface AuditCallAttempt {
+  attempt: number;
+  requestId: string;
+  completion?: CompletionResult;
+  output?: NodeAuditOutput;
+  error?: string;
+}
 
 interface PatchAttemptRecord {
   attempt: number;
@@ -123,6 +133,7 @@ export interface NodeRunSummary {
   fingerprint: string | null;
   auditStatus: NodeAuditOutput["status"] | "FAILED_SCHEMA";
   executionState: string;
+  auditAttempts: number;
   requirementIds: string[];
   patch: PatchRecord | null;
 }
@@ -135,6 +146,7 @@ export interface WorkRunSummary {
   expectedSections: number;
   cachedPasses: number;
   auditCalls: number;
+  auditRequests: number;
   patchCalls: number;
   reauditCalls: number;
   statusCounts: Record<string, number>;
@@ -227,6 +239,7 @@ function buildNodeRunSummaries(args: {
   inputs: Map<SectionId, NodeAuditInput>;
   outputs: NodeAuditOutput[];
   nodeStates: Array<{ sectionId: SectionId; state: string }>;
+  auditAttempts: Map<SectionId, number>;
   patches: PatchRecord[];
 }): NodeRunSummary[] {
   const outputs = new Map(args.outputs.map((output) => [output.sectionId, output]));
@@ -241,6 +254,7 @@ function buildNodeRunSummaries(args: {
       fingerprint: input?.node.fingerprint ?? null,
       auditStatus: output?.status ?? "FAILED_SCHEMA",
       executionState: states.get(sectionId) ?? "FAILED_SCHEMA",
+      auditAttempts: args.auditAttempts.get(sectionId) ?? 0,
       requirementIds: output?.findings.map((finding) => finding.requirementId) ?? [],
       patch: patches.get(sectionId) ?? null,
     };
@@ -337,63 +351,83 @@ async function writeGapReport(
   await writeFile(pathname, `${lines.join("\n")}\n`, "utf8");
 }
 
-async function callAudit(args: {
+export async function callAudit(args: {
   client: NvidiaClient;
   input: NodeAuditInput;
   kind: "audit" | "reaudit";
   requestId: string;
+  maxAttempts: number;
   validate: Parameters<typeof assertAuditOutput>[0];
   outputSchema: JsonSchema;
   systemPrompt?: string;
   userPrompt?: string;
 }): Promise<AuditCallResult> {
   const sectionId = args.input.node.sectionId;
-  let completion: CompletionResult;
-  try {
-    completion = await args.client.completeJson({
-      kind: args.kind,
-      sectionId,
-      fingerprint: args.input.node.fingerprint,
-      requestId: args.requestId,
-      systemPrompt: args.systemPrompt ?? AUDIT_SYSTEM_PROMPT,
-      userPrompt: args.userPrompt ?? auditUserPrompt(args.input),
-      outputSchema: args.outputSchema,
-    });
-  } catch (error) {
-    return { ok: false, sectionId, error: errorMessage(error) };
-  }
-  try {
-    assertAuditOutput(
-      args.validate,
-      completion.parsed,
-      sectionId,
-      args.input.node.fingerprint,
-    );
-    const grounded = enforcePatchGrounding(args.input, completion.parsed);
-    assertAuditOutput(args.validate, grounded.output, sectionId, args.input.node.fingerprint);
-    return {
-      ok: true,
-      sectionId,
-      completion: grounded.warning
+  const attempts: AuditCallAttempt[] = [];
+  let lastError = "Audit ended without a provider result.";
+  for (let attempt = 1; attempt <= args.maxAttempts; attempt += 1) {
+    const requestId = attempt === 1 ? args.requestId : `${args.requestId}:retry:${attempt}`;
+    let completion: CompletionResult;
+    try {
+      completion = await args.client.completeJson({
+        kind: args.kind,
+        sectionId,
+        fingerprint: args.input.node.fingerprint,
+        requestId,
+        systemPrompt: args.systemPrompt ?? AUDIT_SYSTEM_PROMPT,
+        userPrompt: args.userPrompt ?? auditUserPrompt(args.input),
+        outputSchema: args.outputSchema,
+      });
+    } catch (error) {
+      lastError = errorMessage(error);
+      attempts.push({ attempt, requestId, error: lastError });
+      if (attempt < args.maxAttempts) continue;
+      return { ok: false, sectionId, error: lastError, attempts };
+    }
+
+    let output: NodeAuditOutput;
+    let validatedCompletion: CompletionResult;
+    try {
+      assertAuditOutput(
+        args.validate,
+        completion.parsed,
+        sectionId,
+        args.input.node.fingerprint,
+      );
+      const grounded = enforcePatchGrounding(args.input, completion.parsed);
+      assertAuditOutput(args.validate, grounded.output, sectionId, args.input.node.fingerprint);
+      output = grounded.output;
+      validatedCompletion = grounded.warning
         ? {
           ...completion,
           parsed: grounded.output,
           warning: [completion.warning, grounded.warning].filter(Boolean).join(" "),
         }
-        : completion,
-      output: grounded.output,
-    };
-  } catch (error) {
-    const warning = `${errorMessage(error)} The response was quarantined as UNKNOWN.`;
-    const output = quarantineAuditOutput(sectionId, args.input.node.fingerprint);
-    assertAuditOutput(args.validate, output, sectionId, args.input.node.fingerprint);
+        : completion;
+    } catch (error) {
+      const warning = `${errorMessage(error)} The response was quarantined as UNKNOWN.`;
+      output = quarantineAuditOutput(sectionId, args.input.node.fingerprint) as NodeAuditOutput;
+      assertAuditOutput(args.validate, output, sectionId, args.input.node.fingerprint);
+      validatedCompletion = { ...completion, parsed: output, warning };
+    }
+
+    attempts.push({
+      attempt,
+      requestId,
+      completion: validatedCompletion,
+      output,
+    });
+    const retryableQuarantine = output.status === "UNKNOWN" && Boolean(validatedCompletion.warning);
+    if (retryableQuarantine && attempt < args.maxAttempts) continue;
     return {
       ok: true,
       sectionId,
-      completion: { ...completion, parsed: output, warning },
+      completion: validatedCompletion,
       output,
+      attempts,
     };
   }
+  return { ok: false, sectionId, error: lastError, attempts };
 }
 
 async function saveAuditCall(
@@ -404,6 +438,21 @@ async function saveAuditCall(
   const nodeDirectory = path.join(nodesDirectory, input.node.sectionId);
   await mkdir(nodeDirectory, { recursive: true });
   await writeJson(path.join(nodeDirectory, "audit-input.json"), input);
+  for (const attempt of result.attempts) {
+    const attemptDirectory = path.join(nodeDirectory, "audit-attempts", `attempt-${attempt.attempt}`);
+    await writeJson(path.join(attemptDirectory, "attempt.json"), {
+      attempt: attempt.attempt,
+      requestId: attempt.requestId,
+      status: attempt.error ? "FAILED" : "COMPLETED",
+      outputStatus: attempt.output?.status ?? null,
+      warning: attempt.completion?.warning ?? null,
+      error: attempt.error ?? null,
+    });
+    if (attempt.completion) {
+      await writeJson(path.join(attemptDirectory, "api-response.json"), attempt.completion.raw);
+      await writeJson(path.join(attemptDirectory, "audit-output.json"), attempt.output);
+    }
+  }
   if (result.ok) {
     await writeJson(path.join(nodeDirectory, "api-response.json"), result.completion.raw);
     await writeJson(path.join(nodeDirectory, "audit-output.json"), result.output);
@@ -767,15 +816,16 @@ async function runPatches(args: {
         });
         const nextInput = nextInputs.get(sectionId);
         if (!nextInput) throw new Error(`Patched input is missing ${sectionId}.`);
-        reauditCalls += 1;
         const reaudit = await callAudit({
           client: args.client,
           input: nextInput,
           kind: "reaudit",
           requestId: `${args.runId}:reaudit:${sectionId}:attempt:${attempt}`,
+          maxAttempts: args.config.auditAttempts,
           validate: args.validateAudit,
           outputSchema: args.auditOutputSchema,
         });
+        reauditCalls += reaudit.attempts.length;
         await saveAuditCall(path.join(attemptDirectory, "reaudit"), nextInput, reaudit);
         if (!reaudit.ok || reaudit.output.status !== "PASS") {
           const reason = reaudit.ok ? `Patched code remained ${reaudit.output.status}.` : reaudit.error;
@@ -818,6 +868,7 @@ async function runPatches(args: {
                 ok: false,
                 sectionId: regressionSectionId,
                 error: `Patched regression input is missing ${regressionSectionId}.`,
+                attempts: [],
               };
             }
             const result = await callAudit({
@@ -825,6 +876,7 @@ async function runPatches(args: {
               input: regressionInput,
               kind: "reaudit",
               requestId: `${args.runId}:regression:${sectionId}:attempt:${attempt}:${regressionSectionId}`,
+              maxAttempts: args.config.auditAttempts,
               validate: args.validateAudit,
               outputSchema: args.auditOutputSchema,
               systemPrompt: REGRESSION_AUDIT_SYSTEM_PROMPT,
@@ -846,7 +898,7 @@ async function runPatches(args: {
             return result;
           },
         );
-        reauditCalls += regressionResults.length;
+        reauditCalls += regressionResults.reduce((count, result) => count + result.attempts.length, 0);
         const regressionFailures = regressionResults.filter(
           (result) => !result.ok || result.output.status !== "PASS",
         );
@@ -1121,7 +1173,7 @@ async function runTrigger(args: {
 
   const executeAudit = async (sectionId: SectionId): Promise<AuditCallResult> => {
     const scheduledInput = inputs.get(sectionId);
-    if (!scheduledInput) return { ok: false, sectionId, error: `Missing ${sectionId} input.` };
+    if (!scheduledInput) return { ok: false, sectionId, error: `Missing ${sectionId} input.`, attempts: [] };
     let workspace: Awaited<ReturnType<typeof isolatedAuditInput>> | undefined;
     try {
       workspace = await isolatedAuditInput({
@@ -1140,13 +1192,14 @@ async function runTrigger(args: {
         input: workspace.input,
         kind: "audit",
         requestId: `${runId}:audit:${sectionId}`,
+        maxAttempts: args.config.auditAttempts,
         validate: args.validators.audit,
         outputSchema: args.validators.auditSchema,
       });
       await saveAuditCall(nodesDirectory, workspace.input, result);
       return result;
     } catch (error) {
-      const result: AuditCallFailure = { ok: false, sectionId, error: errorMessage(error) };
+      const result: AuditCallFailure = { ok: false, sectionId, error: errorMessage(error), attempts: [] };
       await saveAuditCall(nodesDirectory, scheduledInput, result);
       return result;
     } finally {
@@ -1269,7 +1322,8 @@ async function runTrigger(args: {
       mode,
       expectedSections: 19,
       cachedPasses: cached.size,
-      auditCalls: callResults.length,
+      auditRequests: callResults.length,
+      auditCalls: callResults.reduce((count, result) => count + result.attempts.length, 0),
       patchCalls: 0,
       reauditCalls: 0,
       statusCounts: countStatuses(orderedOutputs.map((output) => output.status)),
@@ -1279,6 +1333,7 @@ async function runTrigger(args: {
         inputs,
         outputs: orderedOutputs,
         nodeStates,
+        auditAttempts: new Map(callResults.map((result) => [result.sectionId, result.attempts.length])),
         patches,
       }),
       patches,
@@ -1330,7 +1385,8 @@ async function runTrigger(args: {
     mode,
     expectedSections: 19,
     cachedPasses: cached.size,
-    auditCalls: callResults.length,
+    auditRequests: callResults.length,
+    auditCalls: callResults.reduce((count, result) => count + result.attempts.length, 0),
     patchCalls: patchResult.patchCalls,
     reauditCalls: patchResult.reauditCalls,
     statusCounts: countStatuses(orderedOutputs.map((output) => output.status)),
@@ -1340,14 +1396,19 @@ async function runTrigger(args: {
       inputs,
       outputs: orderedOutputs,
       nodeStates,
+      auditAttempts: new Map(callResults.map((result) => [result.sectionId, result.attempts.length])),
       patches: patchResult.records,
     }),
     patches: patchResult.records,
     blocked: blockedNodes(orderedOutputs),
     errors: [
-      ...orderedOutputs
-        .filter((output) => output.status === "UNKNOWN")
-        .map((output) => `${output.sectionId}: audit response was quarantined as UNKNOWN.`),
+      ...callResults
+        .filter((result): result is AuditCallSuccess => (
+          result.ok &&
+          result.output.status === "UNKNOWN" &&
+          Boolean(result.completion.warning)
+        ))
+        .map((result) => `${result.sectionId}: provider/schema failures exhausted isolated audit retries; the final response was quarantined as UNKNOWN.`),
       ...patchResult.records
         .filter((record) => [
           "BLOCKED_MODEL",
@@ -1445,7 +1506,7 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
     const lines = ["## DESIGN_INDEX validation", ""];
     for (const summary of summaries) {
       lines.push(
-        `- **${summary.targetId}**: ${summary.cachedPasses} cached, ${summary.auditCalls} audit calls, ${summary.patchCalls} patch calls, ${summary.reauditCalls} re-audit calls`,
+        `- **${summary.targetId}**: ${summary.cachedPasses} cached, ${summary.auditRequests} scheduled Section audits, ${summary.auditCalls} provider audit calls, ${summary.patchCalls} patch calls, ${summary.reauditCalls} re-audit calls`,
         `  - Audit statuses: ${Object.entries(summary.statusCounts).map(([status, count]) => `${status}=${count}`).join(", ") || "none"}`,
         `  - Patch statuses: ${Object.entries(summary.patchStatusCounts).map(([status, count]) => `${status}=${count}`).join(", ") || "none"}`,
       );

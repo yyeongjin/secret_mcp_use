@@ -99,6 +99,7 @@ export async function loadConfig(argv = process.argv.slice(2)): Promise<Pipeline
     createPrs,
     maxChangedFiles: integer(process.env.PIPELINE_MAX_CHANGED_FILES, 5, 1),
     maxChangedLines: integer(process.env.PIPELINE_MAX_CHANGED_LINES, 500, 1),
+    auditAttempts: integer(process.env.PIPELINE_AUDIT_ATTEMPTS, 3, 1),
     patchGenerationAttempts: integer(process.env.PIPELINE_PATCH_ATTEMPTS, 8, 1),
     nvidia: {
       apiKey: process.env.NVIDIA_API_KEY ?? "",

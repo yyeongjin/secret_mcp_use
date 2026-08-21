@@ -73,6 +73,7 @@ Open **Settings → Secrets and variables → Actions → Variables → New repo
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | Preserves valid cached PASS results during ordinary code validation |
 | `PIPELINE_DRY_RUN` | `false` | Allows verified patches to be published after temporary-worktree validation |
 | `PIPELINE_CREATE_PRS` | `true` | Automatically creates idempotent draft PRs for verified `PATCH_REQUIRED` nodes |
+| `PIPELINE_AUDIT_ATTEMPTS` | `3` | Maximum same-Section audit attempts when a provider response is truncated or schema-invalid |
 | `PIPELINE_PATCH_ATTEMPTS` | `8` | Maximum independently seeded patch candidates, including full verification retries, for one `PATCH_REQUIRED` Section |
 
 These are runner configuration variables, not all direct NVIDIA request fields. In particular, `NVIDIA_MAX_INPUT_TOKENS` is enforced before the HTTP request is sent. The `980000` limit deliberately keeps approximately 20,000 tokens available for the system message, chat template, and up to 4,096 output tokens instead of filling the entire one-million-token window with input.
@@ -97,6 +98,7 @@ gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' -
 gh variable set PIPELINE_FORCE_FULL_AUDIT --body 'false' --repo "$REPO"
 gh variable set PIPELINE_DRY_RUN --body 'false' --repo "$REPO"
 gh variable set PIPELINE_CREATE_PRS --body 'true' --repo "$REPO"
+gh variable set PIPELINE_AUDIT_ATTEMPTS --body '3' --repo "$REPO"
 gh variable set PIPELINE_PATCH_ATTEMPTS --body '8' --repo "$REPO"
 ```
 
@@ -123,6 +125,8 @@ A visual similarity guess or the model's memory is never sufficient for a skip. 
 The cache is invalidated when any fingerprint input changes, the attestation is missing or revoked, or a dependency attestation is no longer valid. A newly added or externally updated `trigger/DESIGN_INDEX_gdweb-*.md` is a new immutable contract version and therefore starts a full 19-request audit for that work. `PIPELINE_FORCE_FULL_AUDIT=true` also bypasses cached PASS results and must only be used for an intentional complete re-audit. Patch scheduling accepts either a valid persisted PASS attestation or a PASS result produced by that dependency's isolated audit in the current run. A downstream patch is not blocked merely because an upstream PASS has not yet been persisted, while non-PASS dependencies still block it.
 
 The Specification is not compiled into the runner. Every execution parses the current `DESIGN_INDEX_SPECIFICATION.md` with a Markdown AST and extracts the current global rules and numbered S01-S19 fragments. A global rule change invalidates all Section fingerprints. A numbered fragment change invalidates that Section and any downstream cache whose dependency attestation is no longer valid. A previous PASS from another Specification hash is never reused. Missing or duplicate numbered fragments stop the run before any NVIDIA request, and the pipeline never edits the Specification to repair the structure.
+
+The initial fan-out always schedules one logical audit for each uncached Section. If a provider response is truncated, malformed, or fails the audit schema, only that same Section is retried up to `PIPELINE_AUDIT_ATTEMPTS`; every retry has a new request ID and seed but receives the identical isolated input. A valid model-owned `UNKNOWN` judgment is not retried. Run records report both scheduled Section audits and actual provider audit calls, and store every response under `nodes/SXX/audit-attempts/attempt-N/`.
 
 ### 4. First-run safety settings
 

@@ -73,6 +73,7 @@ unset NVIDIA_API_KEY
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | 일반 코드 검증에서 유효한 PASS cache를 유지 |
 | `PIPELINE_DRY_RUN` | `false` | 임시 worktree 검증을 통과한 patch 게시 허용 |
 | `PIPELINE_CREATE_PRS` | `true` | 검증된 `PATCH_REQUIRED` 노드의 멱등적인 draft PR 자동 생성 |
+| `PIPELINE_AUDIT_ATTEMPTS` | `3` | provider 응답이 잘리거나 schema-invalid일 때 허용하는 동일 Section audit 최대 시도 횟수 |
 | `PIPELINE_PATCH_ATTEMPTS` | `8` | `PATCH_REQUIRED` Section 하나에 허용하는 전체 검증 재시도를 포함한 독립 seed patch 후보 최대 횟수 |
 
 이 값들은 runner 설정이며 전부 NVIDIA 요청에 그대로 전달되는 필드는 아닙니다. 특히 `NVIDIA_MAX_INPUT_TOKENS`는 HTTP 요청을 보내기 전에 runner가 검사합니다. 입력을 100만 token으로 가득 채우지 않고 `980000`으로 제한해 system message, chat template과 최대 4,096 output token을 위한 약 20,000 token의 여유를 둡니다.
@@ -97,6 +98,7 @@ gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' -
 gh variable set PIPELINE_FORCE_FULL_AUDIT --body 'false' --repo "$REPO"
 gh variable set PIPELINE_DRY_RUN --body 'false' --repo "$REPO"
 gh variable set PIPELINE_CREATE_PRS --body 'true' --repo "$REPO"
+gh variable set PIPELINE_AUDIT_ATTEMPTS --body '3' --repo "$REPO"
 gh variable set PIPELINE_PATCH_ATTEMPTS --body '8' --repo "$REPO"
 ```
 
@@ -123,6 +125,8 @@ gh variable list --repo yyeongjin/secret_mcp_use
 fingerprint 입력 중 하나가 바뀌거나 증명서가 없거나 폐기된 경우, 또는 의존 증명서가 더 이상 유효하지 않으면 cache를 무효화합니다. `trigger/DESIGN_INDEX_gdweb-*.md`가 새로 추가되거나 외부에서 갱신되면 새로운 불변 계약 버전이므로 해당 작품에 대해 19개 전체 요청을 다시 실행합니다. `PIPELINE_FORCE_FULL_AUDIT=true`도 PASS cache를 무시하므로 의도적인 전체 재검증 때만 사용해야 합니다. patch 실행 순서를 판단할 때는 유효한 영구 PASS 증명서뿐 아니라 현재 실행에서 해당 의존 Section의 독립 감사로 얻은 PASS도 인정합니다. 상위 PASS가 아직 저장되지 않았다는 이유만으로 하위 patch를 막지 않으며, PASS가 아닌 의존성은 계속 차단합니다.
 
 Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마다 현재 `DESIGN_INDEX_SPECIFICATION.md`를 Markdown AST로 파싱해 현재 공통 규칙과 번호별 S01-S19 fragment를 추출합니다. 공통 규칙이 바뀌면 19개 Section fingerprint를 모두 무효화합니다. 번호가 붙은 fragment 하나가 바뀌면 해당 Section과 의존 증명서가 더 이상 유효하지 않은 DAG 후행 cache를 무효화합니다. 다른 Specification hash에서 생성한 과거 PASS는 재사용하지 않습니다. 번호 fragment가 빠지거나 중복되면 NVIDIA 요청 전에 실행을 중단하며, pipeline이 Specification을 수정해 구조를 보정하지 않습니다.
+
+최초 fan-out은 cache되지 않은 Section마다 논리 audit 하나를 예약합니다. provider 응답이 잘렸거나 JSON이 깨졌거나 audit schema를 통과하지 못하면 해당 Section만 `PIPELINE_AUDIT_ATTEMPTS` 횟수까지 재시도합니다. 재시도마다 새 request ID와 seed를 사용하지만 동일한 격리 입력만 받습니다. 모델이 schema에 맞게 직접 내린 `UNKNOWN` 판정은 재시도하지 않습니다. 실행 기록에는 예약된 Section audit 수와 실제 provider audit 호출 수를 모두 남기고, 모든 응답을 `nodes/SXX/audit-attempts/attempt-N/`에 따로 저장합니다.
 
 ### 4. 최초 실행 안전 설정
 

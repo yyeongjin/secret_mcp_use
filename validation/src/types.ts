@@ -325,6 +325,7 @@ export interface PipelineConfig {
   createPrs: boolean;
   maxChangedFiles: number;
   maxChangedLines: number;
+  auditAttempts: number;
   patchGenerationAttempts: number;
   nvidia: {
     apiKey: string;

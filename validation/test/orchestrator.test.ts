@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  callAudit,
   enforcePatchGrounding,
   rejectedPatchSummaryForRetry,
   unresolvedPatchDependencies,
 } from "../src/orchestrator.ts";
+import { quarantineAuditOutput } from "../src/nvidia.ts";
+import type { NvidiaClient } from "../src/nvidia.ts";
 import type {
   FreshNode,
   NodeAuditInput,
@@ -141,4 +144,83 @@ test("an invalid PATCH response becomes bounded same-Section retry context", () 
   assert.deepEqual(result?.requirementIds, ["S18-TEST"]);
   assert.deepEqual(result?.readSet, []);
   assert.deepEqual(result?.writeSet, []);
+});
+
+test("a quarantined provider audit retries only the same isolated Section", async () => {
+  const input = groundingInput([]);
+  const requests: string[] = [];
+  const pass = {
+    schemaVersion: "design-validation/audit-output/v2",
+    sectionId: "S18",
+    fingerprint,
+    status: "PASS",
+    findings: [],
+    publicOutput: {},
+  } satisfies NodeAuditOutput;
+  const client = {
+    async completeJson(args: { requestId: string }) {
+      requests.push(args.requestId);
+      const first = requests.length === 1;
+      return {
+        parsed: first ? quarantineAuditOutput("S18", fingerprint) : pass,
+        raw: {},
+        rawHash: fingerprint,
+        requestId: args.requestId,
+        usage: {},
+        ...(first ? { warning: "truncated JSON was quarantined" } : {}),
+      };
+    },
+  } as unknown as NvidiaClient;
+  const validate = Object.assign((value: unknown) => typeof value === "object" && value !== null, {
+    errors: null,
+  });
+
+  const result = await callAudit({
+    client,
+    input,
+    kind: "audit",
+    requestId: "run:audit:S18",
+    maxAttempts: 3,
+    validate: validate as never,
+    outputSchema: {},
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(requests, ["run:audit:S18", "run:audit:S18:retry:2"]);
+  assert.equal(result.attempts.length, 2);
+  if (result.ok) assert.equal(result.output.status, "PASS");
+});
+
+test("a schema-valid model-owned UNKNOWN is not retried", async () => {
+  const input = groundingInput([]);
+  let calls = 0;
+  const client = {
+    async completeJson(args: { requestId: string }) {
+      calls += 1;
+      return {
+        parsed: quarantineAuditOutput("S18", fingerprint),
+        raw: {},
+        rawHash: fingerprint,
+        requestId: args.requestId,
+        usage: {},
+      };
+    },
+  } as unknown as NvidiaClient;
+  const validate = Object.assign((value: unknown) => typeof value === "object" && value !== null, {
+    errors: null,
+  });
+
+  const result = await callAudit({
+    client,
+    input,
+    kind: "audit",
+    requestId: "run:audit:S18",
+    maxAttempts: 3,
+    validate: validate as never,
+    outputSchema: {},
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.output.status, "UNKNOWN");
 });
