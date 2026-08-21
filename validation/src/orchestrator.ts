@@ -273,7 +273,7 @@ async function patchedInputs(args: {
   triggerPath: string;
   runId: string;
   manifest: Awaited<ReturnType<typeof readImpactManifest>>;
-  auditSchemaHash: ReturnType<typeof sha256>;
+  contractSchemaHash: ReturnType<typeof sha256>;
 }): Promise<Map<SectionId, NodeAuditInput>> {
   const patchedConfig: PipelineConfig = {
     ...args.originalConfig,
@@ -291,7 +291,7 @@ async function patchedInputs(args: {
     args.manifest,
     specification,
     trigger,
-    args.auditSchemaHash,
+    args.contractSchemaHash,
     `${args.runId}:patched`,
     new Date().toISOString(),
   );
@@ -308,7 +308,7 @@ async function runPatches(args: {
   validateAudit: Parameters<typeof assertAuditOutput>[0];
   patchCandidateOutputSchema: JsonSchema;
   auditOutputSchema: JsonSchema;
-  auditSchemaHash: ReturnType<typeof sha256>;
+  contractSchemaHash: ReturnType<typeof sha256>;
   runDirectory: string;
   triggerPath: string;
   runId: string;
@@ -507,7 +507,7 @@ async function runPatches(args: {
           triggerPath: args.triggerPath,
           runId: args.runId,
           manifest: args.manifest,
-          auditSchemaHash: args.auditSchemaHash,
+          contractSchemaHash: args.contractSchemaHash,
         });
         const nextInput = nextInputs.get(sectionId);
         if (!nextInput) throw new Error(`Patched input is missing ${sectionId}.`);
@@ -690,7 +690,7 @@ async function runTrigger(args: {
   specification: Awaited<ReturnType<typeof readSpecification>>;
   manifest: Awaited<ReturnType<typeof readImpactManifest>>;
   validators: Awaited<ReturnType<typeof loadValidators>>;
-  auditSchemaHash: ReturnType<typeof sha256>;
+  contractSchemaHash: ReturnType<typeof sha256>;
 }): Promise<WorkRunSummary> {
   const trigger = await readTrigger(args.config.repositoryRoot, args.triggerPath);
   const runId = safeRunId(trigger.referenceId);
@@ -704,7 +704,7 @@ async function runTrigger(args: {
     args.manifest,
     args.specification,
     trigger,
-    args.auditSchemaHash,
+    args.contractSchemaHash,
     runId,
     requestedAt,
   );
@@ -715,7 +715,7 @@ async function runTrigger(args: {
   const contractHash = validatorContractHash(
     args.config,
     args.manifest,
-    args.auditSchemaHash,
+    args.contractSchemaHash,
   );
   const cached = await resolveCachedPasses(args.config, args.manifest, inputs, contractHash);
   const pending = SECTION_IDS.filter((sectionId) => !cached.has(sectionId));
@@ -844,7 +844,7 @@ async function runTrigger(args: {
     validateAudit: args.validators.audit,
     patchCandidateOutputSchema: args.validators.patchCandidateSchema,
     auditOutputSchema: args.validators.auditSchema,
-    auditSchemaHash: args.auditSchemaHash,
+    contractSchemaHash: args.contractSchemaHash,
     runDirectory,
     triggerPath: trigger.path,
     runId,
@@ -878,7 +878,7 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
   const specification = await readSpecification(config.repositoryRoot, config.specificationPath);
   const manifest = await readImpactManifest(config.repositoryRoot, config.impactManifestPath);
   const validators = await loadValidators(config);
-  const auditSchemaHash = sha256(validators.auditSchemaBytes);
+  const contractSchemaHash = validators.contractSchemaHash;
   const client = new NvidiaClient(config);
   const summaries: WorkRunSummary[] = [];
 
@@ -891,7 +891,7 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
         specification,
         manifest,
         validators,
-        auditSchemaHash,
+        contractSchemaHash,
       }),
     );
   }
@@ -905,7 +905,7 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
       documentHash: specification.documentHash,
       globalRulesHash: specification.globalRulesHash,
     },
-    validatorContractHash: validatorContractHash(config, manifest, auditSchemaHash),
+    validatorContractHash: validatorContractHash(config, manifest, contractSchemaHash),
     modelContractHash: modelContractHash(config),
     dryRun: config.dryRun,
     createPrs: config.createPrs,

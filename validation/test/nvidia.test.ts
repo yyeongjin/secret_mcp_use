@@ -6,6 +6,7 @@ import {
   normalizeCompletionOutput,
   parseJsonContent,
   quarantineAuditOutput,
+  structuredOutputControls,
 } from "../src/nvidia.ts";
 import type { SectionId, Sha256 } from "../src/types.ts";
 
@@ -29,6 +30,22 @@ test("binds request ownership into the trusted output schema", () => {
   assert.equal("$schema" in bound, false);
   assert.equal("$id" in bound, false);
   assert.equal(source.$id, "example");
+});
+
+test("forces real NVIDIA structured output without a local provider fallback", () => {
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["status"],
+    properties: { status: { const: "PASS" } },
+  };
+  assert.deepEqual(structuredOutputControls(schema, false), {
+    chat_template_kwargs: {
+      enable_thinking: false,
+      force_nonempty_content: true,
+    },
+    guided_json: schema,
+  });
 });
 
 test("wraps an explicit bare PASS without inventing audit findings", () => {

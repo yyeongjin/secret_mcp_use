@@ -92,6 +92,22 @@ export function bindOutputSchema(schema: JsonSchema, sectionId: SectionId, finge
   return bound;
 }
 
+export function structuredOutputControls(
+  outputSchema: JsonSchema,
+  enableThinking: boolean,
+): {
+  chat_template_kwargs: { enable_thinking: boolean; force_nonempty_content: true };
+  guided_json: JsonSchema;
+} {
+  return {
+    chat_template_kwargs: {
+      enable_thinking: enableThinking,
+      force_nonempty_content: true,
+    },
+    guided_json: outputSchema,
+  };
+}
+
 function normalizePublicOutput(value: unknown): Record<string, string | number | boolean | string[] | null> {
   const source = asRecord(value);
   if (!source) return {};
@@ -284,6 +300,7 @@ export class NvidiaClient {
       max_tokens: this.config.nvidia.maxOutputTokens,
       reasoning_effort: this.config.nvidia.enableThinking ? "high" : "none",
       reasoning_budget: this.config.nvidia.reasoningBudget,
+      ...structuredOutputControls(boundOutputSchema, this.config.nvidia.enableThinking),
       seed,
       stream: false,
     };

@@ -6,7 +6,10 @@
   "required": ["status", "reason", "diff"],
   "properties": {
     "status": { "enum": ["PATCH", "BLOCKED_MISSING_VALUE", "BLOCKED_PATCH_TOO_LARGE"] },
-    "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
-    "diff": { "type": "string" }
+    "reason": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "diff": {
+      "type": "string",
+      "pattern": "^(?:diff --git a/[^\\n]+ b/[^\\n]+[\\s\\S]*)?$"
+    }
   }
 }

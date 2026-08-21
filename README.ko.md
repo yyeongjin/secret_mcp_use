@@ -173,7 +173,7 @@ npm test
 npm run test:frontend
 ```
 
-로컬 mock provider와 mock workflow mode는 존재하지 않습니다. end-to-end pipeline은 항상 실제 NVIDIA API를 요구합니다. PR을 게시하지 않고 로컬에서 검증하려면 `NVIDIA_API_KEY`를 export한 뒤 `npm run audit -- --dry-run --trigger trigger/DESIGN_INDEX_gdweb-26357.md`를 실행합니다. 저장소 권한과 draft PR 생성까지 확인하는 최종 게시 검증은 GitHub Actions 결과를 기준으로 합니다.
+로컬 mock provider와 mock workflow mode는 존재하지 않습니다. end-to-end pipeline은 항상 실제 NVIDIA API를 요구합니다. 모든 audit, patch, re-audit 요청은 요청별로 결합한 JSON Schema를 NVIDIA `guided_json`에 전달하며 Nemotron chat template에는 `enable_thinking`과 `force_nonempty_content: true`를 전달합니다. audit, 정규 patch, 모델 patch 후보의 전체 schema가 validator contract fingerprint에 포함되므로 출력 계약이 하나라도 바뀌면 이전 PASS 증명서는 무효화됩니다. PR을 게시하지 않고 로컬에서 검증하려면 `NVIDIA_API_KEY`를 export한 뒤 `npm run audit -- --dry-run --trigger trigger/DESIGN_INDEX_gdweb-26357.md`를 실행합니다. 저장소 권한과 draft PR 생성까지 확인하는 최종 게시 검증은 GitHub Actions 결과를 기준으로 합니다.
 
 ## 프론트엔드 라이브 미리보기
 

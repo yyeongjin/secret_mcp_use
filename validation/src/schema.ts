@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
+import { hashJson } from "./hash.ts";
 import type { NodeAuditOutput, NodePatchOutput, PipelineConfig, SectionId, Sha256 } from "./types.ts";
 
 export type JsonSchema = Record<string, unknown>;
@@ -11,7 +12,7 @@ export interface Validators {
   auditSchema: JsonSchema;
   patchSchema: JsonSchema;
   patchCandidateSchema: JsonSchema;
-  auditSchemaBytes: Uint8Array;
+  contractSchemaHash: Sha256;
 }
 
 export async function loadValidators(config: PipelineConfig): Promise<Validators> {
@@ -34,7 +35,7 @@ export async function loadValidators(config: PipelineConfig): Promise<Validators
     auditSchema,
     patchSchema,
     patchCandidateSchema,
-    auditSchemaBytes,
+    contractSchemaHash: hashJson({ auditSchema, patchSchema, patchCandidateSchema }),
   };
 }
 

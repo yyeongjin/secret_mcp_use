@@ -118,7 +118,7 @@ function buildEvidence(trigger: TriggerSnapshot, fragment: string): EvidenceRefe
 export function validatorContractHash(
   config: PipelineConfig,
   manifest: ImpactManifest,
-  auditSchemaHash: Sha256,
+  contractSchemaHash: Sha256,
 ): Sha256 {
   return hashJson({
     schemaVersion: "design-validation/validator-contract/v2",
@@ -126,8 +126,9 @@ export function validatorContractHash(
     patchPromptHash: sha256(PATCH_SYSTEM_PROMPT),
     patchRetryPromptHash: sha256(PATCH_RETRY_SYSTEM_PROMPT),
     regressionAuditPromptHash: sha256(REGRESSION_AUDIT_SYSTEM_PROMPT),
-    normalizerVersion: "nvidia-output-normalizer/v4-quarantine",
-    auditSchemaHash,
+    normalizerVersion: "nvidia-output-normalizer/v5-guided-json",
+    structuredOutputTransport: "nvidia-guided-json/v1",
+    contractSchemaHash,
     impactManifest: manifest,
     maxChangedFiles: config.maxChangedFiles,
     maxChangedLines: config.maxChangedLines,
@@ -163,12 +164,12 @@ export async function buildAuditInputs(
   manifest: ImpactManifest,
   specification: SpecificationSnapshot,
   trigger: TriggerSnapshot,
-  auditSchemaHash: Sha256,
+  contractSchemaHash: Sha256,
   runId: string,
   requestedAt: string,
 ): Promise<Map<SectionId, NodeAuditInput>> {
   const allFrontendFiles = await repositoryFrontendFiles(config.repositoryRoot);
-  const validatorHash = validatorContractHash(config, manifest, auditSchemaHash);
+  const validatorHash = validatorContractHash(config, manifest, contractSchemaHash);
   const modelHash = modelContractHash(config);
   const targetId = targetIdFor(config.repository, trigger.referenceId);
   const inputs = new Map<SectionId, NodeAuditInput>();
