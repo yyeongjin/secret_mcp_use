@@ -13,19 +13,7 @@
 
 @layer tokens {
   :root {
-    --color-white: #fff;
-    --color-black: #000;
-    --color-ink: #111;
-    --color-ink-2: #222;
-    --color-muted: #777;
-    --color-muted-dark: #666;
-    --color-border: #eee;
-    --color-border-strong: #ddd;
-    --color-decoration: #eeeeff;
-    --color-decoration-alt: #ddddee;
-    --color-primary: #4169f5;
     --color-primary-pressed: #2748be;
-    --color-overlay: rgb(0 0 0 / 52%);
     --container-main: 1012px;
     --container-shell: 1144px;
     --gutter-desktop: 24px;
