@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "design-validation/attestation/v2",
+  "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
+  "sectionId": "S03",
+  "fingerprint": "sha256:a94d04f75ea913365bf310cde676f4335a70ddebd8546300edd194c772068143",
+  "triggerSource": {
+    "path": "trigger/DESIGN_INDEX_gdweb-26357.md",
+    "documentHash": "sha256:f79f163969cbb3520f2741dde3250533a4ff3071dcb772e53dd5802b918e6336",
+    "fragmentHash": "sha256:4b6b1df256ecdb68282ddea2e640dd25f8ab9421e069f6e81d905c01a4e7c63f"
+  },
+  "specificationSource": {
+    "path": "DESIGN_INDEX_SPECIFICATION.md",
+    "documentHash": "sha256:65233a5428ae3411c094ab72691793e2998232e55ea5ca4e299993f7c4cf251a",
+    "globalRulesHash": "sha256:397b59d360af5b81cb8816ecdf12ad45bbd3c55990df199c67adf9b399fb2987",
+    "fragmentHash": "sha256:ab2d64cca87cedde7b0b4ec3f37dcb7c551533c8eed77e7620dc8915f47a8867"
+  },
+  "status": "PASS",
+  "baseCommit": "26e48d13caf0ec7fda8f9e188689004da6230406",
+  "source": "fresh-audit",
+  "requirementIds": [
+    "S03-REQ-8E97A3537456",
+    "S03-REQ-92A16BF546FB",
+    "S03-REQ-83C46F4E1D08",
+    "S03-REQ-51EC990297A6",
+    "S03-REQ-99A97C6CB73E",
+    "S03-REQ-EBA62230BE86",
+    "S03-REQ-17A802FF800E"
+  ],
+  "dependencyAttestations": {
+    "S01": "sha256:250bebecf963746c9bfc448fbf36a9fb9f5e5c2fd31a828452b51693d7b8a29b",
+    "S02": "sha256:71ee0fd192ae387c3962526a7c52a9f19f11bcb108382c1d4d52692f0db09f16"
+  },
+  "dependencyPublicDigests": {
+    "S01": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S02": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  "publicOutput": {},
+  "publicDigest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "validator": {
+    "id": "nvidia:nvidia/nemotron-3-super-120b-a12b",
+    "contractHash": "sha256:6fa46b3eb858aec6991f750e73c434ec0b125a288f427c2a2d601ab5a03d66dc"
+  },
+  "tests": [
+    {
+      "id": "audit-schema",
+      "status": "PASS",
+      "artifactHash": "sha256:907846061c3ab8d1b9cffd447e5ad73e95109d795cb63a8d485d7294817557e6"
+    }
+  ],
+  "createdAt": "2026-08-21T17:15:10.232Z",
+  "attestationHash": "sha256:13f63b8bbacae4f8bd5eb878175c50a41b55cc7e16726e4ded54de5fdb28171e"
+}
