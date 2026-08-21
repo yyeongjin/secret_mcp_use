@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   bindOutputSchema,
   completionSeed,
+  nvidiaGuidedJsonSchema,
   normalizeCompletionOutput,
   parseJsonContent,
   quarantineAuditOutput,
@@ -46,6 +47,29 @@ test("forces real NVIDIA structured output without a local provider fallback", (
     },
     guided_json: schema,
   });
+});
+
+test("removes only NVIDIA-incompatible uniqueness annotations from the guided grammar", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      values: {
+        type: "array",
+        uniqueItems: true,
+        items: { type: "string", minLength: 1 },
+      },
+    },
+  };
+  assert.deepEqual(nvidiaGuidedJsonSchema(schema), {
+    type: "object",
+    properties: {
+      values: {
+        type: "array",
+        items: { type: "string", minLength: 1 },
+      },
+    },
+  });
+  assert.equal((schema.properties.values as Record<string, unknown>).uniqueItems, true);
 });
 
 test("wraps an explicit bare PASS without inventing audit findings", () => {

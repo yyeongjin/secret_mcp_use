@@ -104,8 +104,22 @@ export function structuredOutputControls(
       enable_thinking: enableThinking,
       force_nonempty_content: true,
     },
-    guided_json: outputSchema,
+    guided_json: nvidiaGuidedJsonSchema(outputSchema),
   };
+}
+
+export function nvidiaGuidedJsonSchema(schema: JsonSchema): JsonSchema {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize);
+    const record = asRecord(value);
+    if (!record) return value;
+    return Object.fromEntries(
+      Object.entries(record)
+        .filter(([key]) => key !== "uniqueItems")
+        .map(([key, candidate]) => [key, normalize(candidate)]),
+    );
+  };
+  return normalize(schema) as JsonSchema;
 }
 
 function normalizePublicOutput(value: unknown): Record<string, string | number | boolean | string[] | null> {
