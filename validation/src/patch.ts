@@ -31,6 +31,8 @@ export function isRetryablePatchCandidateError(error: unknown): boolean {
   ) {
     return true;
   }
+  const duplicatedFrontendPath = /^S\d{2} does not own (frontend\/\S*\/frontend\/\S+)\.$/.exec(message);
+  if (duplicatedFrontendPath) return true;
   return message.includes("git apply --check");
 }
 

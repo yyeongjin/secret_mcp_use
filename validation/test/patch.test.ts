@@ -77,6 +77,12 @@ test("only bounded candidate failures qualify for isolated retry", () => {
     isRetryablePatchCandidateError(new Error("S15 does not own frontend/styles.css.")),
     false,
   );
+  assert.equal(
+    isRetryablePatchCandidateError(
+      new Error("S07 does not own frontend/styles.css/frontend/styles.css."),
+    ),
+    true,
+  );
 });
 
 test("mechanical normalization fixes hunk counts and removes context-only hunks", () => {
