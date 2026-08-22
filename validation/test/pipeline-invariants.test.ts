@@ -18,6 +18,10 @@ test("PATCH_REQUIRED scheduling cannot regain dependency or write-set wait gates
   assert.match(runPatches, /stackParentCommit/);
   assert.match(runPatches, /ACQUIRED_STACKED/);
   assert.match(runPatches, /nextPatchRequirementFindings/);
+  assert.match(runPatches, /failedRequirementIds/);
+  assert.match(runPatches, /every ID in \$\{sectionId\} was independently attempted/);
+  assert.doesNotMatch(runPatches, /if \(finalRecord\) break/);
+  assert.doesNotMatch(runPatches, /finalRecord \|\| \(!childPublished/);
   assert.match(runPatches, /PATCH_PREFLIGHT_SYSTEM_PROMPT/);
   assert.match(runPatches, /AUDIT_RECLASSIFIED/);
   assert.match(runPatches, /patch-conflict-preflight/);

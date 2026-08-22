@@ -993,6 +993,8 @@ async function runPatches(args: {
     const attempts: PatchAttemptRecord[] = [];
     const addressedRequirementIds = new Set<string>();
     const resolvedWithoutPatchRequirementIds = new Set<string>();
+    const failedRequirementIds = new Set<string>();
+    const requirementFailures: Array<{ requirementId: string; record: PatchRecord }> = [];
     const childPullRequests: NonNullable<PatchRecord["childPullRequests"]> = [];
     let currentInput = input;
     let currentInputs = args.inputs;
@@ -1043,13 +1045,13 @@ async function runPatches(args: {
       )].sort();
 
       while (
-        addressedRequirementIds.size + resolvedWithoutPatchRequirementIds.size <
+        addressedRequirementIds.size + resolvedWithoutPatchRequirementIds.size + failedRequirementIds.size <
         allPatchableRequirementIds.length
       ) {
-        if (finalRecord) break;
         const completedRequirementIds = new Set([
           ...addressedRequirementIds,
           ...resolvedWithoutPatchRequirementIds,
+          ...failedRequirementIds,
         ]);
         let remainingFindings = nextPatchRequirementFindings(
           allPatchableFindings,
@@ -1068,6 +1070,7 @@ async function runPatches(args: {
         } | undefined;
         let childPublished = false;
         let childResolvedWithoutPatch = false;
+        const requirementId = remainingFindings[0].requirementId;
 
         const preflight = await callAudit({
           client: args.client,
@@ -1090,15 +1093,22 @@ async function runPatches(args: {
           preflight,
         );
         if (!preflight.ok) {
-          finalRecord = {
-            sectionId,
+          const attemptRecord: PatchAttemptRecord = {
+            attempt: 0,
+            patchNodeId,
             status: "BLOCKED_MODEL",
             reason: `${patchNodeId} preflight failed: ${preflight.error}`,
-            attempts,
           };
-          break;
+          attempts.push(attemptRecord);
+          requirementFailures.push({ requirementId, record: {
+            sectionId,
+            ...attemptRecord,
+            attempts,
+          } });
+          failedRequirementIds.add(requirementId);
+          childIndex += 1;
+          continue;
         }
-        const requirementId = remainingFindings[0].requirementId;
         const preflightRequirementIds = new Set(
           preflight.output.findings.map((finding) => finding.requirementId),
         );
@@ -1108,13 +1118,21 @@ async function runPatches(args: {
             preflightRequirementIds.size !== 1 || !preflightRequirementIds.has(requirementId)
           ))
         ) {
-          finalRecord = {
-            sectionId,
+          const attemptRecord: PatchAttemptRecord = {
+            attempt: 0,
+            patchNodeId,
             status: "BLOCKED_MODEL",
             reason: `${patchNodeId} preflight did not return a final judgment for exactly ${requirementId}.`,
-            attempts,
           };
-          break;
+          attempts.push(attemptRecord);
+          requirementFailures.push({ requirementId, record: {
+            sectionId,
+            ...attemptRecord,
+            attempts,
+          } });
+          failedRequirementIds.add(requirementId);
+          childIndex += 1;
+          continue;
         }
         if (preflight.output.status !== "PATCH_REQUIRED") {
           resolvedWithoutPatchRequirementIds.add(requirementId);
@@ -1659,7 +1677,19 @@ async function runPatches(args: {
           }
         }
 
-        if (finalRecord || (!childPublished && !childResolvedWithoutPatch)) break;
+        if (!args.config.createPrs && finalRecord?.status === "PATCH_VERIFIED") break;
+        if (!childPublished && !childResolvedWithoutPatch) {
+          const failure = finalRecord ?? {
+            sectionId,
+            status: "BLOCKED_MODEL" as const,
+            reason: `${patchNodeId} ended without a verified patch, reclassification, or published PR.`,
+            attempts,
+          };
+          requirementFailures.push({ requirementId, record: failure });
+          failedRequirementIds.add(requirementId);
+          finalRecord = undefined;
+          childIndex += 1;
+        }
       }
     } finally {
       if (activeParentWorktree) await activeParentWorktree.cleanup();
@@ -1669,7 +1699,7 @@ async function runPatches(args: {
       ...addressedRequirementIds,
       ...resolvedWithoutPatchRequirementIds,
     ]);
-    if (!finalRecord && completedRequirementIds.size === allPatchableRequirementIds.length) {
+    if (!finalRecord && failedRequirementIds.size === 0 && completedRequirementIds.size === allPatchableRequirementIds.length) {
       const lastPull = childPullRequests.at(-1);
       const allReused = childPullRequests.length > 0 && attempts
         .filter((attempt) => attempt.status === "PR_CREATED" || attempt.status === "PR_REUSED")
@@ -1688,6 +1718,26 @@ async function runPatches(args: {
         ...(lastPull ? { pullRequest: { number: lastPull.number, url: lastPull.url, branch: lastPull.branch } } : {}),
         childPullRequests,
         attempts,
+      };
+    } else if (requirementFailures.length > 0) {
+      const lastFailure = requirementFailures.at(-1)!.record;
+      finalRecord = {
+        ...lastFailure,
+        reason: `${failedRequirementIds.size} Requirement ID(s) remained unresolved after every ID in ${sectionId} was independently attempted. Last failure: ${lastFailure.reason}`,
+        addressedRequirementIds: [...addressedRequirementIds],
+        resolvedWithoutPatchRequirementIds: [...resolvedWithoutPatchRequirementIds],
+        unresolvedRequirementIds: [...failedRequirementIds],
+        childPullRequests,
+        attempts,
+        ...(childPullRequests.at(-1)
+          ? {
+            pullRequest: {
+              number: childPullRequests.at(-1)!.number,
+              url: childPullRequests.at(-1)!.url,
+              branch: childPullRequests.at(-1)!.branch,
+            },
+          }
+          : {}),
       };
     } else if (finalRecord) {
       finalRecord = {

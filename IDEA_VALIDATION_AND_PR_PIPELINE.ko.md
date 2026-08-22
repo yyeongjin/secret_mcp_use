@@ -52,6 +52,7 @@
 20. 동일 Stage·Section의 독립 audit 최대 시도 횟수는 최소 5회다. 환경변수에 더 작은 값을 넣어도 5회 미만으로 낮아지지 않으며, 모든 시도 뒤에도 UNKNOWN이면 workflow를 실패 처리한다.
 21. 2차에서 19개 Section이 모두 실제 코드 누락이면 최소 19개의 correction PR이 같은 실행에서 생성되어야 한다. 한 Section에 현재 소스에서도 누락으로 확정된 고유 Requirement ID가 N개면 N개의 독립 하위 patch 호출과 N개의 stacked PR을 `SXX-1`부터 `SXX-N`까지 생성한다. patch 후보 재시도와 patch 재감사는 각 하위 노드의 추가 독립 호출이며 다른 Requirement ID와 합치지 않는다.
 22. `UNKNOWN` 상태, `UNKNOWN` finding, `UNKNOWN`을 포함한 placeholder Requirement ID는 patch 후보나 PR 큐에 절대 넣지 않는다. 같은 Stage·Section만 새 request ID와 seed로 독립 재시도하고, 최소 5회 뒤에도 안정적인 Requirement ID와 `MISSING` 판정을 얻지 못하면 해당 실행을 실패 처리한다. 이 실패가 다른 Section이나 다른 Requirement ID의 patch 호출 및 PR 생성을 생략하는 조건이 되어서는 안 된다.
+23. 한 Requirement의 preflight, patch 후보, test, re-audit 또는 PR 게시가 최종 실패해도 같은 Section의 뒤쪽 Requirement ID를 건너뛰지 않는다. 실패 ID만 unresolved로 기록하고 변경되지 않은 마지막 검증 parent에서 다음 `SXX-N`을 계속 호출한다. 따라서 한 Section에 고유 Requirement ID가 40개면 앞선 일부가 실패하더라도 40개 모두 독립 preflight를 받아야 하며, 실제 누락으로 확정되고 검증된 각 항목은 개별 stacked PR을 가져야 한다.
 
 `19개 항목`은 상위 검증 격리 단위이지 API 호출이나 PR 수의 상한이 아니다. 한 실행에서 17개가 PASS이고 2개가 누락되었더라도 각 누락 범위가 크면 두 Section 아래에 여러 하위 patch 요청과 stacked PR이 생길 수 있다.
 
