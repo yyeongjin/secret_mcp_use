@@ -72,8 +72,8 @@ unset NVIDIA_API_KEY
 | `PIPELINE_TRIGGER_GLOB` | `trigger/DESIGN_INDEX_gdweb-*.md` | 작품별 run을 시작하는 불변 입력 문서 경로 |
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | 일반 코드 검증에서 유효한 PASS cache를 유지 |
 | `PIPELINE_DRY_RUN` | `false` | 임시 worktree 검증을 통과한 patch 게시 허용 |
-| `PIPELINE_CREATE_PRS` | `true` | 검증된 diff는 멱등적인 draft PR로, 안전한 diff가 없는 조치 필요 결과는 피드백 Issue로 게시 |
-| `PIPELINE_AUDIT_ATTEMPTS` | `3` | provider 응답이 잘리거나 schema-invalid일 때 허용하는 동일 Section audit 최대 시도 횟수 |
+| `PIPELINE_CREATE_PRS` | `true` | Section 누락 전체를 구현한 검증 diff는 멱등적인 draft PR로 게시하고 DAG 대기 항목은 Issue 없이 queue에 유지 |
+| `PIPELINE_AUDIT_ATTEMPTS` | `3` | transport/schema 결함과 애매하거나 차단된 판정을 위한 동일 Section 독립 audit 최대 시도 횟수 |
 | `PIPELINE_PATCH_ATTEMPTS` | `8` | `PATCH_REQUIRED` Section 하나에 허용하는 전체 검증 재시도를 포함한 독립 seed patch 후보 최대 횟수 |
 
 이 값들은 runner 설정이며 전부 NVIDIA 요청에 그대로 전달되는 필드는 아닙니다. 특히 `NVIDIA_MAX_INPUT_TOKENS`는 HTTP 요청을 보내기 전에 runner가 검사합니다. 입력을 100만 token으로 가득 채우지 않고 `980000`으로 제한해 system message, chat template과 최대 4,096 output token을 위한 약 20,000 token의 여유를 둡니다.
@@ -126,19 +126,19 @@ fingerprint 입력 중 하나가 바뀌거나 증명서가 없거나 폐기된 �
 
 Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마다 현재 `DESIGN_INDEX_SPECIFICATION.md`를 Markdown AST로 파싱해 현재 공통 규칙과 번호별 S01-S19 fragment를 추출합니다. 공통 규칙이 바뀌면 19개 Section fingerprint를 모두 무효화합니다. 번호가 붙은 fragment 하나가 바뀌면 해당 Section과 의존 증명서가 더 이상 유효하지 않은 DAG 후행 cache를 무효화합니다. 다른 Specification hash에서 생성한 과거 PASS는 재사용하지 않습니다. 번호 fragment가 빠지거나 중복되면 NVIDIA 요청 전에 실행을 중단하며, pipeline이 Specification을 수정해 구조를 보정하지 않습니다.
 
-최초 fan-out은 cache되지 않은 Section마다 논리 audit 하나를 예약합니다. provider 응답이 잘렸거나 JSON이 깨졌거나 audit schema를 통과하지 못하면 해당 Section만 `PIPELINE_AUDIT_ATTEMPTS` 횟수까지 재시도합니다. 재시도마다 새 request ID와 seed를 사용하지만 동일한 격리 입력만 받습니다. 모델이 schema에 맞게 직접 내린 `UNKNOWN` 판정은 재시도하지 않습니다. 실행 기록에는 예약된 Section audit 수와 실제 provider audit 호출 수를 모두 남기고, 모든 응답을 `nodes/SXX/audit-attempts/attempt-N/`에 따로 저장합니다.
+최초 fan-out은 cache되지 않은 Section마다 논리 audit 하나를 예약합니다. 최초 또는 강제 전체 실행은 S01-S19 각각에 정확히 19개의 독립 논리 audit 요청을 만들며 어떤 모델도 다른 Section의 입력이나 응답을 받지 않습니다. provider 응답이 잘렸거나 JSON이 깨졌거나 schema-invalid이거나 `UNKNOWN`, `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`이면 해당 Section만 `PIPELINE_AUDIT_ATTEMPTS`까지 독립 재시도합니다. 재시도마다 새 request ID와 seed를 사용하지만 동일한 격리 입력만 받습니다. 실행 기록에는 19개 예약 Section audit와 추가된 같은-Section 실제 호출 수를 구분해 남기고, 모든 응답을 `nodes/SXX/audit-attempts/attempt-N/`에 따로 저장합니다.
 
 ### 4. 최초 실행 안전 설정
 
 커밋된 push workflow는 `PIPELINE_DRY_RUN=false`, `PIPELINE_CREATE_PRS=true`로 실행합니다. 그렇더라도 모델 출력을 바로 게시할 수는 없습니다. 요청 격리, 응답 schema 검증, 불변 경로 거부, base hash 검증, write 소유권, diff 크기 제한, `git apply --check`, typecheck, 단위 테스트, 데스크톱·모바일 브라우저 테스트, 접근성 회귀 검사, 수정 Section 재감사, 영향받은 기존 PASS 회귀 감사, 열린 PR 충돌 검사와 멱등성 검사를 모두 통과해야 병합되지 않은 draft PR 하나를 생성합니다. `git apply` 전에는 결정적 코드가 변경 없는 hunk 또는 완전히 동일한 no-op hunk 제거, 저장소 기준 경로 접두사 복원, 신뢰하지 않는 index metadata 제거와 hunk 개수 재계산만 수행할 수 있으며 의미 있는 추가·삭제 소스 줄은 바꾸지 않습니다. Requirement ID, Evidence ref, base hash와 read/write set은 모델이 중복 작성한 metadata를 신뢰하지 않고 격리 audit 입력과 검사한 diff에서 계산합니다.
 
-검증된 코드 PR은 실제 unified diff가 완전히 수정한 Requirement ID만 본문 최상단에 표시하고, 변경 줄 수, 실제 request ID, guard 결과와 실행 artifact를 이어서 표시합니다. patch 모델은 해당 ID를 명시해야 하며, 별도의 stateless before/after 재감사가 모든 수정 주장을 다시 검증합니다. 부분 PR이 구현하지 않은 finding은 미해결 항목으로 분명히 표시하고 Section Check와 멱등적인 피드백 Issue에 계속 게시합니다. 차단, UNKNOWN, dependency 대기 또는 실패 결과도 빈 PR이나 report-only PR 대신 동일한 언어 피드백을 사용합니다. 피드백 Issue는 fingerprint가 달라져도 같은 Section 작업으로 갱신되며 PASS 또는 모든 finding을 포함한 검증 PR이 생긴 뒤에만 자동으로 닫힙니다.
+검증된 코드 PR은 해당 Section correction에 공급된 모든 Requirement ID를 본문 최상단에 표시하고, 변경 줄 수, 실제 request ID, guard 결과와 실행 artifact를 이어서 표시합니다. patch 모델은 supplied finding 전체를 구현해야 하며 부분 Section PR은 폐기하고 새 독립 후보로 교체합니다. 별도의 stateless before/after 재감사가 모든 수정 주장을 다시 검증합니다. 근거 있는 `PATCH_REQUIRED`가 PASS가 아닌 선행 노드를 기다리면 영구 DAG queue에 남고 피드백 Issue를 만들지 않습니다. 선행 PR 병합은 새 fingerprint 계산을 자동으로 시작하고 변경되지 않은 PASS 증명서를 재사용해 새로 준비된 Section만 실행합니다. 피드백 Issue는 실제 계약·근거 누락 또는 모든 provider·검증 후보를 소진해도 grounded diff를 만들지 못한 경우에만 생성합니다.
 
 열린 자동화 PR은 `main`이 바뀌었다는 이유만으로 자동 종료하거나 branch를 삭제하지 않습니다. pipeline은 해당 PR을 stale로 표시하고 현재 base를 기준으로 새로운 독립 audit를 실행하며 PR 번호와 review 이력을 보존합니다. 대체 diff가 모든 guard를 통과한 경우에만 봇 소유 자동화 branch를 `--force-with-lease`로 갱신하고, 같은 PR의 제목, 본문, manifest와 diff를 최신 결과로 바꿉니다. 새 결과가 PASS이거나 차단되었거나 안전하게 patch할 수 없는 경우에도 PR은 사람의 판단을 위해 열린 상태로 남고 현재 피드백을 게시하며, 자동화가 사용자를 대신해 PR을 닫지 않습니다.
 
-독립 patch 요청이 현재 base 코드가 audit finding을 이미 충족한다고 확인하면 정확한 기존 코드 설명과 함께 `BLOCKED_AUDIT_CONFLICT`를 반환합니다. 값 부족, 과도한 patch 범위, audit 충돌은 5번 반복할 후보가 아니라 즉시 게시할 terminal 피드백입니다. 잘못된 응답 형식, 유효하지 않은 diff, 검사 실패 또는 재감사 실패만 제한된 replacement candidate 횟수를 사용합니다.
+독립 patch 후보 하나가 현재 base 코드가 audit finding을 이미 충족한다고 주장하거나 값 부족·과도한 범위를 반환해도 그 한 응답이 근거 있는 누락을 취소할 수 없습니다. 오케스트레이터는 동일 Section과 변경되지 않은 base에서 새 seed를 사용하는 독립 후보를 `PIPELINE_PATCH_ATTEMPTS`까지 요청합니다. 잘못된 응답 형식, 유효하지 않은 diff, 일부 Requirement ID만 구현한 후보, 검사 실패와 재감사 실패도 같은 제한된 replacement candidate 예산을 사용합니다. 모든 독립 후보가 실패한 뒤에만 terminal 차단 결과를 게시합니다.
 
-하나의 `PATCH_REQUIRED` Section에는 최대 `PIPELINE_PATCH_ATTEMPTS`개의 완전한 patch 후보를 허용합니다. 후보마다 서로 다른 결정적 seed를 쓰는 별도 NVIDIA 요청이며, 같은 격리 Section 계약과 변경되지 않은 원본 파일에서 시작합니다. 요청에는 해당 Section finding이 지목한 구현 파일만 넣고, 한 줄짜리 원본 규칙을 정확한 diff 한 줄로 유지할 수 있도록 번호가 붙은 물리 소스 줄도 함께 제공합니다. JSON·schema 오류, 보정 가능한 diff 형식 오류, 테스트 실패, 수정 Section 재감사 실패, 영향받은 기존 PASS 회귀 감사 실패가 발생하면 해당 후보만 폐기하고 제한 횟수 안에서 다음 후보를 시작할 수 있습니다. 재시도에는 자기 거부 출력의 제한된 요약과 실패 진단만 전달하며 다른 Section의 계약, 응답 또는 diff는 전달하지 않습니다. 불변 경로 쓰기, 소유권 밖 쓰기, 위험한 경로·파일 작업, 과도한 변경 범위, write-set 충돌과 게시 충돌은 guard를 완화하지 않고 해당 Section을 중단합니다. 모든 시도는 `patches/SXX/attempt-N/` 아래에 기록합니다. PASS, UNKNOWN, 근거 부족 Section에는 patch 요청과 PR을 만들지 않습니다.
+하나의 `PATCH_REQUIRED` Section에는 최대 `PIPELINE_PATCH_ATTEMPTS`개의 완전한 patch 후보를 허용합니다. 후보마다 서로 다른 결정적 seed를 쓰는 별도 NVIDIA 요청이며, 같은 격리 Section 계약과 변경되지 않은 원본 파일에서 시작합니다. 요청에는 해당 Section finding이 지목한 구현 파일만 넣고, 한 줄짜리 원본 규칙을 정확한 diff 한 줄로 유지할 수 있도록 번호가 붙은 물리 소스 줄도 함께 제공합니다. 후보는 supplied Requirement ID 전체를 구현해야 합니다. 부분 coverage, JSON·schema 오류, 차단 후보 판정, 보정 가능한 diff 형식 오류, 테스트 실패, 수정 Section 재감사 실패, 영향받은 기존 PASS 회귀 감사 실패가 발생하면 해당 후보만 폐기하고 다음 후보를 시작합니다. 재시도에는 자기 거부 출력의 제한된 요약과 실패 진단만 전달하며 다른 Section의 계약, 응답 또는 diff는 전달하지 않습니다. 불변 경로 쓰기, 소유권 밖 쓰기, 위험한 경로·파일 작업에서 guard를 완화하지 않습니다. dependency와 write-lock 충돌은 다음 main revision까지 queue에 남기고, 다른 실패는 독립 후보를 모두 소진한 뒤 명확히 보고합니다. 모든 시도는 `patches/SXX/attempt-N/` 아래에 기록합니다. PASS에는 patch 요청과 PR을 만들지 않으며, 실제 근거 부족은 독립 audit 재시도를 모두 소진한 뒤에만 피드백으로 게시합니다.
 
 audit의 `implementationRefs`는 schema에서 저장소 상대 경로만 허용합니다. selector, 소스 조각, `path:line`, 컴포넌트 이름 또는 설명문은 patch scheduling 전에 거부합니다. 모든 `PATCH_REQUIRED` finding은 supplied writable path 또는 허용된 안전한 새 text file 경로를 정확히 지목해야 하므로, 모델이 파일 대신 코드를 설명했다는 이유로 근거 있는 누락이 조용히 차단 상태로 강등되지 않습니다.
 

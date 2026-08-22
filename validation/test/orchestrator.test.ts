@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  auditOutputNeedsIndependentRetry,
   blockedConflictContradictsExactFinding,
   callAudit,
   enforcePatchGrounding,
+  patchOutputNeedsIndependentRetry,
   rejectedPatchSummaryForRetry,
   unresolvedPatchDependencies,
 } from "../src/orchestrator.ts";
@@ -209,17 +211,27 @@ test("a transport-quarantined provider audit retries only the same isolated Sect
   if (result.ok) assert.equal(result.output.status, "PASS");
 });
 
-test("a schema-valid model-owned UNKNOWN is not retried", async () => {
+test("a schema-valid model-owned UNKNOWN retries only the same isolated Section", async () => {
   const input = groundingInput([]);
-  let calls = 0;
+  const requests: string[] = [];
   const client = {
     async completeJson(args: { requestId: string }) {
-      calls += 1;
-      return {
-        parsed: {
+      requests.push(args.requestId);
+      const output = requests.length < 3
+        ? {
           ...quarantineAuditOutput("S18", fingerprint) as NodeAuditOutput,
           publicOutput: {},
-        },
+        }
+        : {
+          schemaVersion: "design-validation/audit-output/v2",
+          sectionId: "S18",
+          fingerprint,
+          status: "PASS",
+          findings: [],
+          publicOutput: {},
+        } satisfies NodeAuditOutput;
+      return {
+        parsed: output,
         raw: {},
         rawHash: fingerprint,
         requestId: args.requestId,
@@ -241,9 +253,35 @@ test("a schema-valid model-owned UNKNOWN is not retried", async () => {
     outputSchema: {},
   });
 
-  assert.equal(calls, 1);
+  assert.deepEqual(requests, [
+    "run:audit:S18",
+    "run:audit:S18:retry:2",
+    "run:audit:S18:retry:3",
+  ]);
   assert.equal(result.ok, true);
-  if (result.ok) assert.equal(result.output.status, "UNKNOWN");
+  if (result.ok) assert.equal(result.output.status, "PASS");
+});
+
+test("ambiguous audit and blocked patch outputs require independent replacement candidates", () => {
+  const audit = patchRequired(["frontend/styles.css"]);
+  assert.equal(auditOutputNeedsIndependentRetry({ ...audit, status: "UNKNOWN" }), true);
+  assert.equal(auditOutputNeedsIndependentRetry({ ...audit, status: "BLOCKED_MISSING_EVIDENCE" }), true);
+  assert.equal(auditOutputNeedsIndependentRetry(audit), false);
+
+  const patch = {
+    schemaVersion: "design-validation/patch-output/v2",
+    sectionId: "S18",
+    fingerprint,
+    status: "BLOCKED_AUDIT_CONFLICT",
+    requirementIds: [],
+    evidenceRefs: [],
+    readSet: [],
+    writeSet: [],
+    reason: "The first candidate disagreed with the audit.",
+    diff: "",
+  } satisfies NodePatchOutput;
+  assert.equal(patchOutputNeedsIndependentRetry(patch), true);
+  assert.equal(patchOutputNeedsIndependentRetry({ ...patch, status: "PATCH" }), false);
 });
 
 test("an exact structural omission cannot be dismissed as an audit conflict", () => {

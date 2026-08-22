@@ -239,6 +239,16 @@ export function blockedConflictContradictsExactFinding(
   return auditOutput.findings.some((finding) => exactIds.has(finding.requirementId));
 }
 
+export function auditOutputNeedsIndependentRetry(output: NodeAuditOutput): boolean {
+  return output.status === "UNKNOWN" ||
+    output.status === "BLOCKED_MISSING_EVIDENCE" ||
+    output.status === "BLOCKED_CONTRACT_CONFLICT";
+}
+
+export function patchOutputNeedsIndependentRetry(output: NodePatchOutput): boolean {
+  return output.status !== "PATCH";
+}
+
 function sanitizeArtifactText(value: string, config: PipelineConfig, worktreePath?: string): string {
   return value
     .replaceAll(config.repositoryRoot, "<repository>")
@@ -486,10 +496,7 @@ export async function callAudit(args: {
       completion: validatedCompletion,
       output,
     });
-    const retryableQuarantine = output.status === "UNKNOWN" && (
-      Boolean(validatedCompletion.warning) || output.publicOutput.transportStatus === "QUARANTINED"
-    );
-    if (retryableQuarantine && attempt < args.maxAttempts) continue;
+    if (auditOutputNeedsIndependentRetry(output) && attempt < args.maxAttempts) continue;
     return {
       ok: true,
       sectionId,
@@ -803,13 +810,36 @@ async function runPatches(args: {
       }
 
       if (output.status !== "PATCH") {
+        const reason = `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} returned ${output.status}: ${output.reason}`;
         const attemptRecord: PatchAttemptRecord = {
           attempt,
           status: output.status,
-          reason: `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} returned ${output.status}: ${output.reason}`,
+          reason,
         };
         attempts.push(attemptRecord);
         await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+        if (attempt < args.config.patchGenerationAttempts && patchOutputNeedsIndependentRetry(output)) {
+          retryContext = { output, failure: { stage: "guard", reason } };
+          continue;
+        }
+        finalRecord = { sectionId, ...attemptRecord, attempts };
+        break;
+      }
+
+      const requiredRequirementIds = new Set(
+        patchScope.auditOutput.findings.map((finding) => finding.requirementId),
+      );
+      const omittedRequirementIds = [...requiredRequirementIds]
+        .filter((requirementId) => !output.requirementIds.includes(requirementId));
+      if (omittedRequirementIds.length > 0) {
+        const reason = `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} omitted required findings: ${omittedRequirementIds.join(", ")}.`;
+        const attemptRecord: PatchAttemptRecord = { attempt, status: "BLOCKED_MODEL", reason };
+        attempts.push(attemptRecord);
+        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+        if (attempt < args.config.patchGenerationAttempts) {
+          retryContext = { output, failure: { stage: "guard", reason } };
+          continue;
+        }
         finalRecord = { sectionId, ...attemptRecord, attempts };
         break;
       }
@@ -1136,10 +1166,12 @@ async function runPatches(args: {
           };
           break;
         } catch (error) {
+          const reason = errorMessage(error);
+          const waitingForWriteLock = reason.startsWith("BLOCKED_CONFLICT:");
           const attemptRecord: PatchAttemptRecord = {
             attempt,
-            status: "FAILED_PUBLISH",
-            reason: errorMessage(error),
+            status: waitingForWriteLock ? "BLOCKED_CONFLICT" : "FAILED_PUBLISH",
+            reason,
             patchHash: guarded.patchHash,
             changedPaths: guarded.changedPaths,
           };

@@ -286,6 +286,13 @@ export function isReusableFeedbackIssue(
 export function needsFeedbackIssue(node: NodeCheckSummary): boolean {
   if (node.patch?.pullRequest) return (node.patch.unresolvedRequirementIds?.length ?? 0) > 0;
   if (node.executionState === "PASS" || node.executionState === "CACHED_PASS") return false;
+  if (
+    node.executionState === "PATCH_WAITING_DEPENDENCY" ||
+    node.patch?.status === "WAITING_DEPENDENCY" ||
+    node.patch?.status === "BLOCKED_CONFLICT"
+  ) {
+    return false;
+  }
   return node.findings.length > 0 || (
     node.patch !== null && !["NOT_REQUIRED", "PATCH_VERIFIED"].includes(node.patch.status)
   );

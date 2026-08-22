@@ -229,7 +229,7 @@ trigger 문서에서 실제로 바뀐 줄이 S05뿐이어도 새 trigger content
 
 PASS 기록을 남기기 위해 빈 PR이나 report-only PR을 만드는 방식은 사용하지 않는다.
 
-단, `PR 없음`은 `피드백 없음`을 뜻하지 않는다. 위 차단 상태, `UNKNOWN`, `PATCH_WAITING_DEPENDENCY`, patch guard 실패와 test 실패는 Section Check에 requirement-level finding 전체를 표시하고, live 자동 보정 실행에서는 동일 내용을 idempotent 피드백 Issue로 생성하거나 갱신한다. 부분 수정 PR이 생성된 경우에도 PR diff가 해결하지 않은 finding은 같은 Issue에 남긴다. 해당 Section이 PASS가 되거나 모든 finding이 검증된 코드 PR 범위에 포함된 경우에만 Issue를 자동으로 닫는다.
+단, `PR 없음`은 `피드백 없음`을 뜻하지 않는다. `PATCH_WAITING_DEPENDENCY`와 write-set 대기는 실패나 사람의 작업 항목이 아니라 정적 DAG queue이므로 Issue를 만들지 않는다. 선행 자동 PR이 병합되면 main 변경 이벤트가 fingerprint와 PASS 증명서를 다시 계산하고, 새로 준비된 Section만 독립 NVIDIA audit와 patch 단계로 자동 진행한다. `UNKNOWN`, `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`는 첫 응답으로 확정하지 않고 동일 Section만 `PIPELINE_AUDIT_ATTEMPTS`까지 독립 재호출한다. 근거가 있는 `PATCH_REQUIRED`의 patch 거부, 충돌 판단, 불완전 diff도 `PIPELINE_PATCH_ATTEMPTS`까지 독립 후보를 다시 호출한다. 모든 재시도가 끝난 뒤에도 문서 값 자체가 없거나 검증 가능한 diff를 만들 수 없는 경우에만 Section Check와 idempotent 피드백 Issue를 생성한다.
 
 ## 전체 아키텍처
 
@@ -304,7 +304,7 @@ audit:S19 -> NVIDIA request #19 -> nodes/S19/audit-output.json
 fresh full audit       = 19개의 독립 audit 호출
 forced full audit      = 19개의 독립 audit 호출
 incremental audit      = dirty Section 수만큼 독립 audit 호출
-patch generation       = PATCH_REQUIRED Section마다 별도 patch 호출 1개
+patch generation       = PATCH_REQUIRED Section마다 완전한 diff가 나올 때까지 독립 patch 후보 1~PIPELINE_PATCH_ATTEMPTS개
 merge                  = LLM 호출 0개, 오케스트레이터 코드만 사용
 ```
 
@@ -599,13 +599,13 @@ interface NodePatchOutput {
 }
 ```
 
-모델의 patch 후보 응답은 `addressedRequirementIds`를 별도로 반환한다. `PATCH`일 때는 이 diff가 완전히 구현한 supplied Requirement ID를 하나 이상 적고, 차단 상태에서는 빈 배열이어야 한다. orchestrator는 이 값을 검증한 뒤 `NodePatchOutput.requirementIds`로 정규화하며, 알려지지 않은 ID 또는 빈 수정 범위를 거부한다.
+모델의 patch 후보 응답은 `addressedRequirementIds`를 별도로 반환한다. `PATCH`일 때는 supplied finding 전체의 Requirement ID를 빠짐없이 적고 diff가 전부 구현해야 하며, 차단 상태에서는 빈 배열이어야 한다. orchestrator는 이 값을 검증한 뒤 `NodePatchOutput.requirementIds`로 정규화하며, 알려지지 않은 ID, 빈 수정 범위 또는 일부 ID만 포함한 후보를 거부하고 같은 Section의 새 독립 후보를 호출한다.
 
-patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제, 이동, 이름 변경, 전체 포맷, 무관한 리팩터링은 허용하지 않는다. 한 Section에 finding이 여러 개 있어도 일부만 안전하게 고칠 수 있다면 해당 ID만 수정 대상으로 선언한다. diff에 포함되지 않은 finding을 해결했다고 주장해서는 안 된다.
+patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제, 이동, 이름 변경, 전체 포맷, 무관한 리팩터링은 허용하지 않는다. 한 Section에 finding이 여러 개 있으면 그 후보는 모든 finding을 구현해야 한다. 일부만 구현한 후보는 PR로 게시하지 않고 폐기하며, 동일한 격리 입력에서 다음 독립 후보를 요청한다.
 
-patch 모델이 supplied base code가 audit finding을 이미 충족한다고 확인하면 `BLOCKED_AUDIT_CONFLICT`와 근거 문장을 반환한다. 이 결과는 코드 PR이 아니라 피드백 Issue로 게시하며 같은 patch를 5번 반복 요청하지 않는다. `BLOCKED_MISSING_VALUE`와 `BLOCKED_PATCH_TOO_LARGE`도 schema-valid terminal 판단이므로 후보 반복으로 해결될 수 있는 JSON/diff 형식 오류와 구분해 즉시 종료한다.
+patch 모델 하나가 supplied base code가 audit finding을 이미 충족한다고 판단해 `BLOCKED_AUDIT_CONFLICT`를 반환해도 audit의 근거 있는 누락을 취소할 수 없다. `BLOCKED_AUDIT_CONFLICT`, `BLOCKED_MISSING_VALUE`, `BLOCKED_PATCH_TOO_LARGE`는 해당 후보의 결과일 뿐 Section의 최종 결과가 아니며, 오케스트레이터는 같은 격리 입력과 변경되지 않은 base에서 새 seed와 request ID를 가진 독립 patch 후보를 `PIPELINE_PATCH_ATTEMPTS`까지 호출한다. 모든 후보가 실패했을 때만 최종 차단 상태와 전체 시도 기록을 Check 또는 Issue로 게시한다.
 
-patch 적용 뒤에는 일반 완전성 audit를 다시 실행하지 않는다. 별도의 stateless 재검증 요청이 `addressedRequirementIds`, 원래 finding, 실제 diff, before/after 구현만 받아 각 주장 항목을 독립적으로 확인한다. 선언한 모든 항목이 after 코드에서 충족될 때만 해당 후보를 게시할 수 있다. 미선언 finding은 재검증 PASS의 대상이 아니며 PR 밖의 피드백으로 남는다.
+patch 적용 뒤에는 일반 완전성 audit를 다시 실행하지 않는다. 별도의 stateless 재검증 요청이 `addressedRequirementIds`, 원래 finding, 실제 diff, before/after 구현만 받아 각 주장 항목을 독립적으로 확인한다. supplied finding 전체가 선언됐고 after 코드에서 모두 충족될 때만 해당 후보를 게시할 수 있다.
 
 ## 19개 DAG 노드
 
@@ -633,7 +633,7 @@ patch 적용 뒤에는 일반 완전성 audit를 다시 실행하지 않는다. 
 | S18 | 페이지별 인수 조건 | S05, S06, S09, S10, S11, S12, S13, S14 |
 | S19 | 불확실성과 결정 | S01-S18 |
 
-이 의존성은 patch와 PR 처리 순서를 위한 것이며 audit 호출 순서를 막지 않는다. full audit의 S01-S19 요청은 모두 실행하고, 선행 노드가 아직 PASS가 아니면 후행 노드의 audit 결과를 `PASS_PENDING_DEPENDENCY` 또는 `PATCH_WAITING_DEPENDENCY`로 보관한다. 선행 노드의 자연어 결과는 후행 NVIDIA 요청에 전달하지 않는다.
+이 의존성은 patch와 PR 처리 순서를 위한 것이며 audit 호출 순서를 막지 않는다. 최초·강제 full audit는 S01-S19에 대해 정확히 19개의 논리 audit 요청을 만들고 모두 실행한다. 재시도는 같은 Section 안에서만 추가 호출로 집계하며 다른 Section 응답을 전달하지 않는다. 선행 노드가 아직 PASS가 아니면 후행 노드의 audit 결과를 `PASS_PENDING_DEPENDENCY` 또는 `PATCH_WAITING_DEPENDENCY`로 정적 보관한다. 이 대기 상태는 Issue로 바꾸지 않는다. 선행 PR 병합으로 최신 main에서 의존 노드가 PASS가 되면 후행 노드를 자동 재예약한다.
 
 ### S01 목표와 범위
 
@@ -1268,6 +1268,7 @@ audit queue와 patch queue의 준비 조건을 분리한다.
 
 - `AUDIT_READY`: node가 dirty이고 같은 target·Section audit가 실행 중이 아니며 NVIDIA rate limit token이 있다. DAG 선행 PASS는 요구하지 않는다.
 - `PATCH_READY`: audit가 PATCH_REQUIRED이고 직접 선행 노드가 모두 최종 PASS 또는 CACHED_PASS이며 write-set lock과 중복 PR 검사를 통과했다.
+- `PATCH_WAITING_DEPENDENCY`: 근거 있는 코드 누락은 유지하되 선행 PR 병합을 기다리는 정적 queue 상태다. Issue를 생성하지 않으며 다음 main merge 이벤트에서 자동으로 다시 준비 조건을 계산한다.
 
 ```ts
 function auditReady(node: Node, state: State): boolean {
@@ -1417,30 +1418,30 @@ GitHub PR은 branch 간 실제 변경이 있어야 하므로, 안전한 code dif
 - Section Check: 현재 commit에 붙는 실행 단위 결과. finding 원문, 근거, 구현 위치, patch 중단 사유와 다음 동작을 표시한다.
 - 피드백 Issue: live 실행에서 생성하는 지속 가능한 작업 항목. `targetId + sectionId` 고정 key로 중복 생성을 막고, 새 fingerprint가 들어오면 같은 Issue 본문을 갱신한다.
 
-피드백 Issue 대상은 `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`, `UNKNOWN`, `PATCH_WAITING_DEPENDENCY`, `VALIDATION_ONLY`, patch guard·test·re-audit·publish 실패와 부분 수정 PR의 미해결 finding이다. PASS/CACHED_PASS에는 만들지 않는다. 모든 finding이 해소된 검증 PR이 생기거나 PASS가 되면 해결 근거 또는 PR 링크를 댓글로 남기고 닫는다. 일부 finding만 고친 PR은 Issue를 닫지 않는다.
+피드백 Issue 대상은 독립 audit 재시도를 모두 소진한 `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`, `UNKNOWN`, 그리고 독립 patch 후보를 모두 소진한 guard·test·re-audit·publish 실패다. `PATCH_WAITING_DEPENDENCY`, write-set lock 대기, PASS, CACHED_PASS에는 Issue를 만들지 않는다. patch 후보는 supplied finding 전체를 구현해야 하며 부분 수정 PR은 허용하지 않는다. 모든 finding을 구현하고 검증한 diff만 PR이 된다.
 
 ```markdown
 ## Validation feedback
 
-The isolated `S13` audit found an item that cannot yet be published as a verified code PR.
+The isolated `S13` audit exhausted its independent audit attempts because the exact interaction value is absent from the DESIGN_INDEX evidence boundary.
 
 ## Findings
 
 ### 1. `S13-INTERACTION-004`
 
-- Result: `MISSING`
-- Missing or uncertain item: The documented control state transition is absent from the implementation.
+- Result: `INSUFFICIENT_EVIDENCE`
+- Missing or uncertain item: The transition duration is not specified in the immutable DESIGN_INDEX input.
 - Page: `P-01`
 - Component: `build-tabs`
 - Evidence: `E-D02`
-- Implementation: `frontend/app.js`
+- Implementation: none
 
 ## Why no code PR was opened
 
-- Audit status: `PATCH_REQUIRED`
-- Execution state: `PATCH_WAITING_DEPENDENCY`
-- Patch status: `WAITING_DEPENDENCY`
-- Reason: dependency S05 is neither current PASS nor attested PASS
+- Audit status: `BLOCKED_MISSING_EVIDENCE`
+- Execution state: `BLOCKED_MISSING_EVIDENCE`
+- Patch status: `NOT_REQUIRED`
+- Reason: all isolated audit attempts confirmed that the required value is absent from the immutable contract
 ```
 
 ## PR 동작 예시
@@ -1704,8 +1705,8 @@ S06과 S12는 각각 별도의 NVIDIA audit 요청으로 실행된다. S05 PR �
 | PATCH_REQUIRED | 없음 | 없음 | 독립 patch 요청 |
 | PATCH_PROPOSED | 임시 worktree만 | 없음 | guard와 test |
 | PATCH_VERIFIED | 생성 가능 | 생성 가능 | lock과 중복 검사 |
-| PATCH_WAITING_DEPENDENCY | 없음 | 없음 | audit 결과 보관 후 선행 PASS/병합 대기 |
-| WAITING_WRITE_LOCK | 없음 | 없음 | 충돌 PR 병합 대기 |
+| PATCH_WAITING_DEPENDENCY | 없음 | 없음 | 정적 DAG queue에 보관, 선행 PR 병합 이벤트에서 자동 재예약, Issue 없음 |
+| WAITING_WRITE_LOCK | 없음 | 없음 | 충돌 PR 병합 이벤트에서 자동 재예약, Issue 없음 |
 | BLOCKED_* | 없음 | 없음 | Check 또는 Issue |
 | PR_OPEN | 있음 | 하나 | review와 merge queue |
 | STALE_BASE | 기존 branch 보존 | merge 금지 | 새 audit 후 같은 PR 갱신 또는 피드백, 자동 종료 금지 |
@@ -1894,7 +1895,7 @@ S19 audit BLOCKED_MISSING_EVIDENCE
 전체 audit 호출 수 = 19
 ```
 
-S05가 실패했어도 full audit의 S06-S19 호출을 생략하지 않는다. 다만 S05에 의존하는 PASS 결과는 `PASS_PENDING_DEPENDENCY`, patch 결과는 `PATCH_WAITING_DEPENDENCY`로 보관해 PR 생성을 막는다.
+S05가 실패했어도 full audit의 S06-S19 호출을 생략하지 않는다. 최초·강제 full audit의 논리 audit 요청 수는 정확히 19개이며, 애매하거나 차단된 응답의 같은-Section 재시도 횟수는 별도 `auditCalls`로 기록한다. S05에 의존하는 PASS 결과는 `PASS_PENDING_DEPENDENCY`, patch 결과는 `PATCH_WAITING_DEPENDENCY`로 보관해 현재 base의 PR 생성을 막되 Issue로 바꾸지 않는다.
 
 `PR #41`이 병합되면 S05의 새 PASS 증명서를 만든다. S05의 `publicDigest`가 이전과 달라졌으므로 S06, S12와 그 후행 노드만 각각 다시 호출한다. S01-S04, S07-S11 중 입력과 dependency digest가 그대로인 노드는 다시 호출하지 않는다. S12가 최신 `main`에서 여전히 실패하고 안전한 diff를 만들 수 있을 때만 두 번째 PR을 생성한다.
 
@@ -1903,10 +1904,11 @@ S05가 실패했어도 full audit의 S06-S19 호출을 생략하지 않는다. �
 가장 중요한 것은 `항목 수`, `API 호출 수`, `PR 수`를 같은 숫자로 취급하지 않는 것이다.
 
 - 항목 수는 항상 19개다.
-- 최초·강제 전체 audit의 NVIDIA 호출 수는 정확히 19개다.
+- 최초·강제 전체 audit의 논리 NVIDIA audit 요청 수는 정확히 19개다. `UNKNOWN`·차단·스키마 오류의 같은-Section 독립 재시도는 별도 실제 호출 수로 추가 기록한다.
 - 증분 audit 호출 수는 dirty Section 수만큼이며, 언제나 Section별 별도 요청이다.
 - PATCH_REQUIRED가 있으면 audit 19개와 별도로 해당 Section의 patch 요청이 추가되므로 전체 API 호출 수는 19개를 넘을 수 있다.
-- PR 수는 실제 누락이 있고 안전한 코드 diff가 검증된 노드 수만큼만 생긴다.
+- PR 수는 실제 누락이 있고 해당 Section의 supplied finding 전체를 구현한 안전한 코드 diff가 검증된 노드 수만큼 생긴다.
+- 선행 PASS가 필요한 근거 있는 누락은 Issue가 아니라 정적 DAG queue에 남고, 선행 자동 PR 병합 후 새 main 실행에서 자동 PR 생성 단계로 진행한다.
 - 이미 통과한 노드는 fingerprint가 바뀌지 않는 한 정적으로 PASS 상태를 재사용한다.
 - 독립성은 별도 요청과 작업공간으로 보장하고, 일관성은 DAG 증명서와 `publicDigest`로 보장한다.
 - 충돌 방지는 file ownership, base hash, write-set lock, merge queue와 영향받은 PASS 회귀 검사로 보장한다.

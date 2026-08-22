@@ -149,7 +149,7 @@ test("a partial correction separates the verified diff from unresolved feedback"
   assert.match(body, /## Remaining audit feedback \(not changed by this PR\)[\s\S]*S05-NAV-FOCUS-002/);
 });
 
-test("a blocked node publishes exact verbal feedback instead of an empty PR", () => {
+test("a dependency-waiting omission stays in the DAG queue without creating an issue", () => {
   const node = {
     sectionId: "S05",
     name: "Navigation and Header",
@@ -164,7 +164,7 @@ test("a blocked node publishes exact verbal feedback instead of an empty PR", ()
       reason: "S04 has not passed.",
     },
   };
-  assert.equal(needsFeedbackIssue(node), true);
+  assert.equal(needsFeedbackIssue(node), false);
   const output = buildNodeCheckOutput({
     summary: {
       runId: "run-123",
@@ -173,11 +173,10 @@ test("a blocked node publishes exact verbal feedback instead of an empty PR", ()
       nodes: [node],
     },
     node,
-    feedbackIssue: { number: 7, url: "https://example.test/issues/7" },
   });
   assert.match(output.text, /The current navigation item does not expose the documented active state/);
   assert.match(output.text, /S04 has not passed/);
-  assert.match(output.summary, /issue #7/);
+  assert.doesNotMatch(output.summary, /issue #7/);
 });
 
 test("PASS nodes create neither feedback issues nor correction PR language", () => {

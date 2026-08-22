@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   AUDIT_SYSTEM_PROMPT,
   PATCH_REAUDIT_SYSTEM_PROMPT,
+  PATCH_SYSTEM_PROMPT,
   auditUserPrompt,
   patchReauditUserPrompt,
   patchRetryUserPrompt,
@@ -59,6 +60,7 @@ test("audit output requires exact repository paths instead of source excerpts", 
 });
 
 test("patch prompt includes only finding-referenced files and exact physical lines", () => {
+  assert.match(PATCH_SYSTEM_PROMPT, /Partial coverage is forbidden/);
   const prompt = JSON.parse(patchUserPrompt({ auditInput, auditOutput })) as {
     files: Array<{ path: string; canonicalLines: Array<{ line: number; text: string }> }>;
     maxDiffLines: number;
