@@ -165,6 +165,16 @@ test("normalizes transport metadata while preserving model-owned audit judgments
   });
 });
 
+test("preserves patch addressedRequirementIds through the trusted transport envelope", () => {
+  const normalized = normalizeCompletionOutput("patch", {
+    status: "PATCH",
+    addressedRequirementIds: ["S05-NAV-001"],
+    reason: "Implement the active state.",
+    diff: "diff --git a/frontend/index.html b/frontend/index.html\n",
+  }, sectionId, fingerprint) as { requirementIds: string[] };
+  assert.deepEqual(normalized.requirementIds, ["S05-NAV-001"]);
+});
+
 test("normalizes identifier transport defects without changing the finding judgment", () => {
   const longId = "responsive requirement ".repeat(20);
   const normalized = normalizeCompletionOutput("audit", {

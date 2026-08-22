@@ -94,6 +94,9 @@ interface PatchAttemptRecord {
   attempt: number;
   status:
     | "BLOCKED_MODEL"
+    | "BLOCKED_MISSING_VALUE"
+    | "BLOCKED_PATCH_TOO_LARGE"
+    | "BLOCKED_AUDIT_CONFLICT"
     | "BLOCKED_GUARD"
     | "BLOCKED_CONFLICT"
     | "FAILED_TEST"
@@ -115,6 +118,9 @@ export interface PatchRecord {
     | "WAITING_DEPENDENCY"
     | "VALIDATION_ONLY"
     | "BLOCKED_MODEL"
+    | "BLOCKED_MISSING_VALUE"
+    | "BLOCKED_PATCH_TOO_LARGE"
+    | "BLOCKED_AUDIT_CONFLICT"
     | "BLOCKED_GUARD"
     | "BLOCKED_CONFLICT"
     | "FAILED_TEST"
@@ -191,7 +197,12 @@ export function rejectedPatchSummaryForRetry(args: {
   if (typeof args.value !== "object" || args.value === null || Array.isArray(args.value)) return null;
   const source = args.value as Record<string, unknown>;
   const status = source.status;
-  if (status !== "PATCH" && status !== "BLOCKED_MISSING_VALUE" && status !== "BLOCKED_PATCH_TOO_LARGE") {
+  if (
+    status !== "PATCH" &&
+    status !== "BLOCKED_MISSING_VALUE" &&
+    status !== "BLOCKED_PATCH_TOO_LARGE" &&
+    status !== "BLOCKED_AUDIT_CONFLICT"
+  ) {
     return null;
   }
   const knownRequirementIds = new Set(args.auditOutput.findings.map((finding) => finding.requirementId));
@@ -733,13 +744,11 @@ async function runPatches(args: {
       if (output.status !== "PATCH") {
         const attemptRecord: PatchAttemptRecord = {
           attempt,
-          status: "BLOCKED_MODEL",
+          status: output.status,
           reason: `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} returned ${output.status}: ${output.reason}`,
         };
         attempts.push(attemptRecord);
         await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-        retryContext = undefined;
-        if (attempt < args.config.patchGenerationAttempts) continue;
         finalRecord = { sectionId, ...attemptRecord, attempts };
         break;
       }

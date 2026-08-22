@@ -5,7 +5,7 @@
   "additionalProperties": false,
   "required": ["status", "addressedRequirementIds", "reason", "diff"],
   "properties": {
-    "status": { "enum": ["PATCH", "BLOCKED_MISSING_VALUE", "BLOCKED_PATCH_TOO_LARGE"] },
+    "status": { "enum": ["PATCH", "BLOCKED_MISSING_VALUE", "BLOCKED_PATCH_TOO_LARGE", "BLOCKED_AUDIT_CONFLICT"] },
     "addressedRequirementIds": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },

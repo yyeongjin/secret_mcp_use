@@ -217,7 +217,7 @@ export interface NodePatchOutput {
   schemaVersion: "design-validation/patch-output/v2";
   sectionId: SectionId;
   fingerprint: Sha256;
-  status: "PATCH" | "BLOCKED_MISSING_VALUE" | "BLOCKED_PATCH_TOO_LARGE";
+  status: "PATCH" | "BLOCKED_MISSING_VALUE" | "BLOCKED_PATCH_TOO_LARGE" | "BLOCKED_AUDIT_CONFLICT";
   requirementIds: string[];
   evidenceRefs: string[];
   readSet: FileSetEntry[];

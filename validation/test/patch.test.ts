@@ -319,6 +319,37 @@ test("a patch cannot claim an unknown or empty Requirement ID set", () => {
   );
 });
 
+test("an empty patch that reports an already satisfied finding becomes an audit conflict", () => {
+  const baseHash = `sha256:${"a".repeat(64)}` as Sha256;
+  const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;
+  const auditInput = {
+    node: { sectionId: "S03", fingerprint },
+    implementation: { files: [{
+      path: "frontend/index.html",
+      contentHash: baseHash,
+      byteLength: 13,
+      encoding: "utf8",
+      content: "<main></main>\n",
+    }] },
+  } as unknown as NodeAuditInput;
+  const auditOutput = {
+    findings: [{ requirementId: "S03-DEFAULT", evidenceRefs: [], implementationRefs: ["frontend/index.html"] }],
+  } as unknown as NodeAuditOutput;
+  const output = canonicalizePatchOutput({
+    value: {
+      status: "PATCH",
+      addressedRequirementIds: ["S03-DEFAULT"],
+      reason: "The existing page already satisfies the requirement; no code changes are needed.",
+      diff: "",
+    },
+    auditInput,
+    auditOutput,
+  });
+  assert.equal(output.status, "BLOCKED_AUDIT_CONFLICT");
+  assert.deepEqual(output.requirementIds, []);
+  assert.equal(output.diff, "");
+});
+
 test("an owned declared text file can be created from an empty base", () => {
   const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;
   const auditInput = {

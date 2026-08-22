@@ -241,8 +241,22 @@ export function canonicalizePatchOutput(args: {
 }): NodePatchOutput {
   const source = asRecord(args.value);
   if (!source) throw new Error("Patch candidate is not an object.");
-  const status = source.status;
-  if (status !== "PATCH" && status !== "BLOCKED_MISSING_VALUE" && status !== "BLOCKED_PATCH_TOO_LARGE") {
+  let status = source.status;
+  if (
+    status === "PATCH" &&
+    (typeof source.diff !== "string" || source.diff.trim() === "") &&
+    typeof source.reason === "string" &&
+    /(?:already|existing|present).{0,120}(?:satisf(?:y|ies|ied)|no (?:code )?changes? (?:are )?needed)|no (?:code )?changes? (?:are )?needed/i.test(source.reason)
+  ) {
+    status = "BLOCKED_AUDIT_CONFLICT";
+    source.addressedRequirementIds = [];
+  }
+  if (
+    status !== "PATCH" &&
+    status !== "BLOCKED_MISSING_VALUE" &&
+    status !== "BLOCKED_PATCH_TOO_LARGE" &&
+    status !== "BLOCKED_AUDIT_CONFLICT"
+  ) {
     throw new Error(`Unsupported patch status: ${String(status)}.`);
   }
 

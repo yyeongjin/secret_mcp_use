@@ -8,7 +8,7 @@
     "schemaVersion": { "const": "design-validation/patch-output/v2" },
     "sectionId": { "type": "string", "pattern": "^S(0[1-9]|1[0-9])$" },
     "fingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-    "status": { "enum": ["PATCH", "BLOCKED_MISSING_VALUE", "BLOCKED_PATCH_TOO_LARGE"] },
+    "status": { "enum": ["PATCH", "BLOCKED_MISSING_VALUE", "BLOCKED_PATCH_TOO_LARGE", "BLOCKED_AUDIT_CONFLICT"] },
     "requirementIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
     "evidenceRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "readSet": { "$ref": "#/$defs/fileSet" },

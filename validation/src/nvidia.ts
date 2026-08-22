@@ -257,7 +257,7 @@ export function normalizeCompletionOutput(
     sectionId,
     fingerprint,
     status: source.status,
-    requirementIds: source.requirementIds,
+    requirementIds: source.addressedRequirementIds,
     evidenceRefs: source.evidenceRefs,
     readSet: source.readSet,
     writeSet: source.writeSet,

@@ -589,7 +589,7 @@ interface NodePatchOutput {
   schemaVersion: 'design-validation/patch-output/v2';
   sectionId: SectionId;
   fingerprint: `sha256:${string}`;
-  status: 'PATCH' | 'BLOCKED_MISSING_VALUE' | 'BLOCKED_PATCH_TOO_LARGE';
+  status: 'PATCH' | 'BLOCKED_MISSING_VALUE' | 'BLOCKED_PATCH_TOO_LARGE' | 'BLOCKED_AUDIT_CONFLICT';
   requirementIds: string[];
   evidenceRefs: string[];
   readSet: Array<{ path: string; baseHash: `sha256:${string}` }>;
@@ -602,6 +602,8 @@ interface NodePatchOutput {
 모델의 patch 후보 응답은 `addressedRequirementIds`를 별도로 반환한다. `PATCH`일 때는 이 diff가 완전히 구현한 supplied Requirement ID를 하나 이상 적고, 차단 상태에서는 빈 배열이어야 한다. orchestrator는 이 값을 검증한 뒤 `NodePatchOutput.requirementIds`로 정규화하며, 알려지지 않은 ID 또는 빈 수정 범위를 거부한다.
 
 patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제, 이동, 이름 변경, 전체 포맷, 무관한 리팩터링은 허용하지 않는다. 한 Section에 finding이 여러 개 있어도 일부만 안전하게 고칠 수 있다면 해당 ID만 수정 대상으로 선언한다. diff에 포함되지 않은 finding을 해결했다고 주장해서는 안 된다.
+
+patch 모델이 supplied base code가 audit finding을 이미 충족한다고 확인하면 `BLOCKED_AUDIT_CONFLICT`와 근거 문장을 반환한다. 이 결과는 코드 PR이 아니라 피드백 Issue로 게시하며 같은 patch를 5번 반복 요청하지 않는다. `BLOCKED_MISSING_VALUE`와 `BLOCKED_PATCH_TOO_LARGE`도 schema-valid terminal 판단이므로 후보 반복으로 해결될 수 있는 JSON/diff 형식 오류와 구분해 즉시 종료한다.
 
 patch 적용 뒤에는 일반 완전성 audit를 다시 실행하지 않는다. 별도의 stateless 재검증 요청이 `addressedRequirementIds`, 원래 finding, 실제 diff, before/after 구현만 받아 각 주장 항목을 독립적으로 확인한다. 선언한 모든 항목이 after 코드에서 충족될 때만 해당 후보를 게시할 수 있다. 미선언 finding은 재검증 PASS의 대상이 아니며 PR 밖의 피드백으로 남는다.
 
