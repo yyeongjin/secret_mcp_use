@@ -149,3 +149,31 @@ test("exact CSS comparison ignores unreferenced optional contract tokens", () =>
   assert.deepEqual(result.addedRequirementIds, []);
   assert.equal(result.output.status, "PASS");
 });
+
+test("patch scope prefers one exact structural finding over vague duplicate token findings", () => {
+  const input = auditInput([
+    ":root {",
+    "  --color-primary: #4169f5;",
+    "  --color-primary-pressed: #2748be;",
+    "}",
+    ".action:hover { background: var(--color-primary-hover); }",
+  ].join("\n"));
+  const output = auditOutput();
+  output.findings = [
+    finding("S09-VAGUE-HOVER", "--color-primary-hover", "#3157DD"),
+    {
+      ...finding("S09-VAGUE-PRESSED", "--color-primary-pressed", "#2748BE"),
+      finding: "Token --color-primary-pressed missing in :root",
+    },
+    finding("S09-EXACT-HOVER", "--color-primary-hover", "#3157DD"),
+  ];
+  output.findings[2].componentId = "--color-primary-hover";
+  output.publicOutput = { exactContractRequirementIds: ["S09-EXACT-HOVER"] };
+
+  const result = buildPatchScope(input, output);
+  assert.deepEqual(result.includedRequirementIds, ["S09-EXACT-HOVER"]);
+  assert.deepEqual(result.excluded.map((item) => [item.requirementId, item.reason]), [
+    ["S09-VAGUE-HOVER", "DUPLICATE_EXACT_FINDING"],
+    ["S09-VAGUE-PRESSED", "ALREADY_SATISFIED"],
+  ]);
+});
