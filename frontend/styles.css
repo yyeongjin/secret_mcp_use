@@ -15,6 +15,7 @@
   :root {
     --color-white: #fff;
     --color-black: #000;
+    --color-disabled: #bbb;
     --space-6: 24px;
     --space-13: 128px;
     --space-8: 40px;
