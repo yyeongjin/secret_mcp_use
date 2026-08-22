@@ -47,6 +47,7 @@
     --shadow-focus: 0 0 0 3px rgb(65 105 245 / 30%);
    --space-9: 48px;
   --icon-sm: 12px;
+  --z-skip: 300;
   }
 }
 
