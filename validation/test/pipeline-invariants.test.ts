@@ -20,6 +20,8 @@ test("PATCH_REQUIRED scheduling cannot regain dependency or write-set wait gates
   assert.match(runPatches, /nextPatchRequirementFindings/);
   assert.match(runPatches, /PATCH_PREFLIGHT_SYSTEM_PROMPT/);
   assert.match(runPatches, /AUDIT_RECLASSIFIED/);
+  assert.match(source, /result\.ok && result\.output\.status === "UNKNOWN"/);
+  assert.doesNotMatch(source, /result\.output\.status === "UNKNOWN" &&\s*Boolean\(result\.completion\.warning\)/);
 });
 
 test("the normative pipeline document permanently forbids dependency blocking", async () => {

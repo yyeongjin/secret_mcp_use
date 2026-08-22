@@ -45,6 +45,8 @@
 13. 같은 파일을 수정하거나 의존 관계가 있어도 차단하지 않는다. 직전 검증 commit에서 source slice와 fingerprint를 다시 계산한 뒤 그 부모 위에 다음 PR을 쌓는다.
 14. merge 전에는 최신 `main`을 기준으로 patch를 다시 검증하며, 오래된 patch는 자동 병합하지 않는다.
 15. 모든 비-PASS 결과는 사라지지 않는다. 1차 `DOCUMENT_GAP`은 Section별 Issue로 게시한다. 2차 `PATCH_REQUIRED`는 각 하위 노드에 배정된 finding을 구현하고 검증한 code diff PR로 게시하며, 아직 남은 finding은 다음 하위 노드로 전달한다. 2차 patch chain 하나라도 완성하지 못하면 workflow 전체를 실패 처리한다.
+16. 어느 Stage든 독립 재시도를 소진한 뒤 `UNKNOWN`이면 전체 실행을 성공 처리하지 않는다. 모델이 직접 `UNKNOWN`을 반환했는지 schema quarantine warning이 붙었는지와 무관하게 미판정으로 기록하고 workflow를 실패 처리한다.
+17. S18에서 정확한 acceptance behavior가 있지만 테스트 파일만 없다는 `BLOCKED_MISSING_EVIDENCE` 응답은 차단으로 두지 않는다. 소유 경로 `frontend/tests/**`의 결정적 파일 경로를 배정해 `PATCH_REQUIRED`로 승격하고 Requirement별 하위 PR로 재귀 처리한다.
 
 `19개 항목`은 상위 검증 격리 단위이지 API 호출이나 PR 수의 상한이 아니다. 한 실행에서 17개가 PASS이고 2개가 누락되었더라도 각 누락 범위가 크면 두 Section 아래에 여러 하위 patch 요청과 stacked PR이 생길 수 있다.
 

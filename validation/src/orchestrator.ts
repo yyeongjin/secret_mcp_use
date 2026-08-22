@@ -343,7 +343,9 @@ export function groundOwnedNewImplementationPaths(
   input: NodeAuditInput,
   output: NodeAuditOutput,
 ): { output: NodeAuditOutput; addedRequirementIds: string[] } {
-  if (output.status !== "PATCH_REQUIRED") return { output, addedRequirementIds: [] };
+  if (output.status !== "PATCH_REQUIRED" && output.status !== "BLOCKED_MISSING_EVIDENCE") {
+    return { output, addedRequirementIds: [] };
+  }
   const testGlob = input.policy.allowedWriteGlobs.find((glob) => glob.endsWith("/tests/**"));
   if (!testGlob) return { output, addedRequirementIds: [] };
   const defaultTestPath = `${testGlob.slice(0, -3)}/design-index-${input.node.sectionId.toLowerCase()}.spec.ts`;
@@ -359,8 +361,15 @@ export function groundOwnedNewImplementationPaths(
     addedRequirementIds.push(finding.requirementId);
     return { ...finding, implementationRefs: [defaultTestPath] };
   });
+  const promotedMissingTests = output.status === "BLOCKED_MISSING_EVIDENCE" &&
+    findings.length > 0 &&
+    addedRequirementIds.length === findings.length;
   return {
-    output: { ...output, findings },
+    output: {
+      ...output,
+      status: promotedMissingTests ? "PATCH_REQUIRED" : output.status,
+      findings,
+    },
     addedRequirementIds,
   };
 }
@@ -2186,13 +2195,16 @@ async function runTrigger(args: {
       ...documentCallResults
         .filter((result): result is DocumentAuditCallFailure => !result.ok)
         .map((failure) => `${failure.sectionId} document audit: ${failure.error}`),
+      ...documentCallResults
+        .filter((result): result is DocumentAuditCallSuccess => (
+          result.ok && result.output.status === "UNKNOWN"
+        ))
+        .map((result) => `${result.sectionId} document audit: isolated retries ended without a final grounded judgment.`),
       ...callResults
         .filter((result): result is AuditCallSuccess => (
-          result.ok &&
-          result.output.status === "UNKNOWN" &&
-          Boolean(result.completion.warning)
+          result.ok && result.output.status === "UNKNOWN"
         ))
-        .map((result) => `${result.sectionId}: provider/schema failures exhausted isolated audit retries; the final response was quarantined as UNKNOWN.`),
+        .map((result) => `${result.sectionId}: isolated implementation-audit retries ended without a final grounded judgment.`),
       ...patchResult.records
         .filter((record) => [
           "BLOCKED_MODEL",

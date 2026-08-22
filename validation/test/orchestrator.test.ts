@@ -113,6 +113,24 @@ test("an owned missing acceptance test receives a deterministic new implementati
   assert.equal(enforcePatchGrounding(groundingInput(["frontend/tests/**"]), grounded.output).output.status, "PATCH_REQUIRED");
 });
 
+test("a blocked missing-test audit is promoted to a recursive patch when every path is owned", () => {
+  const output = patchRequired([]);
+  output.status = "BLOCKED_MISSING_EVIDENCE";
+  output.findings[0].finding = "No test file exists to verify the documented page interaction.";
+
+  const grounded = groundOwnedNewImplementationPaths(
+    groundingInput(["frontend/tests/**"]),
+    output,
+  );
+
+  assert.equal(grounded.output.status, "PATCH_REQUIRED");
+  assert.deepEqual(grounded.addedRequirementIds, ["S18-TEST"]);
+  assert.deepEqual(
+    grounded.output.findings[0].implementationRefs,
+    ["frontend/tests/design-index-s18.spec.ts"],
+  );
+});
+
 test("a DESIGN_INDEX documentation gap cannot become an application patch", () => {
   const output = patchRequired(["frontend/index.html"]);
   output.findings[0].finding = "Design Index section S11 lacks a specification table header.";
