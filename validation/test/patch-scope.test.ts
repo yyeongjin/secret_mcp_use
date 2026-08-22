@@ -147,6 +147,87 @@ test("patch scope removes a false missing-label finding when every named HTML re
   }]);
 });
 
+test("patch scope grounds an exact unreferenced token and drops optional invisible tokens independently", () => {
+  const input = {
+    node: {
+      sectionId: "S09",
+      requirementIds: ["S09-TOKEN-TABLE", "S09-REQ-HOVER"],
+    },
+    contract: {
+      designIndexFragment: [
+        "## 9. Tokens",
+        "",
+        "```css",
+        ":root {",
+        "  --color-focus: #4169f5;",
+        "  --color-primary-hover: #3157dd;",
+        "}",
+        "```",
+      ].join("\n"),
+    },
+    implementation: {
+      files: [{
+        path: "frontend/styles.css",
+        content: ".button:hover { background: var(--color-primary-hover); }\n",
+      }],
+    },
+    payload: {
+      sourceFacts: [
+        { factId: "S09-FACT-FOCUS", text: "--color-focus: #4169f5;" },
+        { factId: "S09-FACT-SUCCESS", text: "| --color-success | Optional success | Not visible |" },
+        { factId: "S09-FACT-HOVER", text: "--color-primary-hover: #3157dd;" },
+      ],
+    },
+  } as unknown as NodeAuditInput;
+  const output = {
+    status: "PATCH_REQUIRED",
+    findings: [
+      {
+        requirementId: "S09-TOKEN-TABLE",
+        pageId: null,
+        componentId: null,
+        status: "MISSING",
+        finding: "Missing required CSS custom property: --color-focus",
+        evidenceRefs: ["S09-FACT-FOCUS"],
+        implementationRefs: ["frontend/styles.css"],
+        proposedValue: null,
+      },
+      {
+        requirementId: "S09-TOKEN-TABLE",
+        pageId: null,
+        componentId: null,
+        status: "MISSING",
+        finding: "Missing required CSS custom property: --color-success",
+        evidenceRefs: ["S09-FACT-SUCCESS"],
+        implementationRefs: ["frontend/styles.css"],
+        proposedValue: null,
+      },
+      finding("S09-REQ-HOVER", "--color-primary-hover", "#3157dd"),
+    ],
+    publicOutput: { exactContractRequirementIds: ["S09-REQ-HOVER"] },
+  } as unknown as NodeAuditOutput;
+
+  const scope = buildPatchScope(input, output);
+  assert.deepEqual(scope.includedRequirementIds, ["S09-TOKEN-TABLE", "S09-REQ-HOVER"]);
+  assert.deepEqual(scope.auditOutput.findings.map((item) => item.finding), [
+    "Token `--color-focus` with value `#4169f5` is required but not found in the supplied CSS.",
+    "Token `--color-primary-hover` with value `#3157dd` is required but not found in the supplied CSS.",
+  ]);
+  assert.deepEqual(scope.feedbackOutput.findings.map((item) => item.requirementId), [
+    "S09-TOKEN-TABLE",
+    "S09-REQ-HOVER",
+  ]);
+  assert.deepEqual(scope.auditOutput.publicOutput.exactContractRequirementIds, [
+    "S09-REQ-HOVER",
+    "S09-TOKEN-TABLE",
+  ]);
+  assert.deepEqual(scope.excluded, [{
+    requirementId: "S09-TOKEN-TABLE",
+    reason: "OPTIONAL_NOT_REQUIRED",
+    detail: "--color-success is explicitly optional and not visible in the assigned DESIGN_INDEX evidence.",
+  }]);
+});
+
 test("non-token findings remain in the isolated patch scope", () => {
   const output = auditOutput();
   output.findings = [{

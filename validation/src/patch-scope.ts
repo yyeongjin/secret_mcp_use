@@ -6,7 +6,8 @@ export type PatchScopeExclusionReason =
   | "ALREADY_SATISFIED"
   | "CONTRACT_CONFLICT"
   | "CONTRACT_NOT_PATCHABLE"
-  | "DUPLICATE_EXACT_FINDING";
+  | "DUPLICATE_EXACT_FINDING"
+  | "OPTIONAL_NOT_REQUIRED";
 
 export interface PatchScopeExclusion {
   requirementId: string;
@@ -99,7 +100,7 @@ function implementationCustomPropertyReferences(input: NodeAuditInput): Map<stri
 }
 
 function sourceFacts(input: NodeAuditInput): Array<{ factId: string; text: string }> {
-  const candidates = input.payload.sourceFacts;
+  const candidates = input.payload?.sourceFacts;
   if (!Array.isArray(candidates)) return [];
   return candidates.flatMap((candidate) => {
     if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) return [];
@@ -107,6 +108,16 @@ function sourceFacts(input: NodeAuditInput): Array<{ factId: string; text: strin
     return typeof record.factId === "string" && typeof record.text === "string"
       ? [{ factId: record.factId, text: record.text }]
       : [];
+  });
+}
+
+function isOptionalInvisibleFinding(
+  finding: AuditFinding,
+  factsById: ReadonlyMap<string, string>,
+): boolean {
+  return finding.evidenceRefs.some((factId) => {
+    const text = factsById.get(factId) ?? "";
+    return /\bOptional\b/i.test(text) && /\bNot visible\b/i.test(text);
   });
 }
 
@@ -285,6 +296,7 @@ export function buildPatchScope(input: NodeAuditInput, output: NodeAuditOutput):
   const contractTokens = contractCustomProperties(input.contract.designIndexFragment);
   const implementationTokens = implementationCustomProperties(input);
   const implementationReferences = implementationCustomPropertyReferences(input);
+  const factsById = new Map(sourceFacts(input).map((fact) => [fact.factId, fact.text]));
   const exactIds = exactRequirementIds(output);
   const exactProperties = new Set(output.findings.flatMap((finding) => (
     exactIds.has(finding.requirementId) && typeof finding.componentId === "string" && finding.componentId.startsWith("--")
@@ -293,6 +305,9 @@ export function buildPatchScope(input: NodeAuditInput, output: NodeAuditOutput):
   )));
   const included = [];
   const excluded: PatchScopeExclusion[] = [];
+  const includedByOriginal = new Map<AuditFinding, AuditFinding>();
+  const nonActionableFindings = new Set<AuditFinding>();
+  const synthesizedExactIds = new Set<string>();
 
   for (const finding of output.findings) {
     if (htmlRegionAlreadyLabelled(input, finding)) {
@@ -301,6 +316,7 @@ export function buildPatchScope(input: NodeAuditInput, output: NodeAuditOutput):
         reason: "ALREADY_SATISFIED",
         detail: "Every referenced region already has role=region and a non-empty aria-label in the supplied HTML.",
       });
+      nonActionableFindings.add(finding);
       continue;
     }
     const expected = tokenExpectation(finding.finding);
@@ -316,10 +332,20 @@ export function buildPatchScope(input: NodeAuditInput, output: NodeAuditOutput):
         reason: "DUPLICATE_EXACT_FINDING",
         detail: `${property} is covered by a structurally grounded exact-contract finding.`,
       });
+      nonActionableFindings.add(finding);
       continue;
     }
 
     const contractValues = contractTokens.get(property) ?? [];
+    if (isOptionalInvisibleFinding(finding, factsById)) {
+      excluded.push({
+        requirementId: finding.requirementId,
+        reason: "OPTIONAL_NOT_REQUIRED",
+        detail: `${property} is explicitly optional and not visible in the assigned DESIGN_INDEX evidence.`,
+      });
+      nonActionableFindings.add(finding);
+      continue;
+    }
     if (contractValues.length === 0) {
       excluded.push({
         requirementId: finding.requirementId,
@@ -344,30 +370,53 @@ export function buildPatchScope(input: NodeAuditInput, output: NodeAuditOutput):
         reason: "ALREADY_SATISFIED",
         detail: `${property} already has the exact DESIGN_INDEX value in the supplied implementation.`,
       });
+      nonActionableFindings.add(finding);
       continue;
     }
     if (!expected && !exactIds.has(finding.requirementId) && !implementationReferences.has(property)) {
+      if (finding.status === "MISSING" && contractValues.length === 1) {
+        const exactFinding = {
+          ...finding,
+          componentId: finding.componentId ?? property,
+          finding: `Token \`${property}\` with value \`${contractValues[0]}\` is required but not found in the supplied CSS.`,
+        };
+        included.push(exactFinding);
+        includedByOriginal.set(finding, exactFinding);
+        synthesizedExactIds.add(finding.requirementId);
+        continue;
+      }
       excluded.push({
         requirementId: finding.requirementId,
         reason: "CONTRACT_NOT_PATCHABLE",
-        detail: `${property} is not referenced by the supplied implementation and has no exact structural omission proof.`,
+        detail: `${property} is not referenced by the supplied implementation and has no single exact contract value.`,
       });
       continue;
     }
     included.push(finding);
+    includedByOriginal.set(finding, finding);
   }
 
-  const nonActionableRequirementIds = new Set(excluded.flatMap((item) => (
-    item.reason === "ALREADY_SATISFIED" || item.reason === "DUPLICATE_EXACT_FINDING"
-      ? [item.requirementId]
-      : []
-  )));
+  const exactContractRequirementIds = [...new Set([
+    ...exactIds,
+    ...synthesizedExactIds,
+  ])];
 
   return {
-    auditOutput: { ...output, findings: included },
+    auditOutput: {
+      ...output,
+      findings: included,
+      publicOutput: {
+        ...output.publicOutput,
+        ...(exactContractRequirementIds.length > 0 ? { exactContractRequirementIds } : {}),
+      },
+    },
     feedbackOutput: {
       ...output,
-      findings: output.findings.filter((finding) => !nonActionableRequirementIds.has(finding.requirementId)),
+      findings: output.findings.flatMap((finding) => (
+        nonActionableFindings.has(finding)
+          ? []
+          : [includedByOriginal.get(finding) ?? finding]
+      )),
     },
     includedRequirementIds: included.map((finding) => finding.requirementId),
     excluded,
