@@ -212,6 +212,7 @@
   .footer-sitemap section { display: grid; align-content: start; gap: 5px; }
   .footer-sitemap h2 { margin-bottom: 8px; font-size: 12px; }
   .footer-sitemap a { width: max-content; max-width: 100%; color: var(--color-muted); font-size: 10px; }
+  .footer-sitemap a { line-height: 1.85; }
   .footer-sitemap a:hover { color: var(--color-ink); }
   .footer-social { position: absolute; top: 54px; right: 0; display: flex; gap: 8px; }
   .footer-social a { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--color-border-strong); border-radius: 50%; color: var(--color-muted-dark); }
