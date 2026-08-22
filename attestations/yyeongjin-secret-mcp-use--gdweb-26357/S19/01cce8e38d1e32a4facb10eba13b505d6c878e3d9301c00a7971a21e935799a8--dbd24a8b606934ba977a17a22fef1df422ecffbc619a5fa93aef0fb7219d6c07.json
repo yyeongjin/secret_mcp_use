@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "design-validation/attestation/v2",
+  "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
+  "sectionId": "S19",
+  "fingerprint": "sha256:01cce8e38d1e32a4facb10eba13b505d6c878e3d9301c00a7971a21e935799a8",
+  "triggerSource": {
+    "path": "trigger/DESIGN_INDEX_gdweb-26357.md",
+    "documentHash": "sha256:f79f163969cbb3520f2741dde3250533a4ff3071dcb772e53dd5802b918e6336",
+    "fragmentHash": "sha256:c1bc763e635ed41c8f94a233cf9520bce816c1706e802571b8061ad7b43accab"
+  },
+  "specificationSource": {
+    "path": "DESIGN_INDEX_SPECIFICATION.md",
+    "documentHash": "sha256:65233a5428ae3411c094ab72691793e2998232e55ea5ca4e299993f7c4cf251a",
+    "globalRulesHash": "sha256:397b59d360af5b81cb8816ecdf12ad45bbd3c55990df199c67adf9b399fb2987",
+    "fragmentHash": "sha256:67bf3dc7f507fc31d679e052efb039576004c9ade177e84c27096d952186ea70"
+  },
+  "status": "PASS",
+  "baseCommit": "7689e42e9f5db897a627ea3c5e33f4327deba04f",
+  "source": "fresh-audit",
+  "requirementIds": [
+    "S19-REQ-5D17AEC469DB",
+    "S19-REQ-973FCBE453AC",
+    "S19-REQ-9FAC3FEE0C9C",
+    "S19-REQ-31A88B026B63",
+    "S19-REQ-5393AF459354",
+    "S19-REQ-86FEEF45D360",
+    "S19-REQ-4E8D5E7C8148",
+    "S19-REQ-BBCA0922485C",
+    "S19-REQ-D71AD49E9FC0",
+    "S19-REQ-0979A5F7EF03",
+    "S19-REQ-B54A28A22469",
+    "S19-REQ-72FB44911420",
+    "S19-REQ-EBAC62F08EBB",
+    "S19-REQ-8B314B64A019",
+    "S19-REQ-552E247162DD",
+    "S19-REQ-BA805629490D",
+    "S19-REQ-3D7119D3BCD6",
+    "S19-REQ-3A2E5657F0DC",
+    "S19-REQ-58D94D4CF29B",
+    "S19-REQ-F48937F7DCA6"
+  ],
+  "dependencyAttestations": {
+    "S01": "sha256:b03406ad756b69d623856b8dae43adeaa52c36af38689dc3eccc06551a8608f2",
+    "S02": "sha256:af2d39860b52a5dba4ad4f0ad74211d90d1ade0b78a239af80bdcaecc244cb6c",
+    "S03": "sha256:5a0cfde4d4fb412eefe3ff5dd235c597401875cb3b54515081becd472fdd5203",
+    "S04": "sha256:953e87079cb968bcd7a23bfdced7e8f0e62e207221d2fadcf884df96ff130b06",
+    "S05": "sha256:ea5fb2aea177929c442e13046725e3d26ce6eb97323a5b08de7de672a288cb17",
+    "S06": "sha256:7d7f2d6039ff7ac6b5097c6e810cd586027b2b42dae57df7009730e9fbd8324a",
+    "S07": "sha256:0b1c2b99f5ce1385499364606a8cff87a836344f1eefa8b8af95cedaa3bd4688",
+    "S08": "sha256:01f2e0ca86082ae3af1369d28ecbefcc9e7706917ff15deb52c1f98aad2517dc",
+    "S09": "sha256:01a2b4468f5a8a55e9bcb94ecfedc218d87ddb2af932168e55e52c111d001612",
+    "S10": "sha256:61210715a7a93a903c88f900805198be46011739e78472d470bf0580439a0063",
+    "S11": "sha256:e2a9d650735b15ff3aa6b7619ea3cad7714b6e1af9c483a1655289481bd7c919",
+    "S12": "sha256:422bd58f8b2dedad21a44618471df4474d3fa5ca7e68572fc5e03eefe69f702a",
+    "S13": "sha256:46390fbd1c87570a4fb27f93364cd0babe7cf81f2fe6cb8124f791070bbc2529",
+    "S14": "sha256:0214705b55bfdcce1550289367667ae42e75d3f1ed813956d378bfa8b76a6aa4",
+    "S15": "sha256:54d75d4f99c88ddbea59b8b70b6873c904cc36ea66af0a8162d8ef216947f0e4",
+    "S16": "sha256:940a9c71bf588a3702cc7acfe5e653772bb74d1e7b3aed85f63df0bcf67cf214",
+    "S17": "sha256:660746e9e8535376b38775637930ba9afa99aafbe95d4d1665b16c11c4446008",
+    "S18": "sha256:7472e628e57b68e46f2bce2d4b7ff6ea2fa1e5b6831429140b2005ee903a62f9"
+  },
+  "dependencyPublicDigests": {
+    "S01": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S02": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S03": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S04": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S05": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S06": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S07": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S08": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S09": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S10": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S11": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S12": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S13": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S14": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S15": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S16": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S17": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S18": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  "publicOutput": {},
+  "publicDigest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "validator": {
+    "id": "nvidia:nvidia/nemotron-3-super-120b-a12b",
+    "contractHash": "sha256:8619860b8a44d4e9f0bc4cac158b93bf559d2514f7e757e8387eb3bb69d810e6"
+  },
+  "tests": [
+    {
+      "id": "audit-schema",
+      "status": "PASS",
+      "artifactHash": "sha256:c2a3a2252ee4c1ca216a5dd014e58d9070326c9ad00a2b17664f83d5a7943f37"
+    }
+  ],
+  "createdAt": "2026-08-22T14:01:28.294Z",
+  "attestationHash": "sha256:dbd24a8b606934ba977a17a22fef1df422ecffbc619a5fa93aef0fb7219d6c07"
+}
