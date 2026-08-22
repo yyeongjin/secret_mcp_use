@@ -253,14 +253,8 @@ export function normalizeCompletionOutput(
     };
   }
   return {
-    schemaVersion: "design-validation/patch-output/v2",
-    sectionId,
-    fingerprint,
     status: source.status,
-    requirementIds: source.addressedRequirementIds,
-    evidenceRefs: source.evidenceRefs,
-    readSet: source.readSet,
-    writeSet: source.writeSet,
+    addressedRequirementIds: source.addressedRequirementIds,
     reason: source.reason,
     diff: source.diff,
   };

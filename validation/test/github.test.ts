@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildNodeCheckOutput,
   buildPullRequestBody,
+  isAutomationPullRequestForBase,
   needsFeedbackIssue,
   pullRequestTitle,
   stalePullRequestNotice,
@@ -229,4 +230,19 @@ test("a stale automation PR stays open and is refreshed in place", () => {
   assert.match(notice, /stays open for a human decision/);
   assert.doesNotMatch(notice, /is being closed|its branch will be deleted/);
   assert.match(notice, /design-validation-stale-preserved: 13:new-base/);
+});
+
+test("automation PR locks are isolated by base branch", () => {
+  assert.equal(isAutomationPullRequestForBase({
+    head: { ref: "auto/target/S09/hash", sha: "head" },
+    base: { ref: "pipeline-e2e", sha: "base" },
+  }, "pipeline-e2e"), true);
+  assert.equal(isAutomationPullRequestForBase({
+    head: { ref: "auto/target/S09/hash", sha: "head" },
+    base: { ref: "main", sha: "base" },
+  }, "pipeline-e2e"), false);
+  assert.equal(isAutomationPullRequestForBase({
+    head: { ref: "feature/manual", sha: "head" },
+    base: { ref: "pipeline-e2e", sha: "base" },
+  }, "pipeline-e2e"), false);
 });

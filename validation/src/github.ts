@@ -389,13 +389,20 @@ export function manifestFromBody(body: string | null | undefined): PullRequestMa
   }
 }
 
+export function isAutomationPullRequestForBase(
+  pull: Pick<PullRequestResponse, "head" | "base">,
+  baseBranch: string,
+): boolean {
+  return Boolean(pull.head?.ref.startsWith("auto/") && pull.base?.ref === baseBranch);
+}
+
 async function allAutomationPullRequests(config: PipelineConfig, state: "open" | "all"): Promise<PullRequestResponse[]> {
   const pulls = await githubRequest<PullRequestResponse[]>(
     config,
     "GET",
     `/repos/${config.repository}/pulls?state=${state}&per_page=100&sort=updated&direction=desc`,
   );
-  return pulls.filter((pull) => pull.head?.ref.startsWith("auto/"));
+  return pulls.filter((pull) => isAutomationPullRequestForBase(pull, config.github.baseBranch));
 }
 
 async function pullRequestByKey(config: PipelineConfig, key: Sha256): Promise<PullRequestResponse | null> {

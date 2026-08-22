@@ -11,7 +11,8 @@ import {
   quarantineAuditOutput,
   structuredOutputControls,
 } from "../src/nvidia.ts";
-import type { SectionId, Sha256 } from "../src/types.ts";
+import { canonicalizePatchOutput } from "../src/patch.ts";
+import type { NodeAuditInput, NodeAuditOutput, SectionId, Sha256 } from "../src/types.ts";
 
 const sectionId: SectionId = "S05";
 const fingerprint = `sha256:${"a".repeat(64)}` as Sha256;
@@ -165,14 +166,51 @@ test("normalizes transport metadata while preserving model-owned audit judgments
   });
 });
 
-test("preserves patch addressedRequirementIds through the trusted transport envelope", () => {
+test("preserves candidate Requirement IDs until canonical patch conversion", () => {
   const normalized = normalizeCompletionOutput("patch", {
     status: "PATCH",
     addressedRequirementIds: ["S05-NAV-001"],
     reason: "Implement the active state.",
-    diff: "diff --git a/frontend/index.html b/frontend/index.html\n",
-  }, sectionId, fingerprint) as { requirementIds: string[] };
-  assert.deepEqual(normalized.requirementIds, ["S05-NAV-001"]);
+    diff: [
+      "diff --git a/frontend/index.html b/frontend/index.html",
+      "--- a/frontend/index.html",
+      "+++ b/frontend/index.html",
+      "@@ -1 +1 @@",
+      "-<nav></nav>",
+      "+<nav aria-label=\"Primary\"></nav>",
+      "",
+    ].join("\n"),
+  }, sectionId, fingerprint) as {
+    status: string;
+    addressedRequirementIds: string[];
+    reason: string;
+    diff: string;
+  };
+  assert.deepEqual(normalized.addressedRequirementIds, ["S05-NAV-001"]);
+
+  const baseHash = `sha256:${"b".repeat(64)}` as Sha256;
+  const canonical = canonicalizePatchOutput({
+    value: normalized,
+    auditInput: {
+      node: { sectionId, fingerprint },
+      implementation: { files: [{
+        path: "frontend/index.html",
+        contentHash: baseHash,
+        byteLength: 12,
+        encoding: "utf8",
+        content: "<nav></nav>\n",
+      }] },
+    } as unknown as NodeAuditInput,
+    auditOutput: {
+      findings: [{
+        requirementId: "S05-NAV-001",
+        evidenceRefs: ["E-D01"],
+        implementationRefs: ["frontend/index.html"],
+      }],
+    } as unknown as NodeAuditOutput,
+  });
+  assert.deepEqual(canonical.requirementIds, ["S05-NAV-001"]);
+  assert.deepEqual(canonical.evidenceRefs, ["E-D01"]);
 });
 
 test("normalizes identifier transport defects without changing the finding judgment", () => {
