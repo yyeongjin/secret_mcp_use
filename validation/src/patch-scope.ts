@@ -16,6 +16,7 @@ export interface PatchScopeExclusion {
 
 export interface PatchScopeResult {
   auditOutput: NodeAuditOutput;
+  feedbackOutput: NodeAuditOutput;
   includedRequirementIds: string[];
   excluded: PatchScopeExclusion[];
 }
@@ -243,7 +244,7 @@ export function augmentAuditWithExactCssFindings(
 
 export function buildPatchScope(input: NodeAuditInput, output: NodeAuditOutput): PatchScopeResult {
   if (output.status !== "PATCH_REQUIRED") {
-    return { auditOutput: output, includedRequirementIds: [], excluded: [] };
+    return { auditOutput: output, feedbackOutput: output, includedRequirementIds: [], excluded: [] };
   }
 
   const contractTokens = contractCustomProperties(input.contract.designIndexFragment);
@@ -313,8 +314,18 @@ export function buildPatchScope(input: NodeAuditInput, output: NodeAuditOutput):
     included.push(finding);
   }
 
+  const nonActionableRequirementIds = new Set(excluded.flatMap((item) => (
+    item.reason === "ALREADY_SATISFIED" || item.reason === "DUPLICATE_EXACT_FINDING"
+      ? [item.requirementId]
+      : []
+  )));
+
   return {
     auditOutput: { ...output, findings: included },
+    feedbackOutput: {
+      ...output,
+      findings: output.findings.filter((finding) => !nonActionableRequirementIds.has(finding.requirementId)),
+    },
     includedRequirementIds: included.map((finding) => finding.requirementId),
     excluded,
   };

@@ -86,6 +86,11 @@ test("patch scope keeps only exact contract tokens that are genuinely absent", (
     ["S09-OVERLAY", "ALREADY_SATISFIED"],
     ["S09-SUCCESS", "CONTRACT_NOT_PATCHABLE"],
   ]);
+  assert.deepEqual(result.feedbackOutput.findings.map((item) => item.requirementId), [
+    "S09-HOVER",
+    "S09-DISABLED",
+    "S09-SUCCESS",
+  ]);
 });
 
 test("patch scope preserves a token finding when the implementation value is wrong", () => {
@@ -175,5 +180,22 @@ test("patch scope prefers one exact structural finding over vague duplicate toke
   assert.deepEqual(result.excluded.map((item) => [item.requirementId, item.reason]), [
     ["S09-VAGUE-HOVER", "DUPLICATE_EXACT_FINDING"],
     ["S09-VAGUE-PRESSED", "ALREADY_SATISFIED"],
+  ]);
+  assert.deepEqual(result.feedbackOutput.findings.map((item) => item.requirementId), ["S09-EXACT-HOVER"]);
+});
+
+test("PR feedback retains unresolved contract problems while omitting satisfied audit noise", () => {
+  const output = auditOutput();
+  output.findings = [
+    finding("S09-PRIMARY", "--color-primary", "#4169F5"),
+    finding("S09-SUCCESS", "--color-success", "#1B7F4B"),
+  ];
+  const result = buildPatchScope(auditInput(":root { --color-primary: #4169f5; }\n"), output);
+
+  assert.deepEqual(result.includedRequirementIds, []);
+  assert.deepEqual(result.feedbackOutput.findings.map((item) => item.requirementId), ["S09-SUCCESS"]);
+  assert.deepEqual(result.excluded.map((item) => [item.requirementId, item.reason]), [
+    ["S09-PRIMARY", "ALREADY_SATISFIED"],
+    ["S09-SUCCESS", "CONTRACT_NOT_PATCHABLE"],
   ]);
 });
