@@ -38,6 +38,10 @@ interface NodeCheckSummary {
   sectionId: string;
   name: string;
   fingerprint: string | null;
+  documentFingerprint?: string | null;
+  documentAuditStatus?: string;
+  documentAuditAttempts?: number;
+  documentFindings?: AuditFinding[];
   auditStatus: string;
   executionState: string;
   auditAttempts: number;
@@ -50,6 +54,39 @@ interface NodeCheckSummary {
     unresolvedRequirementIds?: string[];
     pullRequest?: { number: number; url: string; branch: string };
   } | null;
+}
+
+function documentCheckConclusion(node: NodeCheckSummary): CheckConclusion {
+  if (node.documentAuditStatus === "FAILED_SCHEMA") return "failure";
+  if (node.documentAuditStatus === "PASS") return "success";
+  return "neutral";
+}
+
+function buildDocumentNodeCheckOutput(args: {
+  summary: TargetCheckSummary;
+  node: NodeCheckSummary;
+}): { title: string; summary: string; text: string } {
+  return {
+    title: `${args.node.sectionId} Stage 1 ${args.node.documentAuditStatus ?? "NOT_RUN"}`.slice(0, 255),
+    summary: [
+      `- Target: \`${args.summary.targetId}\``,
+      `- Trigger: \`${args.summary.triggerPath}\``,
+      `- Comparison: \`Specification -> DESIGN_INDEX\``,
+      `- Status: \`${args.node.documentAuditStatus ?? "NOT_RUN"}\``,
+      `- Provider calls: \`${args.node.documentAuditAttempts ?? 0}\``,
+      `- Fingerprint: \`${args.node.documentFingerprint ?? "unavailable"}\``,
+      `- Independent request: \`${args.summary.runId}:document-audit:${args.node.sectionId}\``,
+      "- Source code included: `false`",
+      "- Writes and PR publication: `forbidden`",
+    ].join("\n"),
+    text: [
+      "## Document completeness findings",
+      "",
+      renderFindings(args.node.documentFindings ?? []),
+      "",
+      "This Stage 1 result can only report gaps in the immutable DESIGN_INDEX. It cannot create a code patch, Issue, or PR.",
+    ].join("\n"),
+  };
 }
 
 interface TargetCheckSummary {
@@ -187,7 +224,8 @@ export function buildNodeCheckOutput(args: {
       `- Patch disposition: ${patchReason}`,
       `- Publication: ${disposition}`,
       "",
-      `Independent request: \`${summary.runId}:audit:${node.sectionId}\``,
+      `Stage 1 request: \`${summary.runId}:document-audit:${node.sectionId}\``,
+      `Stage 2 request: \`${summary.runId}:implementation-audit:${node.sectionId}\``,
     ].join("\n"),
     text: [
       ...(pullRequest ? [
@@ -223,16 +261,26 @@ export async function publishNodeCheckRuns(args: {
     : undefined;
   for (const summary of args.summaries) {
     for (const node of summary.nodes) {
+      const documentOutput = buildDocumentNodeCheckOutput({ summary, node });
+      await githubRequest(args.config, "POST", `/repos/${args.config.repository}/check-runs`, {
+        name: `Design Validation / ${node.sectionId} Document`.slice(0, 100),
+        head_sha: args.config.baseCommit,
+        status: "completed",
+        conclusion: documentCheckConclusion(node),
+        external_id: `${summary.runId}:${summary.targetId}:${node.sectionId}:document`.slice(0, 255),
+        ...(detailsUrl ? { details_url: detailsUrl } : {}),
+        output: documentOutput,
+      });
       const output = buildNodeCheckOutput({
         summary,
         node,
       });
       await githubRequest(args.config, "POST", `/repos/${args.config.repository}/check-runs`, {
-        name: `Design Validation / ${node.sectionId} ${node.name}`.slice(0, 100),
+        name: `Design Validation / ${node.sectionId} Implementation`.slice(0, 100),
         head_sha: args.config.baseCommit,
         status: "completed",
         conclusion: nodeCheckConclusion(node),
-        external_id: `${summary.runId}:${summary.targetId}:${node.sectionId}`.slice(0, 255),
+        external_id: `${summary.runId}:${summary.targetId}:${node.sectionId}:implementation`.slice(0, 255),
         ...(detailsUrl ? { details_url: detailsUrl } : {}),
         output,
       });
@@ -437,7 +485,8 @@ export function buildPullRequestBody(args: {
     "",
     "## Independent NVIDIA Requests",
     "",
-    `- Audit: \`${args.manifest.runId}:audit:${args.input.node.sectionId}\``,
+    `- Document audit: \`${args.manifest.runId}:document-audit:${args.input.node.sectionId}\``,
+    `- Implementation audit: \`${args.manifest.runId}:implementation-audit:${args.input.node.sectionId}\``,
     `- Patch: \`${args.manifest.runId}:patch:${args.input.node.sectionId}:attempt:${args.patchAttempt}\``,
     `- Patched-code audit: \`${args.manifest.runId}:reaudit:${args.input.node.sectionId}:attempt:${args.patchAttempt}\``,
     "",

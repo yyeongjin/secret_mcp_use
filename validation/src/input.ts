@@ -7,12 +7,15 @@ import { buildSectionPayload, requirementIdsForSection } from "./payload.ts";
 import { runCommand } from "./process.ts";
 import {
   AUDIT_SYSTEM_PROMPT,
+  DOCUMENT_AUDIT_SYSTEM_PROMPT,
   PATCH_RETRY_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
   REGRESSION_AUDIT_SYSTEM_PROMPT,
 } from "./prompts.ts";
 import type {
   ChangeEvent,
+  DocumentAuditInput,
+  DocumentAuditOutput,
   ImpactManifest,
   ImplementationFile,
   NodeAuditInput,
@@ -92,6 +95,7 @@ export function validatorContractHash(
 ): Sha256 {
   return hashJson({
     schemaVersion: "design-validation/validator-contract/v2",
+    documentAuditPromptHash: sha256(DOCUMENT_AUDIT_SYSTEM_PROMPT),
     auditPromptHash: sha256(AUDIT_SYSTEM_PROMPT),
     patchPromptHash: sha256(PATCH_SYSTEM_PROMPT),
     patchRetryPromptHash: sha256(PATCH_RETRY_SYSTEM_PROMPT),
@@ -130,6 +134,122 @@ export function targetIdFor(repository: string, referenceId: string): string {
   return `${repositorySlug}--${referenceId}`;
 }
 
+export async function buildDocumentAuditInputs(
+  config: PipelineConfig,
+  manifest: ImpactManifest,
+  specification: SpecificationSnapshot,
+  trigger: TriggerSnapshot,
+  contractSchemaHash: Sha256,
+  runId: string,
+  requestedAt: string,
+): Promise<Map<SectionId, DocumentAuditInput>> {
+  const validatorHash = validatorContractHash(config, manifest, contractSchemaHash);
+  const modelHash = modelContractHash(config);
+  const targetId = targetIdFor(config.repository, trigger.referenceId);
+  const inputs = new Map<SectionId, DocumentAuditInput>();
+
+  for (const [sectionId, designSection] of trigger.sections) {
+    const specificationSection = specification.sections.get(sectionId);
+    if (!specificationSection) throw new Error(`Specification is missing ${sectionId}.`);
+    const evidence = await evidenceForSection({
+      repositoryRoot: config.repositoryRoot,
+      trigger,
+      fragment: designSection.fragment,
+    });
+    const requestContract = await requestContractForSection(
+      config.repositoryRoot,
+      trigger,
+      sectionId,
+    );
+    const node = manifest.nodes[sectionId];
+    const fingerprint = hashJson({
+      schemaVersion: "design-validation/document-fingerprint/v1",
+      targetId,
+      sectionId,
+      triggerPath: trigger.path,
+      triggerDocumentHash: trigger.documentHash,
+      specificationGlobalRulesHash: specification.globalRulesHash,
+      specificationFragmentHash: specificationSection.hash,
+      designIndexFragmentHash: designSection.hash,
+      evidenceSubsetHash: hashJson(evidence),
+      requestContractHash: requestContract?.contentHash ?? null,
+      validatorConfigHash: validatorHash,
+      modelContractHash: modelHash,
+    });
+    const input: DocumentAuditInput = {
+      schemaVersion: "design-validation/document-audit-input/v1",
+      run: {
+        runId,
+        targetId,
+        repository: config.repository,
+        baseCommit: config.baseCommit,
+        requestedAt,
+      },
+      node: { sectionId, name: node.name, fingerprint },
+      contract: {
+        specificationSource: {
+          path: specification.path,
+          documentHash: specification.documentHash,
+          globalRulesHash: specification.globalRulesHash,
+          sectionHash: specificationSection.hash,
+          sectionHeading: specificationSection.heading,
+        },
+        specificationGlobalRules: specification.globalRules,
+        specificationFragment: specificationSection.fragment,
+        designIndexSource: {
+          path: trigger.path,
+          referenceId: trigger.referenceId,
+          documentHash: trigger.documentHash,
+          sectionHash: designSection.hash,
+          sectionHeading: designSection.heading,
+        },
+        designIndexFragment: designSection.fragment,
+        requestContract,
+      },
+      evidence,
+      policy: {
+        immutableInputGlobs: manifest.immutableInputGlobs,
+        forbiddenOperations: [
+          "read source code",
+          "modify Specification or DESIGN_INDEX",
+          "invent missing design values",
+          "read another numbered Section",
+          "generate a code patch",
+        ],
+      },
+      payload: buildSectionPayload({
+        sectionId,
+        trigger,
+        fragment: designSection.fragment,
+        evidence,
+      }),
+    };
+    const conservativeTokenUpperBound = Buffer.byteLength(JSON.stringify(input), "utf8");
+    if (conservativeTokenUpperBound > config.nvidia.maxInputTokens) {
+      throw new Error(
+        `${sectionId} document input upper bound ${conservativeTokenUpperBound} exceeds NVIDIA_MAX_INPUT_TOKENS=${config.nvidia.maxInputTokens}.`,
+      );
+    }
+    inputs.set(sectionId, input);
+  }
+  return inputs;
+}
+
+export function assertIsolatedDocumentAuditInput(input: DocumentAuditInput): void {
+  const ownNumber = Number(input.node.sectionId.slice(1));
+  const numberedHeadings = [
+    ...input.contract.specificationFragment.matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
+    ...input.contract.designIndexFragment.matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
+    ...(input.contract.requestContract?.fragment ?? "").matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
+  ].map((match) => Number(match[1]));
+  if (numberedHeadings.some((number) => number !== ownNumber)) {
+    throw new Error(`${input.node.sectionId} document input contains another numbered Section.`);
+  }
+  if ("implementation" in input) {
+    throw new Error(`${input.node.sectionId} document input unexpectedly contains source code.`);
+  }
+}
+
 export async function buildAuditInputs(
   config: PipelineConfig,
   manifest: ImpactManifest,
@@ -139,6 +259,7 @@ export async function buildAuditInputs(
   runId: string,
   requestedAt: string,
   changeEvent: ChangeEvent,
+  documentOutputs: Map<SectionId, DocumentAuditOutput>,
 ): Promise<Map<SectionId, NodeAuditInput>> {
   const allRepositoryFiles = await repositoryInputFiles(config.repositoryRoot);
   const validatorHash = validatorContractHash(config, manifest, contractSchemaHash);
@@ -166,16 +287,18 @@ export async function buildAuditInputs(
       sectionId,
     );
     const requirementIds = requirementIdsForSection(sectionId, designSection.fragment);
+    const documentOutput = documentOutputs.get(sectionId);
+    if (!documentOutput) throw new Error(`Document audit is missing ${sectionId}.`);
     const node = manifest.nodes[sectionId];
     const fingerprint = hashJson({
-      schemaVersion: "design-validation/v2",
+      schemaVersion: "design-validation/implementation-fingerprint/v3",
       targetId,
       sectionId,
       triggerPath: trigger.path,
       triggerDocumentHash: trigger.documentHash,
-      specificationGlobalRulesHash: specification.globalRulesHash,
-      specificationFragmentHash: specificationSection.hash,
       designIndexFragmentHash: designSection.hash,
+      documentAuditFingerprint: documentOutput.fingerprint,
+      documentAuditOutputDigest: hashJson(documentOutput),
       evidenceSubsetHash: hashJson(evidence),
       requestContractHash: requestContract?.contentHash ?? null,
       implementationSliceHash: hashJson(
@@ -191,7 +314,7 @@ export async function buildAuditInputs(
     });
 
     const input: NodeAuditInput = {
-      schemaVersion: "design-validation/audit-input/v2",
+      schemaVersion: "design-validation/implementation-audit-input/v3",
       run: {
         runId,
         targetId,
@@ -214,8 +337,6 @@ export async function buildAuditInputs(
           sectionHash: specificationSection.hash,
           sectionHeading: specificationSection.heading,
         },
-        specificationGlobalRules: specification.globalRules,
-        specificationFragment: specificationSection.fragment,
         designIndexSource: {
           path: trigger.path,
           referenceId: trigger.referenceId,
@@ -224,6 +345,12 @@ export async function buildAuditInputs(
           sectionHeading: designSection.heading,
         },
         designIndexFragment: designSection.fragment,
+        documentAudit: {
+          fingerprint: documentOutput.fingerprint,
+          status: documentOutput.status,
+          outputDigest: hashJson(documentOutput),
+          findingRequirementIds: documentOutput.findings.map((finding) => finding.requirementId),
+        },
         requestContract,
       },
       evidence,
@@ -273,8 +400,11 @@ export async function buildAuditInputs(
 
 export function assertIsolatedAuditInput(input: NodeAuditInput): void {
   const ownNumber = Number(input.node.sectionId.slice(1));
+  const legacySpecificationFragment = (input.contract as NodeAuditInput["contract"] & {
+    specificationFragment?: string;
+  }).specificationFragment ?? "";
   const numberedHeadings = [
-    ...input.contract.specificationFragment.matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
+    ...legacySpecificationFragment.matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
     ...input.contract.designIndexFragment.matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
     ...(input.contract.requestContract?.fragment ?? "").matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
   ].map((match) => Number(match[1]));

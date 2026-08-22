@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secret-mcp.local/schemas/document-audit-input-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "run", "node", "contract", "evidence", "policy", "payload"],
+  "properties": {
+    "schemaVersion": { "const": "design-validation/document-audit-input/v1" },
+    "run": {
+      "type": "object",
+      "required": ["runId", "targetId", "repository", "baseCommit", "requestedAt"],
+      "properties": {
+        "runId": { "type": "string" }, "targetId": { "type": "string" },
+        "repository": { "type": "string" }, "baseCommit": { "type": "string" },
+        "requestedAt": { "type": "string" }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": ["sectionId", "name", "fingerprint"],
+      "properties": {
+        "sectionId": { "type": "string", "pattern": "^S(?:0[1-9]|1[0-9])$" },
+        "name": { "type": "string" },
+        "fingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "required": ["specificationSource", "specificationGlobalRules", "specificationFragment", "designIndexSource", "designIndexFragment", "requestContract"],
+      "properties": {
+        "specificationSource": { "type": "object" },
+        "specificationGlobalRules": { "type": "string" },
+        "specificationFragment": { "type": "string", "minLength": 1 },
+        "designIndexSource": { "type": "object" },
+        "designIndexFragment": { "type": "string", "minLength": 1 },
+        "requestContract": { "type": ["object", "null"] }
+      }
+    },
+    "evidence": { "type": "array", "items": { "type": "object" } },
+    "policy": {
+      "type": "object",
+      "required": ["immutableInputGlobs", "forbiddenOperations"],
+      "properties": {
+        "immutableInputGlobs": { "type": "array", "items": { "type": "string" } },
+        "forbiddenOperations": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "payload": { "type": "object" }
+  }
+}

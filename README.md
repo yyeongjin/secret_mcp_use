@@ -29,7 +29,7 @@ The complete rules are maintained in [DESIGN_INDEX_SPECIFICATION.md](DESIGN_INDE
 
 ## NVIDIA Validation Pipeline Setup
 
-The validation pipeline uses [`nvidia/nemotron-3-super-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) through the NVIDIA API. A single model ID does not mean a single combined LLM job: one work is split into `S01` through `S19`, and the orchestrator sends 19 stateless requests whose prompts, inputs, outputs, request IDs, logs, and temporary workspaces are isolated from one another.
+The validation pipeline uses [`nvidia/nemotron-3-super-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) through the NVIDIA API. A single model ID does not mean a single combined LLM job. One work is split into `S01` through `S19`, then validated in two explicit stages: Stage 1 sends 19 stateless document-completeness requests that compare the current Specification with the matching DESIGN_INDEX Section and contain no source code; Stage 2 sends another 19 stateless implementation requests that compare the matching DESIGN_INDEX Section with its owned source slice and contain no Specification text. A first or forced full run therefore schedules exactly 38 independent primary requests before any patch candidate or re-audit calls.
 
 The complete pipeline contract is documented in [IDEA_VALIDATION_AND_PR_PIPELINE.ko.md](IDEA_VALIDATION_AND_PR_PIPELINE.ko.md).
 
@@ -111,22 +111,23 @@ gh variable list --repo yyeongjin/secret_mcp_use
 
 ### 3. Skip work that has already passed
 
-An NVIDIA request must not be used to decide whether an unchanged Section should be inspected. That would already consume an API call. Before any request, deterministic orchestrator code calculates a fingerprint for each Section from its immutable trigger fragment, relevant common specification fragment, evidence hashes, validator contract and schema version, model configuration, owned frontend source hashes, and direct dependency attestations.
+An NVIDIA request must not be used to decide whether an unchanged Section should be inspected. That would already consume an API call. Before any request, deterministic orchestrator code calculates two fingerprints per Section. The Stage 1 document fingerprint covers the Specification rules, matching immutable trigger fragment, Evidence, request contract, validator contract, and model configuration. The Stage 2 implementation fingerprint covers the immutable DESIGN_INDEX fragment, same-Section Stage 1 output digest, owned frontend source hashes, Evidence, validator contract, model configuration, and dependency attestations.
 
 The orchestrator then looks for an immutable PASS attestation with the same `targetId`, `sectionId`, and fingerprint:
 
 ```text
-matching valid PASS attestation -> CACHED_PASS -> zero NVIDIA calls -> no patch -> no PR
-missing or mismatched attestation -> one isolated NVIDIA audit call for that Section
+matching Stage 1 PASS attestation -> document CACHED_PASS -> zero Stage 1 calls
+matching Stage 2 PASS attestation -> implementation CACHED_PASS -> zero Stage 2 calls -> no patch -> no PR
+missing or mismatched attestation -> one isolated request for that Stage and Section
 ```
 
 A visual similarity guess or the model's memory is never sufficient for a skip. A Section that appears to be implemented but has no valid PASS attestation is audited once. After it passes, the attestation makes later identical runs static and call-free.
 
-The cache is invalidated when any fingerprint input changes, the attestation is missing or revoked, or a dependency attestation is no longer valid. A newly added or externally updated `trigger/DESIGN_INDEX_gdweb-*.md` is a new immutable contract version and therefore starts a full 19-request audit for that work. `PIPELINE_FORCE_FULL_AUDIT=true` also bypasses cached PASS results and must only be used for an intentional complete re-audit. Patch scheduling accepts either a valid persisted PASS attestation or a PASS result produced by that dependency's isolated audit in the current run. A downstream patch is not blocked merely because an upstream PASS has not yet been persisted, while non-PASS dependencies still block it.
+The cache is invalidated when any fingerprint input changes, the attestation is missing or revoked, or a dependency attestation is no longer valid. A newly added or externally updated `trigger/DESIGN_INDEX_gdweb-*.md` is a new immutable contract version and therefore starts a full 38-request audit for that work: 19 Stage 1 requests plus 19 Stage 2 requests. `PIPELINE_FORCE_FULL_AUDIT=true` also bypasses both PASS caches and must only be used for an intentional complete re-audit. Patch scheduling accepts either a valid persisted Stage 2 PASS attestation or a Stage 2 PASS result produced by that dependency's isolated audit in the current run. A downstream patch is not blocked merely because an upstream PASS has not yet been persisted, while non-PASS dependencies still block it.
 
 The Specification is not compiled into the runner. Every execution parses the current `DESIGN_INDEX_SPECIFICATION.md` with a Markdown AST and extracts the current global rules and numbered S01-S19 fragments. A global rule change invalidates all Section fingerprints. A numbered fragment change invalidates that Section and any downstream cache whose dependency attestation is no longer valid. A previous PASS from another Specification hash is never reused. Missing or duplicate numbered fragments stop the run before any NVIDIA request, and the pipeline never edits the Specification to repair the structure.
 
-The initial fan-out always schedules one logical audit for each uncached Section. A first or forced full run therefore creates exactly 19 independent logical audit requests, one for each of S01-S19; no model receives another Section's input or output. If a provider response is truncated, malformed, schema-invalid, `UNKNOWN`, `BLOCKED_MISSING_EVIDENCE`, or `BLOCKED_CONTRACT_CONFLICT`, only that same Section is independently retried up to `PIPELINE_AUDIT_ATTEMPTS`. Every retry has a new request ID and seed but receives the identical isolated input. Run records distinguish the 19 scheduled Section requests from additional same-Section attempts and store every response under `nodes/SXX/audit-attempts/attempt-N/`.
+The two fan-outs always schedule one logical request for every uncached Stage and Section. A first or forced full run creates exactly 19 independent `document-audit:S01-S19` requests followed by exactly 19 independent `implementation-audit:S01-S19` requests. No model receives another Section's input or output. Stage 1 never receives source code; Stage 2 never receives Specification text. If a provider response is truncated, malformed, schema-invalid, `UNKNOWN`, `BLOCKED_MISSING_EVIDENCE`, or `BLOCKED_CONTRACT_CONFLICT`, only that same Stage and Section is independently retried up to `PIPELINE_AUDIT_ATTEMPTS`. Run records distinguish `documentAuditRequests`, `implementationAuditRequests`, and `totalLogicalAuditRequests` from additional provider attempts. Responses are stored separately under `nodes/SXX/document-audit-attempts/attempt-N/` and `nodes/SXX/audit-attempts/attempt-N/`.
 
 ### 4. First-run safety settings
 
@@ -155,7 +156,7 @@ The complete runner is under [`validation/`](validation/) and [`.github/workflow
 Manual inputs have the following meaning:
 
 - `trigger_path`: exactly one immutable `trigger/DESIGN_INDEX_gdweb-*.md` input. Push runs discover every matching input and skip unchanged works by fingerprint.
-- `force_full_audit`: ignores valid PASS cache and sends all 19 audit requests.
+- `force_full_audit`: ignores both valid PASS caches and sends all 38 primary audit requests, 19 per Stage.
 - `dry_run`: applies a proposed diff only in an isolated temporary worktree and never publishes it.
 - `create_prs`: after every guard, browser test, and patched-code re-audit passes, publishes an idempotent draft PR. This requires `dry_run=false`.
 - A published PR targets the branch/ref that ran the workflow. A `main` push therefore targets `main`, while an explicitly dispatched validation branch can test publication without modifying `main`.
@@ -164,10 +165,14 @@ The end-to-end order is fixed:
 
 ```text
 parse current Specification and trigger
-  -> compute S01-S19 fingerprints
-  -> reuse valid immutable PASS attestations before API calls
-  -> send one stateless NVIDIA audit request per remaining Section
-  -> merge JSON outputs with deterministic code
+  -> compute 19 Stage 1 document fingerprints
+  -> reuse valid immutable document PASS attestations before API calls
+  -> send one stateless Specification-to-DESIGN_INDEX request per remaining Section
+  -> merge Stage 1 JSON outputs with deterministic code
+  -> compute 19 Stage 2 implementation fingerprints using same-Section Stage 1 digests
+  -> reuse valid immutable implementation PASS attestations before API calls
+  -> send one stateless DESIGN_INDEX-to-source request per remaining Section
+  -> merge Stage 2 JSON outputs with deterministic code
   -> require every PATCH_REQUIRED finding to name a supplied file owned by that Section
   -> send a separate patch request only for grounded PATCH_REQUIRED nodes
   -> try at most PIPELINE_PATCH_ATTEMPTS independently seeded candidates inside that Section
@@ -193,6 +198,22 @@ npm run test:frontend
 ```
 
 There is no local mock provider or mock workflow mode. An end-to-end pipeline run always requires the real NVIDIA API. Every audit, patch, and re-audit request sends its bound JSON Schema through NVIDIA `guided_json`; the Nemotron chat template also receives `enable_thinking` and `force_nonempty_content: true`. Because the NVIDIA grammar rejects the `uniqueItems` annotation, the request uses a recursive schema copy without that annotation and then validates the returned object against the unchanged complete schema with Ajv. The complete audit, canonical patch, and model patch-candidate schemas are part of the validator contract fingerprint, so changing any output contract invalidates stale PASS attestations. To verify it locally without publishing a PR, export `NVIDIA_API_KEY` and run `npm run audit -- --dry-run --trigger trigger/DESIGN_INDEX_gdweb-26357.md`. GitHub Actions remains the authoritative publication test because it also exercises repository permissions and draft PR creation.
+
+### Pipeline artifact viewer
+
+The viewer reads real pipeline artifacts; it does not create mock NVIDIA responses. After a local run, start it with:
+
+```bash
+npm run viewer
+```
+
+Open <http://127.0.0.1:4318/>. To inspect a downloaded Actions artifact, point the viewer at the directory containing `pipeline-summary.json`:
+
+```bash
+PIPELINE_VIEWER_DATA_ROOT=/absolute/path/to/.validation-runs/current npm run viewer
+```
+
+The first grid shows the 19 Stage 1 document requests and the second grid shows the 19 Stage 2 implementation requests. The counters come directly from `documentAuditRequests`, `implementationAuditRequests`, and `totalLogicalAuditRequests` in the run summary.
 
 ## Live Frontend Preview
 

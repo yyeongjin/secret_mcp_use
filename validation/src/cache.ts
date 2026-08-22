@@ -4,15 +4,20 @@ import { hashHex, hashJson } from "./hash.ts";
 import { topologicalSections } from "./manifest.ts";
 import type {
   CachedNode,
+  DocumentAuditInput,
+  DocumentAuditOutput,
+  DocumentPassAttestation,
   ImpactManifest,
   NodeAuditInput,
   NodeAuditOutput,
   PassAttestation,
   PipelineConfig,
   ResolvedNode,
+  ResolvedDocumentNode,
   SectionId,
   Sha256,
 } from "./types.ts";
+import { SECTION_IDS } from "./types.ts";
 
 async function exists(pathname: string): Promise<boolean> {
   try {
@@ -25,6 +30,113 @@ async function exists(pathname: string): Promise<boolean> {
 
 function attestationHash(attestation: Omit<PassAttestation, "attestationHash">): Sha256 {
   return hashJson(attestation);
+}
+
+function documentAttestationHash(
+  attestation: Omit<DocumentPassAttestation, "attestationHash">,
+): Sha256 {
+  return hashJson(attestation);
+}
+
+function validDocumentAttestationShape(value: unknown): value is DocumentPassAttestation {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<DocumentPassAttestation>;
+  return item.schemaVersion === "design-validation/document-attestation/v1" &&
+    item.stage === "document" && item.status === "PASS" &&
+    typeof item.targetId === "string" && typeof item.sectionId === "string" &&
+    typeof item.fingerprint === "string" && typeof item.attestationHash === "string";
+}
+
+export async function resolveCachedDocumentPass(args: {
+  config: PipelineConfig;
+  input: DocumentAuditInput;
+  validatorContractHash: Sha256;
+}): Promise<ResolvedDocumentNode | null> {
+  if (args.config.forceFullAudit) return null;
+  const directory = path.join(
+    args.config.stateRoot,
+    "document-attestations",
+    args.input.run.targetId,
+    args.input.node.sectionId,
+  );
+  if (!(await exists(directory))) return null;
+  const prefix = hashHex(args.input.node.fingerprint);
+  for (const entry of (await readdir(directory)).filter((name) => name.startsWith(prefix)).sort()) {
+    const parsed = JSON.parse(await readFile(path.join(directory, entry), "utf8")) as unknown;
+    if (!validDocumentAttestationShape(parsed)) continue;
+    const { attestationHash: claimed, ...unsigned } = parsed;
+    if (documentAttestationHash(unsigned) !== claimed) continue;
+    if (
+      parsed.targetId !== args.input.run.targetId ||
+      parsed.sectionId !== args.input.node.sectionId ||
+      parsed.fingerprint !== args.input.node.fingerprint ||
+      parsed.validator.id !== `nvidia:${args.config.nvidia.model}` ||
+      parsed.validator.contractHash !== args.validatorContractHash
+    ) continue;
+    const output: DocumentAuditOutput = {
+      schemaVersion: "design-validation/document-audit-output/v1",
+      sectionId: args.input.node.sectionId,
+      fingerprint: args.input.node.fingerprint,
+      status: "PASS",
+      findings: [],
+      publicOutput: parsed.publicOutput,
+    };
+    return { status: "CACHED_PASS", output, rawResponseHash: parsed.rawResponseHash, attestation: parsed };
+  }
+  return null;
+}
+
+export async function createFreshDocumentAttestations(args: {
+  config: PipelineConfig;
+  inputs: Map<SectionId, DocumentAuditInput>;
+  resolved: Map<SectionId, ResolvedDocumentNode>;
+  validatorContractHash: Sha256;
+  outputDirectory: string;
+}): Promise<Map<SectionId, DocumentPassAttestation>> {
+  const attestations = new Map<SectionId, DocumentPassAttestation>();
+  for (const sectionId of SECTION_IDS) {
+    const input = args.inputs.get(sectionId);
+    const resolved = args.resolved.get(sectionId);
+    if (!input || !resolved || resolved.output.status !== "PASS") continue;
+    if (resolved.attestation) {
+      attestations.set(sectionId, resolved.attestation);
+      continue;
+    }
+    const unsigned: Omit<DocumentPassAttestation, "attestationHash"> = {
+      schemaVersion: "design-validation/document-attestation/v1",
+      stage: "document",
+      targetId: input.run.targetId,
+      sectionId,
+      fingerprint: input.node.fingerprint,
+      triggerSource: {
+        path: input.contract.designIndexSource.path,
+        documentHash: input.contract.designIndexSource.documentHash,
+        fragmentHash: input.contract.designIndexSource.sectionHash,
+      },
+      specificationSource: {
+        path: input.contract.specificationSource.path,
+        documentHash: input.contract.specificationSource.documentHash,
+        globalRulesHash: input.contract.specificationSource.globalRulesHash,
+        fragmentHash: input.contract.specificationSource.sectionHash,
+      },
+      status: "PASS",
+      publicOutput: resolved.output.publicOutput,
+      publicDigest: hashJson(resolved.output.publicOutput),
+      validator: { id: `nvidia:${args.config.nvidia.model}`, contractHash: args.validatorContractHash },
+      rawResponseHash: resolved.rawResponseHash,
+      createdAt: new Date().toISOString(),
+    };
+    const attestation = { ...unsigned, attestationHash: documentAttestationHash(unsigned) };
+    const directory = path.join(args.outputDirectory, input.run.targetId, sectionId);
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      path.join(directory, `${hashHex(input.node.fingerprint)}--${hashHex(attestation.attestationHash)}.json`),
+      `${JSON.stringify(attestation, null, 2)}\n`,
+      { flag: "wx" },
+    );
+    attestations.set(sectionId, attestation);
+  }
+  return attestations;
 }
 
 function validAttestationShape(value: unknown): value is PassAttestation {

@@ -9,7 +9,7 @@ on:
         default: trigger/DESIGN_INDEX_gdweb-26357.md
         type: string
       force_full_audit:
-        description: Ignore valid PASS attestations and call all 19 audit nodes
+        description: Ignore both PASS caches and call 19 document plus 19 implementation audits
         required: true
         default: false
         type: boolean
@@ -47,7 +47,7 @@ concurrency:
 jobs:
   validate:
     if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
-    name: Audit isolated Sections and verify grounded patches
+    name: Run 19 document and 19 implementation audits, then verify grounded patches
     runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:
@@ -241,13 +241,17 @@ jobs:
             mkdir -p .validation-state/attestations
             cp -R "${run_root}/attestations/." .validation-state/attestations/
           fi
+          if [[ -d "${run_root}/document-attestations" ]]; then
+            mkdir -p .validation-state/document-attestations
+            cp -R "${run_root}/document-attestations/." .validation-state/document-attestations/
+          fi
           if [[ -d "${run_root}/state-records" ]]; then
             mkdir -p .validation-state/runs
             cp -R "${run_root}/state-records/." .validation-state/runs/
           fi
           git -C .validation-state config user.name 'secret-mcp-validation[bot]'
           git -C .validation-state config user.email 'secret-mcp-validation[bot]@users.noreply.github.com'
-          git -C .validation-state add -- README.md attestations runs 2>/dev/null || git -C .validation-state add -- README.md
+          git -C .validation-state add -- README.md attestations document-attestations runs 2>/dev/null || git -C .validation-state add -- README.md
           if ! git -C .validation-state diff --cached --quiet; then
             git -C .validation-state commit -m "state: record validation run ${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
             git -C .validation-state push origin HEAD:validation-state

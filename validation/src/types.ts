@@ -123,7 +123,7 @@ export interface ChangeEvent {
 }
 
 export interface NodeAuditInput {
-  schemaVersion: "design-validation/audit-input/v2";
+  schemaVersion: "design-validation/implementation-audit-input/v3";
   run: {
     runId: string;
     targetId: string;
@@ -146,8 +146,6 @@ export interface NodeAuditInput {
       sectionHash: Sha256;
       sectionHeading: string;
     };
-    specificationGlobalRules: string;
-    specificationFragment: string;
     designIndexSource: {
       path: string;
       referenceId: `gdweb-${string}`;
@@ -156,6 +154,12 @@ export interface NodeAuditInput {
       sectionHeading: string;
     };
     designIndexFragment: string;
+    documentAudit: {
+      fingerprint: Sha256;
+      status: DocumentAuditStatus;
+      outputDigest: Sha256;
+      findingRequirementIds: string[];
+    };
     requestContract: RequestContractReference | null;
   };
   evidence: EvidenceReference[];
@@ -179,6 +183,70 @@ export interface NodeAuditInput {
     maxChangedLines: number;
   };
   payload: Record<string, unknown>;
+}
+
+export interface DocumentAuditInput {
+  schemaVersion: "design-validation/document-audit-input/v1";
+  run: NodeAuditInput["run"];
+  node: {
+    sectionId: SectionId;
+    name: string;
+    fingerprint: Sha256;
+  };
+  contract: {
+    specificationSource: NodeAuditInput["contract"]["specificationSource"];
+    specificationGlobalRules: string;
+    specificationFragment: string;
+    designIndexSource: NodeAuditInput["contract"]["designIndexSource"];
+    designIndexFragment: string;
+    requestContract: RequestContractReference | null;
+  };
+  evidence: EvidenceReference[];
+  policy: {
+    immutableInputGlobs: string[];
+    forbiddenOperations: string[];
+  };
+  payload: Record<string, unknown>;
+}
+
+export type DocumentAuditStatus =
+  | "PASS"
+  | "DOCUMENT_GAP"
+  | "BLOCKED_MISSING_EVIDENCE"
+  | "BLOCKED_CONTRACT_CONFLICT"
+  | "UNKNOWN";
+
+export interface DocumentAuditOutput {
+  schemaVersion: "design-validation/document-audit-output/v1";
+  sectionId: SectionId;
+  fingerprint: Sha256;
+  status: DocumentAuditStatus;
+  findings: AuditFinding[];
+  publicOutput: Record<string, string | number | boolean | string[] | null>;
+}
+
+export interface DocumentPassAttestation {
+  schemaVersion: "design-validation/document-attestation/v1";
+  stage: "document";
+  targetId: string;
+  sectionId: SectionId;
+  fingerprint: Sha256;
+  triggerSource: PassAttestation["triggerSource"];
+  specificationSource: PassAttestation["specificationSource"];
+  status: "PASS";
+  publicOutput: DocumentAuditOutput["publicOutput"];
+  publicDigest: Sha256;
+  validator: PassAttestation["validator"];
+  rawResponseHash: Sha256;
+  createdAt: string;
+  attestationHash: Sha256;
+}
+
+export interface ResolvedDocumentNode {
+  status: "CACHED_PASS" | "FRESH";
+  output: DocumentAuditOutput;
+  rawResponseHash: Sha256;
+  attestation?: DocumentPassAttestation;
 }
 
 export type AuditStatus =

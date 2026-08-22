@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DESIGN_INDEX Pipeline</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">SECRET MCP USE</p>
+      <h1>DESIGN_INDEX Validation Pipeline</h1>
+    </div>
+    <div class="connection"><span></span><strong id="connection">Loading artifact</strong></div>
+  </header>
+  <main>
+    <section class="run-header">
+      <div>
+        <p class="eyebrow" id="run-id">RUN</p>
+        <h2 id="target">Waiting for pipeline data</h2>
+        <p id="trigger" class="muted"></p>
+      </div>
+      <div class="metrics" id="metrics"></div>
+    </section>
+    <section class="stage">
+      <div class="stage-copy">
+        <p class="stage-number">STAGE 1</p>
+        <h2>Document completeness</h2>
+        <p>Specification instructions compared with the matching DESIGN_INDEX Section. Source code and write access are excluded.</p>
+      </div>
+      <div class="stage-total" id="document-total">0 / 19</div>
+      <div class="node-grid" id="document-grid"></div>
+    </section>
+    <section class="stage">
+      <div class="stage-copy">
+        <p class="stage-number">STAGE 2</p>
+        <h2>Implementation coverage</h2>
+        <p>Each DESIGN_INDEX Section compared with its owned source slice. Only grounded omissions can proceed to diff verification and a draft PR.</p>
+      </div>
+      <div class="stage-total" id="implementation-total">0 / 19</div>
+      <div class="node-grid" id="implementation-grid"></div>
+    </section>
+    <section class="contract">
+      <h2>Execution contract</h2>
+      <dl>
+        <div><dt>Primary requests</dt><dd>38 on a full run</dd></div>
+        <div><dt>Isolation</dt><dd>One stateless request per Stage and Section</dd></div>
+        <div><dt>Document writes</dt><dd>Forbidden</dd></div>
+        <div><dt>Code PR source</dt><dd>Stage 2 verified diff only</dd></div>
+      </dl>
+    </section>
+    <p class="error" id="error" hidden></p>
+  </main>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

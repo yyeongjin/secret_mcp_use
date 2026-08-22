@@ -206,12 +206,33 @@ export function quarantineAuditOutput(sectionId: SectionId, fingerprint: Sha256)
   };
 }
 
+export function quarantineDocumentAuditOutput(sectionId: SectionId, fingerprint: Sha256): unknown {
+  return {
+    schemaVersion: "design-validation/document-audit-output/v1",
+    sectionId,
+    fingerprint,
+    status: "UNKNOWN",
+    findings: [{ ...unknownFinding(sectionId), implementationRefs: [] }],
+    publicOutput: { transportStatus: "QUARANTINED" },
+  };
+}
+
 export function normalizeCompletionOutput(
-  kind: "audit" | "patch" | "reaudit",
+  kind: "document-audit" | "audit" | "patch" | "reaudit",
   value: unknown,
   sectionId: SectionId,
   fingerprint: Sha256,
 ): unknown {
+  if (kind === "document-audit" && value === "PASS") {
+    return {
+      schemaVersion: "design-validation/document-audit-output/v1",
+      sectionId,
+      fingerprint,
+      status: "PASS",
+      findings: [],
+      publicOutput: {},
+    };
+  }
   if ((kind === "audit" || kind === "reaudit") && value === "PASS") {
     return {
       schemaVersion: "design-validation/audit-output/v2",
@@ -224,6 +245,36 @@ export function normalizeCompletionOutput(
   }
   const source = asRecord(value);
   if (!source) return value;
+  if (kind === "document-audit") {
+    const status = source.status === "PASS" ||
+      source.status === "DOCUMENT_GAP" ||
+      source.status === "BLOCKED_MISSING_EVIDENCE" ||
+      source.status === "BLOCKED_CONTRACT_CONFLICT" ||
+      source.status === "UNKNOWN"
+      ? source.status
+      : "UNKNOWN";
+    const findings = normalizeFindings(source.findings, sectionId).map((finding) => ({
+      ...finding,
+      implementationRefs: [],
+      proposedValue: null,
+    }));
+    const emptyNonPass = status !== "PASS" && findings.length === 0;
+    const normalizedStatus = status === "PASS" && findings.length > 0
+      ? "UNKNOWN"
+      : emptyNonPass ? "UNKNOWN" : status;
+    return {
+      schemaVersion: "design-validation/document-audit-output/v1",
+      sectionId,
+      fingerprint,
+      status: normalizedStatus,
+      findings: normalizedStatus === "PASS" || findings.length > 0
+        ? findings
+        : [{ ...unknownFinding(sectionId), implementationRefs: [] }],
+      publicOutput: emptyNonPass
+        ? { ...normalizePublicOutput(source.publicOutput), transportStatus: "QUARANTINED" }
+        : normalizePublicOutput(source.publicOutput),
+    };
+  }
   if (kind === "audit" || kind === "reaudit") {
     const status = source.status === "PASS" ||
       source.status === "PATCH_REQUIRED" ||
@@ -283,7 +334,7 @@ export class NvidiaClient {
   }
 
   async completeJson(args: {
-    kind: "audit" | "patch" | "reaudit";
+    kind: "document-audit" | "audit" | "patch" | "reaudit";
     sectionId: SectionId;
     fingerprint: Sha256;
     requestId: string;
@@ -375,7 +426,9 @@ export class NvidiaClient {
         warning = `${args.requestId} returned invalid JSON and was quarantined: ${
           error instanceof Error ? error.message : String(error)
         }`;
-        parsed = quarantineAuditOutput(args.sectionId, args.fingerprint);
+        parsed = args.kind === "document-audit"
+          ? quarantineDocumentAuditOutput(args.sectionId, args.fingerprint)
+          : quarantineAuditOutput(args.sectionId, args.fingerprint);
       }
       return {
         parsed,

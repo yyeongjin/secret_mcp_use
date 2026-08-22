@@ -4,6 +4,8 @@ import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
 import { hashJson } from "./hash.ts";
 import type {
   ChangeEvent,
+  DocumentAuditInput,
+  DocumentAuditOutput,
   NodeAuditInput,
   NodeAuditOutput,
   NodePatchOutput,
@@ -17,6 +19,8 @@ import type {
 export type JsonSchema = Record<string, unknown>;
 
 export interface Validators {
+  documentAudit: ValidateFunction<DocumentAuditOutput>;
+  documentInput: ValidateFunction<DocumentAuditInput>;
   audit: ValidateFunction<NodeAuditOutput>;
   patch: ValidateFunction<NodePatchOutput>;
   input: ValidateFunction<NodeAuditInput>;
@@ -24,6 +28,7 @@ export interface Validators {
   passAttestation: ValidateFunction<PassAttestation>;
   prManifest: ValidateFunction<PullRequestManifest>;
   auditSchema: JsonSchema;
+  documentAuditSchema: JsonSchema;
   patchSchema: JsonSchema;
   patchCandidateSchema: JsonSchema;
   contractSchemaHash: Sha256;
@@ -41,6 +46,9 @@ async function sourceContract(root: string, relativeDirectory: string): Promise<
 }
 
 export async function loadValidators(config: PipelineConfig): Promise<Validators> {
+  const documentAuditSchemaBytes = await readFile(
+    path.join(config.repositoryRoot, "validation/schemas/document-audit-output.schema.json"),
+  );
   const auditSchemaBytes = await readFile(
     path.join(config.repositoryRoot, "validation/schemas/audit-output.schema.json"),
   );
@@ -52,6 +60,10 @@ export async function loadValidators(config: PipelineConfig): Promise<Validators
   );
   const auditInputSchema = JSON.parse(await readFile(
     path.join(config.repositoryRoot, "validation/schemas/audit-input.schema.json"),
+    "utf8",
+  )) as JsonSchema;
+  const documentAuditInputSchema = JSON.parse(await readFile(
+    path.join(config.repositoryRoot, "validation/schemas/document-audit-input.schema.json"),
     "utf8",
   )) as JsonSchema;
   const changeEventSchema = JSON.parse(await readFile(
@@ -67,6 +79,7 @@ export async function loadValidators(config: PipelineConfig): Promise<Validators
     "utf8",
   )) as JsonSchema;
   const auditSchema = JSON.parse(auditSchemaBytes.toString("utf8")) as JsonSchema;
+  const documentAuditSchema = JSON.parse(documentAuditSchemaBytes.toString("utf8")) as JsonSchema;
   const patchSchema = JSON.parse(patchSchemaBytes.toString("utf8")) as JsonSchema;
   const patchCandidateSchema = JSON.parse(patchCandidateSchemaBytes.toString("utf8")) as JsonSchema;
   const validatorSources = await sourceContract(config.repositoryRoot, "validation/src");
@@ -74,6 +87,8 @@ export async function loadValidators(config: PipelineConfig): Promise<Validators
   const packageSource = await readFile(path.join(config.repositoryRoot, "package.json"), "utf8");
   const ajv = new Ajv2020({ allErrors: true, strict: true });
   return {
+    documentAudit: ajv.compile<DocumentAuditOutput>(documentAuditSchema),
+    documentInput: ajv.compile<DocumentAuditInput>(documentAuditInputSchema),
     audit: ajv.compile<NodeAuditOutput>(auditSchema),
     patch: ajv.compile<NodePatchOutput>(patchSchema),
     input: ajv.compile<NodeAuditInput>(auditInputSchema),
@@ -81,10 +96,13 @@ export async function loadValidators(config: PipelineConfig): Promise<Validators
     passAttestation: ajv.compile<PassAttestation>(passAttestationSchema),
     prManifest: ajv.compile<PullRequestManifest>(prManifestSchema),
     auditSchema,
+    documentAuditSchema,
     patchSchema,
     patchCandidateSchema,
     contractSchemaHash: hashJson({
       auditSchema,
+      documentAuditSchema,
+      documentAuditInputSchema,
       patchSchema,
       patchCandidateSchema,
       auditInputSchema,
@@ -96,6 +114,30 @@ export async function loadValidators(config: PipelineConfig): Promise<Validators
       packageContract: packageSource,
     }),
   };
+}
+
+export function assertDocumentAuditOutput(
+  validate: ValidateFunction<DocumentAuditOutput>,
+  value: unknown,
+  sectionId: SectionId,
+  fingerprint: Sha256,
+): asserts value is DocumentAuditOutput {
+  if (!validate(value)) throw new Error(`Invalid ${sectionId} document audit output: ${schemaError(validate)}`);
+  if (value.sectionId !== sectionId || value.fingerprint !== fingerprint) {
+    throw new Error(`Document audit response ownership mismatch for ${sectionId}.`);
+  }
+  if (value.status === "PASS" && value.findings.length !== 0) {
+    throw new Error(`${sectionId} document audit returned PASS with findings.`);
+  }
+  if (value.status !== "PASS" && value.findings.length === 0) {
+    throw new Error(`${sectionId} document audit returned ${value.status} without findings.`);
+  }
+  if (value.findings.some((finding) => finding.proposedValue !== null || finding.implementationRefs.length > 0)) {
+    throw new Error(`${sectionId} document audit attempted to propose an implementation change.`);
+  }
+  if (value.findings.some((finding) => !finding.requirementId.startsWith(`${sectionId}-`))) {
+    throw new Error(`${sectionId} document audit returned a foreign Requirement ID.`);
+  }
 }
 
 export function assertContract<T>(validate: ValidateFunction<T>, value: unknown, label: string): asserts value is T {
@@ -129,6 +171,9 @@ export function assertAuditOutput(
   }
   if (value.findings.some((finding) => finding.proposedValue !== null)) {
     throw new Error(`${sectionId} attempted to invent a proposed value.`);
+  }
+  if (value.findings.some((finding) => !finding.requirementId.startsWith(`${sectionId}-`))) {
+    throw new Error(`${sectionId} returned a foreign Requirement ID.`);
   }
 }
 

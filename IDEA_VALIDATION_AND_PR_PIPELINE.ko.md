@@ -14,10 +14,10 @@
 이 아이디어는 다음 구조로 구현하는 것이 가장 안전하다.
 
 1. Specification의 19개 영역을 `S01`부터 `S19`까지 독립 노드로 만든다.
-2. 최초 전체 검증 또는 강제 전체 검증은 NVIDIA API를 정확히 19번 호출한다. S01 요청부터 S19 요청까지 한 요청이 한 Section만 담당한다.
-3. 각 노드는 별도의 임시 작업공간, 별도의 NVIDIA stateless 요청, 별도의 입력 JSON과 출력 JSON을 사용한다.
+2. 최초 전체 검증 또는 강제 전체 검증은 1차 문서 감사 19번과 2차 구현 감사 19번, 총 38개의 NVIDIA primary 요청을 호출한다. 각 Stage의 S01 요청부터 S19 요청까지 한 요청이 한 Section만 담당한다.
+3. 각 Stage와 노드는 별도의 NVIDIA stateless 요청, 입력 JSON, 출력 JSON, request ID와 로그를 사용한다. 1차에는 소스코드가 없고 2차에는 Specification 본문이 없다.
 4. 하나의 NVIDIA 요청이나 하나의 통합 LLM이 S01-S19 전체를 읽고 19개 결과를 한꺼번에 반환하는 방식은 금지한다.
-5. audit fan-out은 DAG 선행 상태와 무관하게 실행한다. 전체 검증에서는 선행 노드가 실패해도 S01-S19의 19개 audit 호출을 모두 완료한다.
+5. 두 audit fan-out은 DAG 선행 상태와 무관하게 실행한다. 전체 검증에서는 1차 결과가 문서 누락이어도 2차를 포함해 S01-S19의 38개 primary 호출을 모두 완료한다. 단 provider 자체가 호출 불가능한 경우에는 실패를 기록한다.
 6. DAG 의존성은 patch 적용과 PR 생성 순서에만 사용한다.
 7. 선행 노드의 자연어 응답은 후행 노드에 전달하지 않는다. patch scheduler는 서명된 상태와 공개 출력 해시만 읽는다.
 8. 기존 PASS 증명서의 fingerprint가 현재 입력 fingerprint와 같으면 API를 호출하지 않고 `CACHED_PASS`로 종료한다.
@@ -30,6 +30,15 @@
 15. 모든 비-PASS 결과는 사라지지 않는다. supplied finding 전체를 구현하고 검증한 코드 diff만 PR로 만들며, PR을 만들 수 없는 결과는 Section Check와 불변 실행 artifact에만 기록한다. 이 파이프라인은 GitHub Issue를 생성하지 않는다.
 
 `19개 항목`은 검증 격리 단위이지 `19개 PR을 반드시 생성한다`는 뜻이 아니다. 한 실행에서 17개가 이미 PASS이고 2개만 누락됐다면 PR은 최대 2개만 생성되어야 한다.
+
+### 고정된 2단계 감사 계약
+
+| Stage | 독립 요청 수 | 비교 입력 | 명시적으로 제외되는 입력 | 출력의 용도 |
+| --- | ---: | --- | --- | --- |
+| 1차 `document-audit` | S01-S19, 19개 | 현재 Specification 전역 규칙 + 같은 번호 Specification Section + 같은 번호 DESIGN_INDEX Section + 해당 Evidence/Request Contract | frontend 소스코드, 다른 Section, 다른 Stage 응답 본문 | DESIGN_INDEX에 지침이 빠졌는지 보고. 문서와 코드를 수정하지 않음 |
+| 2차 `implementation-audit` | S01-S19, 19개 | 같은 번호 DESIGN_INDEX Section + 같은 번호 1차 결과 fingerprint/output digest + 해당 Evidence + 소유 source slice | Specification 본문, 다른 Section, 다른 Stage의 finding 자연어 | DESIGN_INDEX 대비 코드 누락을 판정. 정확한 근거가 있는 `PATCH_REQUIRED`만 patch 후보로 전달 |
+
+최초·강제 전체 실행의 최소 primary 호출 수는 `19 + 19 = 38`이다. patch 후보, patched-code re-audit, 기존 PASS 회귀 audit와 같은-Stage 재시도는 이 38개 이후의 추가 호출이며 별도로 집계한다. 1차 결과 19개를 하나의 LLM에 합쳐 다시 판단하지 않고, 결정적 오케스트레이터 코드가 같은 Section의 digest만 2차 lineage에 연결한다. 1차 `DOCUMENT_GAP`은 `trigger/DESIGN_INDEX_gdweb-*` 수정 PR이나 frontend 수정 PR을 만들 수 없다.
 
 ## 저장소 역할 경계
 
@@ -92,9 +101,9 @@ S19 = trigger 문서의 "## 19. ..." 전체
 강제 규칙:
 
 - trigger 문서 하나는 작품 하나만 나타낸다.
-- 작품 하나당 S01-S19 NVIDIA audit 요청 19개를 만든다.
+- 작품 하나당 1차 S01-S19 NVIDIA 문서 감사 19개와 2차 S01-S19 구현 감사 19개를 만든다.
 - 여러 trigger 문서를 한 target이나 한 요청에 합치지 않는다.
-- trigger 문서가 두 개면 작품별 run 두 개와 최대 38개의 독립 audit 요청으로 분리한다.
+- trigger 문서가 두 개면 작품별 run 두 개와 전체 검증 기준 76개의 독립 primary 요청으로 분리한다.
 - 1~19번 중 하나가 없거나 중복되면 NVIDIA 호출 전에 `FAILED_TRIGGER_STRUCTURE`로 중단한다.
 - 빠진 trigger Section을 공통 Specification 본문으로 대신 채우지 않는다.
 - Section fragment가 비어 있으면 코드 patch를 만들지 않고 먼저 DESIGN_INDEX 문서 누락으로 보고한다.
@@ -178,8 +187,8 @@ trigger/DESIGN_INDEX_gdweb-*.md
 trigger 유입 이벤트는 부분 증분 검증을 사용하지 않는다.
 
 ```text
-trigger file 1개 유입 또는 새 버전 -> S01-S19 독립 NVIDIA audit 19개
-trigger file 2개 유입 또는 새 버전 -> 작품별 run 2개, 독립 NVIDIA audit 총 38개
+trigger file 1개 유입 또는 새 버전 -> 1차 19개 + 2차 19개 = 독립 NVIDIA primary 요청 38개
+trigger file 2개 유입 또는 새 버전 -> 작품별 run 2개, 독립 NVIDIA primary 요청 총 76개
 frontend code만 변경              -> 영향받은 Section만 증분 audit
 ```
 
@@ -190,15 +199,15 @@ trigger 문서에서 실제로 바뀐 줄이 S05뿐이어도 새 trigger content
 ### 요청 독립성
 
 - 한 API 요청은 정확히 한 작품의 한 Section ID만 담당한다.
-- 전체 검증 한 pass는 `audit:S01`부터 `audit:S19`까지 19개의 요청 ID를 가진다.
-- 19개의 요청은 같은 NVIDIA model ID를 사용할 수 있지만 요청 context, request ID, 응답, 임시 디렉터리와 로그는 완전히 분리한다.
+- 전체 검증은 `document-audit:S01-S19` 19개와 `implementation-audit:S01-S19` 19개, 총 38개의 primary 요청 ID를 가진다.
+- 38개의 요청은 같은 NVIDIA model ID를 사용할 수 있지만 Stage, Section, request context, request ID, 응답, 임시 디렉터리와 로그는 완전히 분리한다.
 - `audit:S01-S19`처럼 여러 Section을 나타내는 통합 request ID는 허용하지 않는다.
 - 요청마다 새로운 stateless 세션을 사용한다.
 - conversation ID, message history, response cache, 임시 작업공간을 재사용하지 않는다.
 - 다른 Section의 Specification 본문, DESIGN_INDEX 본문, finding 자연어 문장과 diff를 입력에 넣지 않는다.
 - audit 요청에는 선행 노드의 현재 응답을 전달하지 않는다.
 - patch scheduler만 선행 상태의 `sectionId`, `status`, `publicDigest`, `attestationHash`를 읽는다.
-- 19개 결과를 하나의 LLM에 다시 넣어 병합하지 않는다. 병합은 코드가 수행한다.
+- 각 Stage의 19개 결과를 하나의 LLM에 다시 넣어 병합하지 않는다. 병합과 Stage 연결은 코드가 수행한다.
 - 한 요청의 입력 JSON에 다른 Section ID가 발견되면 NVIDIA를 호출하기 전에 실행을 실패시킨다.
 - 한 응답의 `sectionId`가 요청 Section과 다르면 해당 응답을 폐기한다.
 
@@ -238,13 +247,19 @@ flowchart TD
     Producer["secret_mcp: DESIGN_INDEX 입력 묶음 생성"] --> Trigger["외부 입력: secret_mcp_use/trigger에 작품별 명세서 유입"]
     Push["secret_mcp_use main push 또는 수동 실행"] --> Snapshot["입력 스냅샷과 영향 범위 계산"]
     Trigger --> Snapshot
-    Snapshot --> Fingerprint["S01-S19 fingerprint 계산"]
-    Fingerprint --> Fanout["오케스트레이터가 S01-S19 입력 19개 생성"]
-    Fanout --> Cache{"노드별 동일 PASS 증명서가 있는가?"}
-    Cache -->|예| Cached["해당 노드는 CACHED_PASS, 호출 없음"]
-    Cache -->|아니요| Audit["DAG 대기 없이 Section별 독립 NVIDIA audit 호출"]
-    Audit --> Results["S01-S19 개별 JSON 결과"]
-    Results --> Merge["코드가 schema 검증, 정렬, 중복 제거 후 병합"]
+    Snapshot --> DocFingerprint["1차 S01-S19 문서 fingerprint 계산"]
+    DocFingerprint --> DocCache{"노드별 동일 문서 PASS 증명서가 있는가?"}
+    DocCache -->|예| DocCached["해당 1차 노드는 CACHED_PASS"]
+    DocCache -->|아니요| DocAudit["Specification 대 DESIGN_INDEX 독립 호출 19개"]
+    DocCached --> DocMerge["코드가 1차 JSON을 결정적으로 병합"]
+    DocAudit --> DocMerge
+    DocMerge --> ImplFingerprint["같은 Section 1차 digest로 2차 fingerprint 계산"]
+    ImplFingerprint --> ImplCache{"노드별 동일 구현 PASS 증명서가 있는가?"}
+    ImplCache -->|예| Cached["해당 2차 노드는 CACHED_PASS"]
+    ImplCache -->|아니요| Audit["DESIGN_INDEX 대 source 독립 호출 19개"]
+    Audit --> Results["2차 S01-S19 개별 JSON 결과"]
+    Cached --> Results
+    Results --> Merge["코드가 2차 JSON을 결정적으로 병합"]
     Merge --> Verdict{"노드별 검사 결과"}
     Verdict -->|PASS| Attest["validation-state에 PASS 증명서 기록"]
     Verdict -->|BLOCKED| Check["Check와 artifact에 중단 사유 기록"]
@@ -261,28 +276,29 @@ flowchart TD
     Merge --> Attest
 ```
 
-## 19개 NVIDIA 호출과 결정적 병합
+## Stage별 19개, 총 38개 NVIDIA primary 호출과 결정적 병합
 
 ### 전체 검증 모드
 
-최초 실행, Specification 공통 규칙 변경, validator contract 변경 또는 사용자가 `forceFullAudit: true`를 지정한 실행은 cache와 관계없이 정확히 19개의 audit 요청을 만든다. Specification의 번호별 Section 하나만 바뀌면 해당 노드와 더 이상 유효한 dependency attestation을 갖지 못한 DAG 후행 노드만 다시 호출한다.
+최초 실행, Specification 공통 규칙 변경, validator contract 변경 또는 사용자가 `forceFullAudit: true`를 지정한 실행은 cache와 관계없이 1차 19개와 2차 19개, 정확히 38개의 primary 요청을 만든다. 증분 실행에서는 Stage별 fingerprint와 PASS 증명서를 독립적으로 평가한다.
 
 ```text
-audit:S01 -> NVIDIA request #01 -> nodes/S01/audit-output.json
-audit:S02 -> NVIDIA request #02 -> nodes/S02/audit-output.json
+document-audit:S01 -> NVIDIA request #01 -> nodes/S01/document-audit-output.json
+document-audit:S02 -> NVIDIA request #02 -> nodes/S02/document-audit-output.json
 ...
-audit:S19 -> NVIDIA request #19 -> nodes/S19/audit-output.json
+document-audit:S19 -> NVIDIA request #19 -> nodes/S19/document-audit-output.json
+implementation-audit:S01 -> NVIDIA request #20 -> nodes/S01/audit-output.json
+...
+implementation-audit:S19 -> NVIDIA request #38 -> nodes/S19/audit-output.json
 ```
 
-이 19개 호출은 한 모델 응답을 논리적으로 나눈 것이 아니다. 실제 HTTP 요청 19개이며 요청마다 다음 값이 달라야 한다.
+이 38개 호출은 한 모델 응답을 논리적으로 나눈 것이 아니다. 실제 HTTP 요청 38개이며 요청마다 Stage와 Section 소유권이 다르다.
 
 - `requestId`
 - `sectionId`
 - system prompt의 Section 소유권
-- Specification fragment
-- DESIGN_INDEX fragment
-- Evidence subset
-- implementation slice
+- 1차: Specification fragment, DESIGN_INDEX fragment, Evidence subset. implementation slice 없음
+- 2차: DESIGN_INDEX fragment, 같은 Section 1차 digest, Evidence subset, implementation slice. Specification 본문 없음
 - response JSON 파일
 - 실행 로그와 token usage
 
@@ -292,27 +308,28 @@ audit:S19 -> NVIDIA request #19 -> nodes/S19/audit-output.json
 
 일반적인 code push에서는 먼저 S01-S19의 fingerprint를 코드로 계산한다. fingerprint는 LLM이 계산하거나 판단하지 않는다.
 
-- fingerprint가 동일하고 유효한 PASS 증명서가 있으면 해당 Section은 `CACHED_PASS`다.
-- fingerprint가 달라진 Section은 Section마다 NVIDIA 요청 하나를 새로 호출한다.
+- 각 Stage fingerprint가 동일하고 해당 Stage의 유효한 PASS 증명서가 있으면 그 Stage·Section은 `CACHED_PASS`다.
+- fingerprint가 달라진 Stage·Section은 각각 NVIDIA 요청 하나를 새로 호출한다.
 - 직접 선행 노드의 `publicDigest`가 달라져 무효화된 후행 Section도 각각 별도 NVIDIA 요청을 호출한다.
-- 변경된 Section이 4개라면 호출은 4개이며, 이 4개를 한 요청에 묶지 않는다.
-- 전체 검증을 요구하면 19개 모두 다시 각각 호출한다.
+- 두 Stage에서 각각 변경된 Section이 4개라면 최대 호출은 8개이며 어느 요청도 묶지 않는다.
+- 전체 검증을 요구하면 Stage별 19개, 총 38개를 다시 각각 호출한다.
 
 따라서 호출 규칙은 다음과 같다.
 
 ```text
-fresh full audit       = 19개의 독립 audit 호출
-forced full audit      = 19개의 독립 audit 호출
-incremental audit      = dirty Section 수만큼 독립 audit 호출
+fresh full audit       = 1차 19개 + 2차 19개 = 38개의 독립 primary 호출
+forced full audit      = 1차 19개 + 2차 19개 = 38개의 독립 primary 호출
+incremental audit      = Stage별 dirty Section 수만큼 독립 호출
 patch generation       = PATCH_REQUIRED Section마다 완전한 diff가 나올 때까지 독립 patch 후보 1~PIPELINE_PATCH_ATTEMPTS개
 merge                  = LLM 호출 0개, 오케스트레이터 코드만 사용
 ```
 
-### 19개 요청 manifest
+### Stage별 19개 요청 manifest
 
 ```json
 {
-  "schemaVersion": "design-validation/audit-batch/v2",
+  "schemaVersion": "design-validation/document-audit-batch/v1",
+  "stage": 1,
   "runId": "run-2026-08-20-001",
   "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
   "mode": "full",
@@ -326,38 +343,39 @@ merge                  = LLM 호출 0개, 오케스트레이터 코드만 사용
   ],
   "requests": [
     {
-      "requestId": "run-2026-08-20-001:audit:S01",
+      "requestId": "run-2026-08-20-001:document-audit:S01",
       "sectionId": "S01",
-      "inputPath": "nodes/S01/audit-input.json",
-      "outputPath": "nodes/S01/audit-output.json"
+      "inputPath": "nodes/S01/document-audit-input.json",
+      "outputPath": "nodes/S01/document-audit-output.json"
     },
     {
-      "requestId": "run-2026-08-20-001:audit:S02",
+      "requestId": "run-2026-08-20-001:document-audit:S02",
       "sectionId": "S02",
-      "inputPath": "nodes/S02/audit-input.json",
-      "outputPath": "nodes/S02/audit-output.json"
+      "inputPath": "nodes/S02/document-audit-input.json",
+      "outputPath": "nodes/S02/document-audit-output.json"
     }
   ]
 }
 ```
 
-실제 `requests` 배열은 S01-S19의 19개 행을 가져야 한다. full mode에서 한 행이라도 없거나 Section ID가 중복되면 API 호출을 시작하지 않는다.
+1차 `document-audit-batch-manifest.json`과 2차 `implementation-audit-batch-manifest.json`의 `requests` 배열은 각각 S01-S19의 19개 행을 가져야 한다. 2차 manifest는 `stage: 2`, `implementation-audit:Sxx`, `audit-input.json`, `audit-output.json`을 사용한다. full mode에서 어느 Stage든 한 행이 없거나 Section ID가 중복되면 해당 Stage API 호출을 시작하지 않는다.
 
 ### fan-out 실행 규칙
 
 오케스트레이터는 다음 검사를 한 뒤 각 요청을 독립 queue item으로 보낸다.
 
 1. S01-S19가 정확히 한 번씩 존재하는지 검사한다.
-2. 각 input에 담당 Section 이외의 Specification heading이 없는지 검사한다.
-3. 각 input에 다른 Section의 DESIGN_INDEX 본문이 없는지 검사한다.
-4. Evidence reference가 담당 Section allowlist에 포함되는지 검사한다.
-5. implementation file이 담당 노드의 `allowedReadGlobs`에 포함되는지 검사한다.
-6. request마다 빈 대화 기록과 새로운 client request ID를 할당한다.
-7. rate limiter가 허용하는 범위에서 병렬 호출한다.
+2. 1차 input에 담당 Section 이외의 Specification heading이 없고 source code 필드가 없는지 검사한다.
+3. 두 Stage input에 다른 Section의 DESIGN_INDEX 본문이 없는지 검사한다.
+4. 2차 input에 Specification 본문이 없고 같은 Section의 1차 output digest만 있는지 검사한다.
+5. Evidence reference가 담당 Section allowlist에 포함되는지 검사한다.
+6. 2차 implementation file이 담당 노드의 `allowedReadGlobs`에 포함되는지 검사한다.
+7. request마다 빈 대화 기록과 새로운 client request ID를 할당한다.
+8. rate limiter가 허용하는 범위에서 Stage 순서를 지키며 병렬 호출한다.
 
 ### fan-in 병합 규칙
 
-19개 응답을 합치는 `merge-audit-results`는 일반 프로그램이며 NVIDIA, Codex 또는 다른 LLM을 호출하지 않는다.
+각 Stage의 19개 응답을 합치는 `merge-audit-results`는 일반 프로그램이며 NVIDIA, Codex 또는 다른 LLM을 호출하지 않는다.
 
 ```ts
 function mergeAuditResults(
@@ -633,7 +651,7 @@ patch 적용 뒤에는 일반 완전성 audit를 다시 실행하지 않는다. 
 | S18 | 페이지별 인수 조건 | S05, S06, S09, S10, S11, S12, S13, S14 |
 | S19 | 불확실성과 결정 | S01-S18 |
 
-이 의존성은 patch와 PR 처리 순서를 위한 것이며 audit 호출 순서를 막지 않는다. 최초·강제 full audit는 S01-S19에 대해 정확히 19개의 논리 audit 요청을 만들고 모두 실행한다. 재시도는 같은 Section 안에서만 추가 호출로 집계하며 다른 Section 응답을 전달하지 않는다. 선행 노드가 아직 PASS가 아니면 후행 노드의 audit 결과를 `PASS_PENDING_DEPENDENCY` 또는 `PATCH_WAITING_DEPENDENCY`로 정적 보관한다. 이 대기 상태는 Issue로 바꾸지 않는다. 선행 PR 병합으로 최신 main에서 의존 노드가 PASS가 되면 후행 노드를 자동 재예약한다.
+이 의존성은 patch와 PR 처리 순서를 위한 것이며 두 audit Stage의 호출 순서를 막지 않는다. 최초·강제 full audit는 1차와 2차에서 S01-S19를 각각 호출해 정확히 38개의 논리 primary 요청을 모두 실행한다. 재시도는 같은 Stage와 Section 안에서만 추가 호출로 집계하며 다른 Section 응답을 전달하지 않는다. 선행 노드가 아직 PASS가 아니면 후행 노드의 2차 audit 결과를 `PASS_PENDING_DEPENDENCY` 또는 `PATCH_WAITING_DEPENDENCY`로 정적 보관한다. 이 대기 상태는 Issue로 바꾸지 않는다. 선행 PR 병합으로 최신 main에서 의존 노드가 PASS가 되면 후행 노드를 자동 재예약한다.
 
 ### S01 목표와 범위
 
@@ -980,8 +998,8 @@ interface ChangeEvent {
 | 들어온 변경 | 최초 dirty Section | NVIDIA audit 호출 | PR 동작 |
 | --- | --- | --- | --- |
 | `README.md`, 일반 문서만 변경 | 없음 | 0개 | PR 없음, 기존 PASS 유지 |
-| 새 `trigger/DESIGN_INDEX_gdweb-<id>.md` 추가 | S01-S19 | 새 작품 run에서 정확히 19개 독립 호출 | trigger는 수정하지 않고 frontend 누락만 PR |
-| 기존 `trigger/DESIGN_INDEX_gdweb-<id>.md`에 새 버전 유입 | S01-S19 | 변경 Section 수와 무관하게 정확히 19개 독립 호출 | trigger는 수정하지 않고 새 hash 기준 frontend 누락만 PR |
+| 새 `trigger/DESIGN_INDEX_gdweb-<id>.md` 추가 | 두 Stage의 S01-S19 | 새 작품 run에서 정확히 38개 독립 primary 호출 | trigger는 수정하지 않고 2차 frontend 누락만 PR |
+| 기존 `trigger/DESIGN_INDEX_gdweb-<id>.md`에 새 버전 유입 | 두 Stage의 S01-S19 | 변경 Section 수와 무관하게 정확히 38개 독립 primary 호출 | trigger는 수정하지 않고 새 hash 기준 2차 frontend 누락만 PR |
 | trigger 문서의 번호 Section 누락·중복 | 실행 전 구조 오류 | 0개 | `FAILED_TRIGGER_STRUCTURE`, PR 없음 |
 | Request Contract 변경 | contract가 소유한 Section | 해당 Section별 독립 호출 | 코드 patch가 필요한 Section만 PR |
 | Evidence 이미지 또는 crop metadata 변경 | S02와 Evidence를 직접 읽는 노드 | S02부터 DAG를 따라 별도 호출 | 새 근거로 기존 값이 무효화되면 patch PR |
@@ -1024,7 +1042,7 @@ PASS 증명서 없음
 
 동작:
 
-1. 신규 target이므로 S01-S19 audit input 19개를 만든다.
+1. 신규 target이므로 1차 S01-S19 문서 input 19개와 2차 S01-S19 구현 input 19개를 순차 생성한다.
 2. NVIDIA API를 실제로 19번 독립 호출한다.
 3. 각 응답을 `nodes/SXX/audit-output.json`에 따로 저장한다.
 4. 코드 merger가 19개 JSON을 Section 순서로 합친다.
@@ -1234,7 +1252,7 @@ NVIDIA diff           = src/components/navigation/Nav.tsx + src/pages/Home.tsx
 
 1. 누락된 영향 매핑을 안전하게 무시하지 않는다.
 2. `UNMAPPED_SOURCE_CHANGE` 경고를 남긴다.
-3. 이번 실행은 S01-S19 전체 독립 audit 19개로 전환한다.
+3. 이번 실행은 1차와 2차 각각 S01-S19 전체 독립 audit, 총 38개 primary 요청으로 전환한다.
 4. 실행 후 새 파일을 어느 노드가 읽고 쓸지 `impact-manifest.yml` 보정 작업을 만든다.
 
 ### 사례 S: `secret_mcp`에서 새 작품 명세서를 trigger에 넣은 경우
@@ -1250,7 +1268,7 @@ trigger/DESIGN_INDEX_gdweb-30000.md added
 1. 파일 이름과 문서 reference ID가 일치하는지 확인한다.
 2. Markdown AST로 `## 1`부터 `## 19`까지 정확히 한 번씩 존재하는지 검사한다.
 3. gdweb-30000을 기존 작품과 분리된 새 target ID로 만든다.
-4. 해당 trigger 문서의 S01-S19 fragment로 NVIDIA audit 요청 19개를 만든다.
+4. 해당 trigger 문서의 S01-S19 fragment로 1차 NVIDIA 문서 감사 19개를 만들고, 그 결과 digest와 같은 fragment·source slice로 2차 구현 감사 19개를 만든다.
 5. 기존 gdweb-26357의 문서, Evidence, 응답과 PASS 증명서는 어느 요청에도 넣지 않는다.
 6. 코드 patch는 gdweb-30000 trigger의 값과 Evidence로 증명되는 누락에 대해서만 생성한다.
 
@@ -1286,7 +1304,7 @@ function patchReady(node: Node, state: State): boolean {
 }
 ```
 
-누락 검사 단계는 read-only이므로 full audit에서 S01-S19를 모두 queue에 올린다. rate limit 안에서 19개를 병렬 또는 순차 전송할 수 있지만 요청은 끝까지 19개로 분리한다. patch 적용과 PR 생성 단계만 DAG와 write-set 충돌 그래프로 보수적으로 직렬화한다.
+두 누락 검사 Stage는 read-only이므로 full audit에서 각 Stage의 S01-S19를 모두 queue에 올린다. rate limit 안에서 Stage별 19개를 병렬 또는 순차 전송할 수 있지만 요청은 끝까지 총 38개로 분리한다. patch 적용과 PR 생성 단계만 DAG와 write-set 충돌 그래프로 보수적으로 직렬화한다.
 
 ## 충돌 방지
 
@@ -1506,7 +1524,8 @@ diff --git a/frontend/styles/tokens.css b/frontend/styles/tokens.css
 
 ## Independent NVIDIA Requests
 
-- Audit request: `run-...:audit:S09`
+- Document audit request: `run-...:document-audit:S09`
+- Implementation audit request: `run-...:implementation-audit:S09`
 - Patch request: `run-...:patch:S09:attempt:1`
 - Patched-code audit: `run-...:reaudit:S09:attempt:1`
 - No S01-S08 or S10-S19 content was included in either request.
@@ -1825,7 +1844,7 @@ concurrency:
   cancel-in-progress: false
 ```
 
-NVIDIA 호출은 token bucket으로 RPM을 제한한다. 19개 노드를 무조건 동시에 쏘지 않고 DAG ready set에서 rate limit과 비용 한도에 맞춰 꺼낸다.
+NVIDIA 호출은 token bucket으로 RPM을 제한한다. Stage별 19개 요청을 무조건 동시에 쏘지 않고 rate limit과 비용 한도에 맞춰 꺼낸다. DAG ready set은 patch·PR 단계에 적용한다.
 
 ## 보안과 신뢰 경계
 
@@ -1895,10 +1914,12 @@ S11 audit PASS
 S12 audit PATCH_REQUIRED -> PATCH_WAITING_DEPENDENCY
 S13-S18 audit PASS 또는 PATCH_REQUIRED
 S19 audit BLOCKED_MISSING_EVIDENCE
-전체 audit 호출 수 = 19
+1차 문서 audit 논리 요청 수 = 19
+2차 구현 audit 논리 요청 수 = 19
+전체 primary audit 논리 요청 수 = 38
 ```
 
-S05가 실패했어도 full audit의 S06-S19 호출을 생략하지 않는다. 최초·강제 full audit의 논리 audit 요청 수는 정확히 19개이며, 애매하거나 차단된 응답의 같은-Section 재시도 횟수는 별도 `auditCalls`로 기록한다. S05에 의존하는 PASS 결과는 `PASS_PENDING_DEPENDENCY`, patch 결과는 `PATCH_WAITING_DEPENDENCY`로 보관해 현재 base의 PR 생성을 막고 Check와 artifact에 상태를 기록한다.
+어느 Stage의 S05가 실패했어도 같은 Stage의 S06-S19 호출이나 2차 fan-out을 임의로 생략하지 않는다. 최초·강제 full audit의 논리 primary 요청 수는 정확히 38개이며, 애매하거나 차단된 응답의 같은-Stage·Section 재시도 횟수는 `documentAuditCalls`와 `implementationAuditCalls`에 별도로 기록한다. 2차 S05에 의존하는 PASS 결과는 `PASS_PENDING_DEPENDENCY`, patch 결과는 `PATCH_WAITING_DEPENDENCY`로 보관해 현재 base의 PR 생성을 막고 Check와 artifact에 상태를 기록한다.
 
 `PR #41`이 병합되면 S05의 새 PASS 증명서를 만든다. S05의 `publicDigest`가 이전과 달라졌으므로 S06, S12와 그 후행 노드만 각각 다시 호출한다. S01-S04, S07-S11 중 입력과 dependency digest가 그대로인 노드는 다시 호출하지 않는다. S12가 최신 `main`에서 여전히 실패하고 안전한 diff를 만들 수 있을 때만 두 번째 PR을 생성한다.
 
@@ -1907,9 +1928,9 @@ S05가 실패했어도 full audit의 S06-S19 호출을 생략하지 않는다. �
 가장 중요한 것은 `항목 수`, `API 호출 수`, `PR 수`를 같은 숫자로 취급하지 않는 것이다.
 
 - 항목 수는 항상 19개다.
-- 최초·강제 전체 audit의 논리 NVIDIA audit 요청 수는 정확히 19개다. `UNKNOWN`·차단·스키마 오류의 같은-Section 독립 재시도는 별도 실제 호출 수로 추가 기록한다.
+- 최초·강제 전체 audit의 논리 NVIDIA primary 요청 수는 정확히 38개다. 1차 19개와 2차 19개를 별도 집계하고 `UNKNOWN`·차단·스키마 오류의 같은-Stage·Section 독립 재시도는 별도 실제 호출 수로 추가 기록한다.
 - 증분 audit 호출 수는 dirty Section 수만큼이며, 언제나 Section별 별도 요청이다.
-- PATCH_REQUIRED가 있으면 audit 19개와 별도로 해당 Section의 patch 요청이 추가되므로 전체 API 호출 수는 19개를 넘을 수 있다.
+- PATCH_REQUIRED가 있으면 primary audit 38개와 별도로 해당 Section의 patch 요청이 추가되므로 전체 API 호출 수는 38개를 넘을 수 있다.
 - PR 수는 실제 누락이 있고 해당 Section의 supplied finding 전체를 구현한 안전한 코드 diff가 검증된 노드 수만큼 생긴다.
 - 선행 PASS가 필요한 근거 있는 누락은 정적 DAG queue에 남고, 선행 자동 PR 병합 후 새 main 실행에서 자동 PR 생성 단계로 진행한다.
 - 이미 통과한 노드는 fingerprint가 바뀌지 않는 한 정적으로 PASS 상태를 재사용한다.

@@ -1,6 +1,11 @@
 import { access, appendFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createFreshAttestations, resolveCachedPassForNode } from "./cache.ts";
+import {
+  createFreshAttestations,
+  createFreshDocumentAttestations,
+  resolveCachedDocumentPass,
+  resolveCachedPassForNode,
+} from "./cache.ts";
 import { buildChangeEvent, directDirtySections } from "./change.ts";
 import { sha256 } from "./hash.ts";
 import {
@@ -11,7 +16,9 @@ import {
 } from "./github.ts";
 import {
   assertIsolatedAuditInput,
+  assertIsolatedDocumentAuditInput,
   buildAuditInputs,
+  buildDocumentAuditInputs,
   modelContractHash,
   targetIdFor,
   validatorContractHash,
@@ -21,6 +28,7 @@ import { readSpecification, readTrigger } from "./markdown.ts";
 import {
   NvidiaClient,
   quarantineAuditOutput,
+  quarantineDocumentAuditOutput,
   runWithConcurrency,
   type CompletionResult,
 } from "./nvidia.ts";
@@ -33,11 +41,13 @@ import {
 import { augmentAuditWithExactCssFindings, buildPatchScope } from "./patch-scope.ts";
 import {
   AUDIT_SYSTEM_PROMPT,
+  DOCUMENT_AUDIT_SYSTEM_PROMPT,
   PATCH_REAUDIT_SYSTEM_PROMPT,
   PATCH_RETRY_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
   REGRESSION_AUDIT_SYSTEM_PROMPT,
   auditUserPrompt,
+  documentAuditUserPrompt,
   patchRetryUserPrompt,
   patchReauditUserPrompt,
   patchUserPrompt,
@@ -46,12 +56,15 @@ import {
 import {
   assertAuditOutput,
   assertContract,
+  assertDocumentAuditOutput,
   assertPatchOutput,
   loadValidators,
   type JsonSchema,
 } from "./schema.ts";
 import type {
   ChangeEvent,
+  DocumentAuditInput,
+  DocumentAuditOutput,
   NodeAuditInput,
   NodeAuditOutput,
   NodePatchOutput,
@@ -59,6 +72,7 @@ import type {
   PipelineConfig,
   PullRequestManifest,
   ResolvedNode,
+  ResolvedDocumentNode,
   SectionId,
 } from "./types.ts";
 import { SECTION_IDS } from "./types.ts";
@@ -81,6 +95,32 @@ interface AuditCallFailure {
 }
 
 type AuditCallResult = AuditCallSuccess | AuditCallFailure;
+
+interface DocumentAuditCallSuccess {
+  ok: true;
+  sectionId: SectionId;
+  completion: CompletionResult;
+  output: DocumentAuditOutput;
+  attempts: DocumentAuditCallAttempt[];
+}
+
+interface DocumentAuditCallFailure {
+  ok: false;
+  sectionId: SectionId;
+  error: string;
+  completion?: CompletionResult;
+  attempts: DocumentAuditCallAttempt[];
+}
+
+type DocumentAuditCallResult = DocumentAuditCallSuccess | DocumentAuditCallFailure;
+
+interface DocumentAuditCallAttempt {
+  attempt: number;
+  requestId: string;
+  completion?: CompletionResult;
+  output?: DocumentAuditOutput;
+  error?: string;
+}
 
 interface AuditCallAttempt {
   attempt: number;
@@ -142,6 +182,10 @@ export interface NodeRunSummary {
   sectionId: SectionId;
   name: string;
   fingerprint: string | null;
+  documentFingerprint: string | null;
+  documentAuditStatus: DocumentAuditOutput["status"] | "FAILED_SCHEMA";
+  documentAuditAttempts: number;
+  documentFindings: DocumentAuditOutput["findings"];
   auditStatus: NodeAuditOutput["status"] | "FAILED_SCHEMA";
   executionState: string;
   auditAttempts: number;
@@ -157,6 +201,12 @@ export interface WorkRunSummary {
   mode: "full" | "incremental" | "forced-full";
   expectedSections: number;
   cachedPasses: number;
+  documentCachedPasses: number;
+  documentAuditCalls: number;
+  documentAuditRequests: number;
+  implementationAuditCalls: number;
+  implementationAuditRequests: number;
+  totalLogicalAuditRequests: number;
   auditCalls: number;
   auditRequests: number;
   patchCalls: number;
@@ -178,6 +228,30 @@ function safeRunId(referenceId: string): string {
   const timestamp = new Date().toISOString().replaceAll(/[-:.TZ]/g, "").slice(0, 14);
   const entropy = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
   return `run-${timestamp}-${referenceId}-${entropy}`;
+}
+
+export type PrimaryAuditStage = "document-audit" | "implementation-audit";
+
+export function primaryAuditRequestId(
+  runId: string,
+  stage: PrimaryAuditStage,
+  sectionId: SectionId,
+): string {
+  return `${runId}:${stage}:${sectionId}`;
+}
+
+export function fullAuditRequestPlan(runId: string): Array<{
+  stage: PrimaryAuditStage;
+  sectionId: SectionId;
+  requestId: string;
+}> {
+  return (["document-audit", "implementation-audit"] as const).flatMap((stage) => (
+    SECTION_IDS.map((sectionId) => ({
+      stage,
+      sectionId,
+      requestId: primaryAuditRequestId(runId, stage, sectionId),
+    }))
+  ));
 }
 
 async function writeJson(pathname: string, value: unknown): Promise<void> {
@@ -317,22 +391,31 @@ function blockedNodes(outputs: NodeAuditOutput[]): WorkRunSummary["blocked"] {
 
 function buildNodeRunSummaries(args: {
   manifest: Awaited<ReturnType<typeof readImpactManifest>>;
+  documentInputs: Map<SectionId, DocumentAuditInput>;
+  documentOutputs: DocumentAuditOutput[];
+  documentAuditAttempts: Map<SectionId, number>;
   inputs: Map<SectionId, NodeAuditInput>;
   outputs: NodeAuditOutput[];
   nodeStates: Array<{ sectionId: SectionId; state: string }>;
   auditAttempts: Map<SectionId, number>;
   patches: PatchRecord[];
 }): NodeRunSummary[] {
+  const documentOutputs = new Map(args.documentOutputs.map((output) => [output.sectionId, output]));
   const outputs = new Map(args.outputs.map((output) => [output.sectionId, output]));
   const states = new Map(args.nodeStates.map((node) => [node.sectionId, node.state]));
   const patches = new Map(args.patches.map((patch) => [patch.sectionId, patch]));
   return SECTION_IDS.map((sectionId) => {
     const output = outputs.get(sectionId);
+    const documentOutput = documentOutputs.get(sectionId);
     const input = args.inputs.get(sectionId);
     return {
       sectionId,
       name: args.manifest.nodes[sectionId].name,
       fingerprint: input?.node.fingerprint ?? null,
+      documentFingerprint: args.documentInputs.get(sectionId)?.node.fingerprint ?? null,
+      documentAuditStatus: documentOutput?.status ?? "FAILED_SCHEMA",
+      documentAuditAttempts: args.documentAuditAttempts.get(sectionId) ?? 0,
+      documentFindings: documentOutput?.findings ?? [],
       auditStatus: output?.status ?? "FAILED_SCHEMA",
       executionState: states.get(sectionId) ?? "FAILED_SCHEMA",
       auditAttempts: args.auditAttempts.get(sectionId) ?? 0,
@@ -470,6 +553,125 @@ async function writeGapReport(
     lines.push(`- ${record.sectionId}: **${record.status}** - ${record.reason}`);
   }
   await writeFile(pathname, `${lines.join("\n")}\n`, "utf8");
+}
+
+async function writeDocumentGapReport(
+  pathname: string,
+  outputs: DocumentAuditOutput[],
+): Promise<void> {
+  const lines = [
+    "# Stage 1 DESIGN_INDEX Document Completeness Report",
+    "",
+    "Each Section below was produced by a separate stateless NVIDIA request. Source code was not included.",
+    "",
+  ];
+  for (const output of outputs) {
+    lines.push(`## ${output.sectionId}: ${output.status}`, "");
+    if (output.findings.length === 0) {
+      lines.push("- No document omissions were reported.", "");
+      continue;
+    }
+    for (const finding of output.findings) {
+      lines.push(
+        `- **${finding.requirementId}**: ${finding.finding}`,
+        `  - Page: ${finding.pageId ?? "N/A"}`,
+        `  - Component: ${finding.componentId ?? "N/A"}`,
+        `  - Evidence: ${finding.evidenceRefs.join(", ") || "none"}`,
+      );
+    }
+    lines.push("");
+  }
+  await writeFile(pathname, `${lines.join("\n")}\n`, "utf8");
+}
+
+export async function callDocumentAudit(args: {
+  client: NvidiaClient;
+  input: DocumentAuditInput;
+  requestId: string;
+  maxAttempts: number;
+  validate: Parameters<typeof assertDocumentAuditOutput>[0];
+  outputSchema: JsonSchema;
+}): Promise<DocumentAuditCallResult> {
+  const sectionId = args.input.node.sectionId;
+  const attempts: DocumentAuditCallAttempt[] = [];
+  let lastError = "Document audit ended without a provider result.";
+  for (let attempt = 1; attempt <= args.maxAttempts; attempt += 1) {
+    const requestId = attempt === 1 ? args.requestId : `${args.requestId}:retry:${attempt}`;
+    let completion: CompletionResult;
+    try {
+      completion = await args.client.completeJson({
+        kind: "document-audit",
+        sectionId,
+        fingerprint: args.input.node.fingerprint,
+        requestId,
+        systemPrompt: DOCUMENT_AUDIT_SYSTEM_PROMPT,
+        userPrompt: documentAuditUserPrompt(args.input),
+        outputSchema: args.outputSchema,
+      });
+    } catch (error) {
+      lastError = errorMessage(error);
+      attempts.push({ attempt, requestId, error: lastError });
+      if (attempt < args.maxAttempts) continue;
+      return { ok: false, sectionId, error: lastError, attempts };
+    }
+    let output: DocumentAuditOutput;
+    let validatedCompletion = completion;
+    try {
+      assertDocumentAuditOutput(
+        args.validate,
+        completion.parsed,
+        sectionId,
+        args.input.node.fingerprint,
+      );
+      output = completion.parsed;
+    } catch (error) {
+      output = quarantineDocumentAuditOutput(sectionId, args.input.node.fingerprint) as DocumentAuditOutput;
+      assertDocumentAuditOutput(args.validate, output, sectionId, args.input.node.fingerprint);
+      validatedCompletion = {
+        ...completion,
+        parsed: output,
+        warning: `${errorMessage(error)} The response was quarantined as UNKNOWN.`,
+      };
+    }
+    attempts.push({ attempt, requestId, completion: validatedCompletion, output });
+    if (auditOutputNeedsIndependentRetry(output as unknown as NodeAuditOutput) && attempt < args.maxAttempts) continue;
+    return { ok: true, sectionId, completion: validatedCompletion, output, attempts };
+  }
+  return { ok: false, sectionId, error: lastError, attempts };
+}
+
+async function saveDocumentAuditCall(
+  nodesDirectory: string,
+  input: DocumentAuditInput,
+  result: DocumentAuditCallResult,
+): Promise<void> {
+  const nodeDirectory = path.join(nodesDirectory, input.node.sectionId);
+  await mkdir(nodeDirectory, { recursive: true });
+  await writeJson(path.join(nodeDirectory, "document-audit-input.json"), input);
+  for (const attempt of result.attempts) {
+    const attemptDirectory = path.join(nodeDirectory, "document-audit-attempts", `attempt-${attempt.attempt}`);
+    await writeJson(path.join(attemptDirectory, "attempt.json"), {
+      attempt: attempt.attempt,
+      requestId: attempt.requestId,
+      status: attempt.error ? "FAILED" : "COMPLETED",
+      outputStatus: attempt.output?.status ?? null,
+      warning: attempt.completion?.warning ?? null,
+      error: attempt.error ?? null,
+    });
+    if (attempt.completion) {
+      await writeJson(path.join(attemptDirectory, "api-response.json"), attempt.completion.raw);
+      await writeJson(path.join(attemptDirectory, "document-audit-output.json"), attempt.output);
+    }
+  }
+  if (result.ok) {
+    await writeJson(path.join(nodeDirectory, "document-audit-api-response.json"), result.completion.raw);
+    await writeJson(path.join(nodeDirectory, "document-audit-output.json"), result.output);
+  } else {
+    await writeJson(path.join(nodeDirectory, "document-audit-error.json"), {
+      sectionId: result.sectionId,
+      error: result.error,
+    });
+  }
 }
 
 export async function callAudit(args: {
@@ -619,6 +821,7 @@ async function isolatedAuditInput(args: {
   runId: string;
   requestedAt: string;
   changeEvent: ChangeEvent;
+  documentOutputs: Map<SectionId, DocumentAuditOutput>;
   expectedFingerprint: string;
 }): Promise<{ input: NodeAuditInput; cleanup: () => Promise<void> }> {
   const worktree = await createAuditWorktree(args.config, args.sectionId);
@@ -639,6 +842,7 @@ async function isolatedAuditInput(args: {
       args.runId,
       args.requestedAt,
       args.changeEvent,
+      args.documentOutputs,
     );
     const input = inputs.get(args.sectionId);
     if (!input) throw new Error(`Isolated workspace did not build ${args.sectionId}.`);
@@ -661,6 +865,7 @@ async function patchedInputs(args: {
   manifest: Awaited<ReturnType<typeof readImpactManifest>>;
   contractSchemaHash: ReturnType<typeof sha256>;
   changeEvent: ChangeEvent;
+  documentOutputs: Map<SectionId, DocumentAuditOutput>;
 }): Promise<Map<SectionId, NodeAuditInput>> {
   const patchedConfig: PipelineConfig = {
     ...args.originalConfig,
@@ -682,6 +887,7 @@ async function patchedInputs(args: {
     `${args.runId}:patched`,
     new Date().toISOString(),
     args.changeEvent,
+    args.documentOutputs,
   );
 }
 
@@ -702,6 +908,7 @@ async function runPatches(args: {
   triggerPath: string;
   runId: string;
   changeEvent: ChangeEvent;
+  documentOutputs: Map<SectionId, DocumentAuditOutput>;
 }): Promise<{ records: PatchRecord[]; patchCalls: number; reauditCalls: number }> {
   const records: PatchRecord[] = [];
   const claimedPaths = new Set<string>();
@@ -798,8 +1005,8 @@ async function runPatches(args: {
           baseCommit: input.run.baseCommit,
           findings: patchScope.auditOutput.findings,
           designIndexSource: input.contract.designIndexSource,
-          specificationFragment: input.contract.specificationFragment,
           designIndexFragment: input.contract.designIndexFragment,
+          documentAudit: input.contract.documentAudit,
           evidence: input.evidence,
           files: input.implementation.files.filter((file) => findingPaths.has(file.path)),
           allowedWriteGlobs: input.policy.allowedWriteGlobs,
@@ -1017,6 +1224,7 @@ async function runPatches(args: {
           manifest: args.manifest,
           contractSchemaHash: args.contractSchemaHash,
           changeEvent: args.changeEvent,
+          documentOutputs: args.documentOutputs,
         });
         const nextInput = nextInputs.get(sectionId);
         if (!nextInput) throw new Error(`Patched input is missing ${sectionId}.`);
@@ -1353,24 +1561,6 @@ async function runTrigger(args: {
     forceFullAudit: fullAudit,
   };
 
-  const inputs = await buildAuditInputs(
-    effectiveConfig,
-    args.manifest,
-    args.specification,
-    trigger,
-    args.contractSchemaHash,
-    runId,
-    requestedAt,
-    targetChangeEvent,
-  );
-  if (inputs.size !== 19 || SECTION_IDS.some((id) => !inputs.has(id))) {
-    throw new Error("Audit fan-out manifest is not the exact S01-S19 set.");
-  }
-  for (const [sectionId, input] of inputs) {
-    assertContract(args.validators.input, input, `${sectionId} audit input`);
-    assertIsolatedAuditInput(input);
-  }
-
   const contractHash = validatorContractHash(
     effectiveConfig,
     args.manifest,
@@ -1382,6 +1572,116 @@ async function runTrigger(args: {
       ? "full"
       : "incremental";
   const directlyDirty = directDirtySections(targetChangeEvent, args.manifest);
+
+  const documentInputs = await buildDocumentAuditInputs(
+    effectiveConfig,
+    args.manifest,
+    args.specification,
+    trigger,
+    args.contractSchemaHash,
+    runId,
+    requestedAt,
+  );
+  if (documentInputs.size !== 19 || SECTION_IDS.some((id) => !documentInputs.has(id))) {
+    throw new Error("Stage 1 document audit fan-out is not the exact S01-S19 set.");
+  }
+  for (const [sectionId, input] of documentInputs) {
+    assertContract(args.validators.documentInput, input, `${sectionId} document audit input`);
+    assertIsolatedDocumentAuditInput(input);
+  }
+
+  const documentCached = new Map<SectionId, ResolvedDocumentNode>();
+  const documentResolved = new Map<SectionId, ResolvedDocumentNode>();
+  const documentCallResults: DocumentAuditCallResult[] = [];
+  const executeDocumentAudit = async (sectionId: SectionId): Promise<DocumentAuditCallResult> => {
+    const input = documentInputs.get(sectionId);
+    if (!input) return { ok: false, sectionId, error: `Missing ${sectionId} document input.`, attempts: [] };
+    const result = await callDocumentAudit({
+      client: args.client,
+      input,
+      requestId: primaryAuditRequestId(runId, "document-audit", sectionId),
+      maxAttempts: args.config.auditAttempts,
+      validate: args.validators.documentAudit,
+      outputSchema: args.validators.documentAuditSchema,
+    });
+    await saveDocumentAuditCall(nodesDirectory, input, result);
+    return result;
+  };
+  if (fullAudit) {
+    documentCallResults.push(...await runWithConcurrency(
+      SECTION_IDS,
+      args.config.nvidia.concurrency,
+      executeDocumentAudit,
+    ));
+  } else {
+    for (const sectionId of SECTION_IDS) {
+      const input = documentInputs.get(sectionId)!;
+      const cachedDocument = await resolveCachedDocumentPass({
+        config: effectiveConfig,
+        input,
+        validatorContractHash: contractHash,
+      });
+      if (cachedDocument) {
+        documentCached.set(sectionId, cachedDocument);
+        documentResolved.set(sectionId, cachedDocument);
+        await writeJson(path.join(nodesDirectory, sectionId, "document-audit-input.json"), input);
+        await writeJson(path.join(nodesDirectory, sectionId, "document-audit-output.json"), cachedDocument.output);
+        await writeJson(path.join(nodesDirectory, sectionId, "document-cache-hit.json"), {
+          status: "CACHED_PASS",
+          fingerprint: input.node.fingerprint,
+          attestationHash: cachedDocument.attestation?.attestationHash ?? null,
+        });
+      } else {
+        documentCallResults.push(await executeDocumentAudit(sectionId));
+      }
+    }
+  }
+  for (const result of documentCallResults) {
+    const input = documentInputs.get(result.sectionId)!;
+    const output = result.ok
+      ? result.output
+      : quarantineDocumentAuditOutput(result.sectionId, input.node.fingerprint) as DocumentAuditOutput;
+    documentResolved.set(result.sectionId, {
+      status: "FRESH",
+      output,
+      rawResponseHash: result.ok ? result.completion.rawHash : sha256(result.error),
+    });
+    if (!result.ok) {
+      await writeJson(path.join(nodesDirectory, result.sectionId, "document-audit-output.json"), output);
+    }
+  }
+  if (documentResolved.size !== 19) {
+    throw new Error(`Stage 1 resolved ${documentResolved.size}/19 Sections.`);
+  }
+  await createFreshDocumentAttestations({
+    config: effectiveConfig,
+    inputs: documentInputs,
+    resolved: documentResolved,
+    validatorContractHash: contractHash,
+    outputDirectory: path.join(args.config.outputRoot, "document-attestations"),
+  });
+  const documentOutputs = new Map(
+    SECTION_IDS.map((sectionId) => [sectionId, documentResolved.get(sectionId)!.output] as const),
+  );
+
+  const inputs = await buildAuditInputs(
+    effectiveConfig,
+    args.manifest,
+    args.specification,
+    trigger,
+    args.contractSchemaHash,
+    runId,
+    requestedAt,
+    targetChangeEvent,
+    documentOutputs,
+  );
+  if (inputs.size !== 19 || SECTION_IDS.some((id) => !inputs.has(id))) {
+    throw new Error("Stage 2 implementation audit fan-out is not the exact S01-S19 set.");
+  }
+  for (const [sectionId, input] of inputs) {
+    assertContract(args.validators.input, input, `${sectionId} implementation audit input`);
+    assertIsolatedAuditInput(input);
+  }
 
   await writeJson(path.join(runDirectory, "run.json"), {
     schemaVersion: "design-validation/run/v2",
@@ -1431,13 +1731,14 @@ async function runTrigger(args: {
         runId,
         requestedAt,
         changeEvent: targetChangeEvent,
+        documentOutputs,
         expectedFingerprint: scheduledInput.node.fingerprint,
       });
       const result = await callAudit({
         client: args.client,
         input: workspace.input,
         kind: "audit",
-        requestId: `${runId}:audit:${sectionId}`,
+        requestId: primaryAuditRequestId(runId, "implementation-audit", sectionId),
         maxAttempts: args.config.auditAttempts,
         validate: args.validators.audit,
         outputSchema: args.validators.auditSchema,
@@ -1499,8 +1800,36 @@ async function runTrigger(args: {
     }
   }
 
-  await writeJson(path.join(runDirectory, "audit-batch-manifest.json"), {
-    schemaVersion: "design-validation/audit-batch/v2",
+  await writeJson(path.join(runDirectory, "document-audit-batch-manifest.json"), {
+    schemaVersion: "design-validation/document-audit-batch/v1",
+    stage: 1,
+    runId,
+    targetId,
+    mode,
+    comparison: "Specification -> DESIGN_INDEX",
+    expectedSections: SECTION_IDS,
+    requests: SECTION_IDS.map((sectionId) => ({
+      requestId: primaryAuditRequestId(runId, "document-audit", sectionId),
+      sectionId,
+      status: documentCached.has(sectionId) ? "CACHED_PASS" : "COMPLETED",
+      inputPath: `nodes/${sectionId}/document-audit-input.json`,
+      outputPath: `nodes/${sectionId}/document-audit-output.json`,
+    })),
+  });
+  await writeJson(path.join(runDirectory, "document-audit-matrix.json"), {
+    schemaVersion: "design-validation/document-audit-matrix/v1",
+    runId,
+    sections: SECTION_IDS.map((sectionId) => documentOutputs.get(sectionId)),
+    errors: documentCallResults.filter((result) => !result.ok),
+  });
+  await writeDocumentGapReport(
+    path.join(runDirectory, "DOCUMENT_GAP_REPORT.md"),
+    SECTION_IDS.map((sectionId) => documentOutputs.get(sectionId)!),
+  );
+
+  await writeJson(path.join(runDirectory, "implementation-audit-batch-manifest.json"), {
+    schemaVersion: "design-validation/implementation-audit-batch/v1",
+    stage: 2,
     runId,
     targetId,
     mode,
@@ -1512,7 +1841,7 @@ async function runTrigger(args: {
     },
     expectedSections: SECTION_IDS,
     requests: SECTION_IDS.map((sectionId) => ({
-      requestId: `${runId}:audit:${sectionId}`,
+      requestId: primaryAuditRequestId(runId, "implementation-audit", sectionId),
       sectionId,
       status: cached.has(sectionId)
         ? "CACHED_PASS"
@@ -1555,6 +1884,12 @@ async function runTrigger(args: {
       mode,
       expectedSections: 19,
       cachedPasses: cached.size,
+      documentCachedPasses: documentCached.size,
+      documentAuditRequests: documentCallResults.length,
+      documentAuditCalls: documentCallResults.reduce((count, result) => count + result.attempts.length, 0),
+      implementationAuditRequests: callResults.length,
+      implementationAuditCalls: callResults.reduce((count, result) => count + result.attempts.length, 0),
+      totalLogicalAuditRequests: documentCallResults.length + callResults.length,
       auditRequests: callResults.length,
       auditCalls: callResults.reduce((count, result) => count + result.attempts.length, 0),
       patchCalls: 0,
@@ -1563,6 +1898,9 @@ async function runTrigger(args: {
       patchStatusCounts: {},
       nodes: buildNodeRunSummaries({
         manifest: args.manifest,
+        documentInputs,
+        documentOutputs: [...documentOutputs.values()],
+        documentAuditAttempts: new Map(documentCallResults.map((result) => [result.sectionId, result.attempts.length])),
         inputs,
         outputs: orderedOutputs,
         nodeStates,
@@ -1571,7 +1909,12 @@ async function runTrigger(args: {
       }),
       patches,
       blocked: blockedNodes(orderedOutputs),
-      errors: failures.map((failure) => `${failure.sectionId}: ${failure.error}`),
+      errors: [
+        ...documentCallResults
+          .filter((result): result is DocumentAuditCallFailure => !result.ok)
+          .map((failure) => `${failure.sectionId} document audit: ${failure.error}`),
+        ...failures.map((failure) => `${failure.sectionId} implementation audit: ${failure.error}`),
+      ],
     };
     await writeJson(path.join(runDirectory, "summary.json"), failedSummary);
     return failedSummary;
@@ -1607,6 +1950,7 @@ async function runTrigger(args: {
     triggerPath: trigger.path,
     runId,
     changeEvent: targetChangeEvent,
+    documentOutputs,
   });
   nodeStates = buildNodeStates(inputs, resolved);
   await writeJson(path.join(runDirectory, "node-states.json"), {
@@ -1623,6 +1967,12 @@ async function runTrigger(args: {
     mode,
     expectedSections: 19,
     cachedPasses: cached.size,
+    documentCachedPasses: documentCached.size,
+    documentAuditRequests: documentCallResults.length,
+    documentAuditCalls: documentCallResults.reduce((count, result) => count + result.attempts.length, 0),
+    implementationAuditRequests: callResults.length,
+    implementationAuditCalls: callResults.reduce((count, result) => count + result.attempts.length, 0),
+    totalLogicalAuditRequests: documentCallResults.length + callResults.length,
     auditRequests: callResults.length,
     auditCalls: callResults.reduce((count, result) => count + result.attempts.length, 0),
     patchCalls: patchResult.patchCalls,
@@ -1631,6 +1981,9 @@ async function runTrigger(args: {
     patchStatusCounts: countStatuses(patchResult.records.map((record) => record.status)),
     nodes: buildNodeRunSummaries({
       manifest: args.manifest,
+      documentInputs,
+      documentOutputs: [...documentOutputs.values()],
+      documentAuditAttempts: new Map(documentCallResults.map((result) => [result.sectionId, result.attempts.length])),
       inputs,
       outputs: orderedOutputs,
       nodeStates,
@@ -1640,6 +1993,9 @@ async function runTrigger(args: {
     patches: patchResult.records,
     blocked: blockedNodes(orderedOutputs),
     errors: [
+      ...documentCallResults
+        .filter((result): result is DocumentAuditCallFailure => !result.ok)
+        .map((failure) => `${failure.sectionId} document audit: ${failure.error}`),
       ...callResults
         .filter((result): result is AuditCallSuccess => (
           result.ok &&
@@ -1744,7 +2100,7 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
     const lines = ["## DESIGN_INDEX validation", ""];
     for (const summary of summaries) {
       lines.push(
-        `- **${summary.targetId}**: ${summary.cachedPasses} cached, ${summary.auditRequests} scheduled Section audits, ${summary.auditCalls} provider audit calls, ${summary.patchCalls} patch calls, ${summary.reauditCalls} re-audit calls`,
+        `- **${summary.targetId}**: Stage 1 document audits ${summary.documentAuditRequests} logical / ${summary.documentAuditCalls} provider calls / ${summary.documentCachedPasses} cached; Stage 2 implementation audits ${summary.implementationAuditRequests} logical / ${summary.implementationAuditCalls} provider calls / ${summary.cachedPasses} cached; total logical audit requests ${summary.totalLogicalAuditRequests}; ${summary.patchCalls} patch calls; ${summary.reauditCalls} re-audit calls`,
         `  - Audit statuses: ${Object.entries(summary.statusCounts).map(([status, count]) => `${status}=${count}`).join(", ") || "none"}`,
         `  - Patch statuses: ${Object.entries(summary.patchStatusCounts).map(([status, count]) => `${status}=${count}`).join(", ") || "none"}`,
       );
