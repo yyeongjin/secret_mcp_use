@@ -41,7 +41,7 @@ export function isRetryablePatchCandidateError(error: unknown): boolean {
 export function normalizeUnifiedDiffMechanics(diff: string): string {
   const rawLines = diff.replaceAll("\r\n", "\n").split("\n");
   const lines: string[] = [];
-  let hasFileHeader = false;
+  let pendingFileHeaderPath: string | null = null;
 
   for (let index = 0; index < rawLines.length; index += 1) {
     const line = rawLines[index];
@@ -54,7 +54,7 @@ export function normalizeUnifiedDiffMechanics(diff: string): string {
       const changedPath = newPath ?? oldPath;
       if (!changedPath) return diff;
       lines.push(`diff --git a/${changedPath} b/${changedPath}`);
-      hasFileHeader = true;
+      pendingFileHeaderPath = changedPath;
       continue;
     }
     if (line.startsWith("--- ") && rawLines[index + 1]?.startsWith("+++ ")) {
@@ -62,14 +62,18 @@ export function normalizeUnifiedDiffMechanics(diff: string): string {
       const newPath = normalizedDiffPath(rawLines[index + 1].slice(4));
       const changedPath = newPath ?? oldPath;
       if (!changedPath) return diff;
-      if (!hasFileHeader) lines.push(`diff --git a/${changedPath} b/${changedPath}`);
+      if (!pendingFileHeaderPath) lines.push(`diff --git a/${changedPath} b/${changedPath}`);
       lines.push(
         oldPath === null ? "--- /dev/null" : `--- a/${oldPath}`,
         newPath === null ? "+++ /dev/null" : `+++ b/${newPath}`,
       );
-      hasFileHeader = false;
+      pendingFileHeaderPath = null;
       index += 1;
       continue;
+    }
+    if ((line.startsWith("@@ ") || line.trim() === "@@") && pendingFileHeaderPath) {
+      lines.push(`--- a/${pendingFileHeaderPath}`, `+++ b/${pendingFileHeaderPath}`);
+      pendingFileHeaderPath = null;
     }
     lines.push(line);
   }
@@ -98,8 +102,12 @@ export function normalizeUnifiedDiffMechanics(diff: string): string {
       !lines[index].startsWith("diff --git ")
     ) {
       if (lines[index].startsWith("--- ") && lines[index + 1]?.startsWith("+++ ")) break;
-      const bodyLine = lines[index] === "" ? " " : lines[index];
-      if (!/^[ +\\-]/.test(bodyLine) && bodyLine !== "\\ No newline at end of file") return diff;
+      const rawBodyLine = lines[index];
+      const bodyLine = rawBodyLine === ""
+        ? " "
+        : /^[ +\\-]/.test(rawBodyLine) || rawBodyLine === "\\ No newline at end of file"
+          ? rawBodyLine
+          : ` ${rawBodyLine}`;
       body.push(bodyLine);
       index += 1;
     }

@@ -120,6 +120,41 @@ function tokenProperty(finding: string): string | null {
   return tokenExpectation(finding)?.property ?? /(--[A-Za-z0-9_-]+)/.exec(finding)?.[1] ?? null;
 }
 
+function htmlRegionAlreadyLabelled(input: NodeAuditInput, finding: AuditFinding): boolean {
+  if (
+    !/role\s*=?\s*["']?region\b/i.test(finding.finding) ||
+    !/aria-label/i.test(finding.finding)
+  ) {
+    return false;
+  }
+  const className = /\b([a-z][a-z0-9_-]+)\s+elements?\b/i.exec(finding.finding)?.[1];
+  if (!className) return false;
+
+  const referencedFiles = input.implementation.files.filter((file) => (
+    finding.implementationRefs.includes(file.path) && file.path.endsWith(".html") && file.content !== null
+  ));
+  if (referencedFiles.length === 0) return false;
+
+  let matchedTag = false;
+  for (const file of referencedFiles) {
+    const tags = [...file.content!.matchAll(/<[a-z][^>]*>/gi)]
+      .map((match) => match[0])
+      .filter((tag) => {
+        const classValue = /\bclass\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] ?? "";
+        return classValue.split(/\s+/).includes(className);
+      });
+    if (tags.length === 0) return false;
+    matchedTag = true;
+    if (!tags.every((tag) => (
+      /\brole\s*=\s*["']region["']/i.test(tag) &&
+      /\baria-label\s*=\s*["'][^"']+["']/i.test(tag)
+    ))) {
+      return false;
+    }
+  }
+  return matchedTag;
+}
+
 function exactRequirementIds(output: NodeAuditOutput): Set<string> {
   const value = output.publicOutput.exactContractRequirementIds;
   return new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
@@ -260,6 +295,14 @@ export function buildPatchScope(input: NodeAuditInput, output: NodeAuditOutput):
   const excluded: PatchScopeExclusion[] = [];
 
   for (const finding of output.findings) {
+    if (htmlRegionAlreadyLabelled(input, finding)) {
+      excluded.push({
+        requirementId: finding.requirementId,
+        reason: "ALREADY_SATISFIED",
+        detail: "Every referenced region already has role=region and a non-empty aria-label in the supplied HTML.",
+      });
+      continue;
+    }
     const expected = tokenExpectation(finding.finding);
     const property = tokenProperty(finding.finding);
     if (!property) {

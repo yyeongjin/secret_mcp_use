@@ -107,6 +107,46 @@ test("patch scope preserves a token finding when the implementation value is wro
   assert.deepEqual(result.includedRequirementIds, ["S09-PRIMARY"]);
 });
 
+test("patch scope removes a false missing-label finding when every named HTML region is labelled", () => {
+  const input = {
+    node: { sectionId: "S08", requirementIds: ["S08-RQ-0003"] },
+    contract: { designIndexFragment: "## Components" },
+    implementation: {
+      files: [{
+        path: "frontend/index.html",
+        content: [
+          '<div class="media-track" role="region" aria-label="Sustainability stories" tabindex="0">',
+          "</div>",
+        ].join("\n"),
+      }],
+    },
+    payload: { sourceFacts: [] },
+  } as unknown as NodeAuditInput;
+  const output = {
+    status: "PATCH_REQUIRED",
+    findings: [{
+      requirementId: "S08-RQ-0003",
+      pageId: null,
+      componentId: "EditorialMediaTrack",
+      status: "MISSING",
+      finding: "EditorialMediaTrack requires role=region and aria-label, but media-track elements are missing accessible names.",
+      evidenceRefs: [],
+      implementationRefs: ["frontend/index.html"],
+      proposedValue: null,
+    }],
+    publicOutput: {},
+  } as unknown as NodeAuditOutput;
+
+  const scope = buildPatchScope(input, output);
+  assert.equal(scope.auditOutput.findings.length, 0);
+  assert.equal(scope.feedbackOutput.findings.length, 0);
+  assert.deepEqual(scope.excluded, [{
+    requirementId: "S08-RQ-0003",
+    reason: "ALREADY_SATISFIED",
+    detail: "Every referenced region already has role=region and a non-empty aria-label in the supplied HTML.",
+  }]);
+});
+
 test("non-token findings remain in the isolated patch scope", () => {
   const output = auditOutput();
   output.findings = [{

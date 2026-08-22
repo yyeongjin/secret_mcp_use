@@ -167,6 +167,38 @@ test("mechanical normalization adds repository-rooted git headers", () => {
   ].join("\n"));
 });
 
+test("mechanical normalization restores missing file markers after a git header", () => {
+  const normalized = normalizeUnifiedDiffMechanics([
+    "diff --git a/frontend/styles.css b/frontend/styles.css",
+    "@@",
+    " :root {",
+    "+  --color-primary-hover: #3157dd;",
+    " }",
+    "",
+  ].join("\n"));
+
+  assert.match(normalized, /^diff --git a\/frontend\/styles\.css b\/frontend\/styles\.css$/m);
+  assert.match(normalized, /^--- a\/frontend\/styles\.css$/m);
+  assert.match(normalized, /^\+\+\+ b\/frontend\/styles\.css$/m);
+  assert.match(normalized, /^@@ -1,2 \+1,3 @@$/m);
+});
+
+test("mechanical normalization repairs an unprefixed context line in a model hunk", () => {
+  const normalized = normalizeUnifiedDiffMechanics([
+    "diff --git a/frontend/styles.css b/frontend/styles.css",
+    "@@",
+    " :root {",
+    "+  --color-primary-hover: #3157dd;",
+    " }",
+    "}",
+    "",
+  ].join("\n"));
+
+  assert.match(normalized, /^--- a\/frontend\/styles\.css$/m);
+  assert.match(normalized, /^\+\+\+ b\/frontend\/styles\.css$/m);
+  assert.match(normalized, /^ }$/m);
+});
+
 test("mechanical normalization rejects a patch containing only no-op replacements", () => {
   const normalized = normalizeUnifiedDiffMechanics([
     "--- frontend/styles.css",
