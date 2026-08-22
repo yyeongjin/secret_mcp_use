@@ -1,0 +1,95 @@
+{
+  "schemaVersion": "design-validation/attestation/v2",
+  "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
+  "sectionId": "S15",
+  "fingerprint": "sha256:43b9fcf192940ba14d7e5bd0f3fcf32a5edfbbabb4663051628fc69475f55c43",
+  "triggerSource": {
+    "path": "trigger/DESIGN_INDEX_gdweb-26357.md",
+    "documentHash": "sha256:f79f163969cbb3520f2741dde3250533a4ff3071dcb772e53dd5802b918e6336",
+    "fragmentHash": "sha256:1073ffc89bbb7d833b57f36e7c20ccec8a186aa2bf127c975f9f2bc68445702f"
+  },
+  "specificationSource": {
+    "path": "DESIGN_INDEX_SPECIFICATION.md",
+    "documentHash": "sha256:65233a5428ae3411c094ab72691793e2998232e55ea5ca4e299993f7c4cf251a",
+    "globalRulesHash": "sha256:397b59d360af5b81cb8816ecdf12ad45bbd3c55990df199c67adf9b399fb2987",
+    "fragmentHash": "sha256:6e7507540cd89d65f13708c1fc39571ba8a80ec5c0827bd1f1fe448c5471243b"
+  },
+  "status": "PASS",
+  "baseCommit": "9697ad90257e22f1c4a699728666c3b2f5f55b9f",
+  "source": "fresh-audit",
+  "requirementIds": [
+    "S15-REQ-8DE24C92F3C7",
+    "S15-REQ-3046801A00CF",
+    "S15-REQ-A7792714B672",
+    "S15-REQ-C627A57DFEE5",
+    "S15-REQ-F271D871F1D2",
+    "S15-REQ-DF3982FD6101",
+    "S15-REQ-07022FB0F1D2",
+    "S15-REQ-3046801A00CF",
+    "S15-REQ-2860BE47A78E",
+    "S15-REQ-D0C69370924D",
+    "S15-REQ-801513D3BAD0",
+    "S15-REQ-C499340CF271",
+    "S15-REQ-778C177527CB",
+    "S15-REQ-45EE01281A5D",
+    "S15-REQ-C627A57DFEE5",
+    "S15-REQ-DF3982FD6101",
+    "S15-REQ-68F728E2401C",
+    "S15-REQ-3046801A00CF",
+    "S15-REQ-5926229D7A2F",
+    "S15-REQ-AA117BADF979",
+    "S15-REQ-963E6B029572",
+    "S15-REQ-CD8F94B80A2A",
+    "S15-REQ-DF3982FD6101",
+    "S15-REQ-2D45867859AA",
+    "S15-REQ-7539E70ADCE8",
+    "S15-REQ-180E0142CDF0",
+    "S15-REQ-49AAC30BA1B8",
+    "S15-REQ-C0107887812A",
+    "S15-REQ-7038649B5CFB",
+    "S15-REQ-015058A5ED4E",
+    "S15-REQ-F0C683952003",
+    "S15-REQ-DF3982FD6101",
+    "S15-REQ-6723084E8F8D",
+    "S15-REQ-D0C69370924D",
+    "S15-REQ-D615FD6BAADE",
+    "S15-REQ-DF3982FD6101",
+    "S15-REQ-AD6D0BC7A274",
+    "S15-REQ-F6586E88A453",
+    "S15-REQ-2EF76F3938DA",
+    "S15-REQ-457908AF005E",
+    "S15-REQ-2C1AEB7DD2A4",
+    "S15-REQ-FDAF4A0F2BC9",
+    "S15-REQ-1C542D47B377",
+    "S15-REQ-76BD710B4782",
+    "S15-REQ-4EFB4C759BC7",
+    "S15-REQ-A8DC6932C62D",
+    "S15-REQ-7EFDE14A7765",
+    "S15-REQ-538C46237D7F",
+    "S15-REQ-47A7500AC9A8",
+    "S15-REQ-9FDBD966887C"
+  ],
+  "dependencyAttestations": {
+    "S01": "sha256:6fad86f9f770a038e60b2933a6bb6ebee584bbc3ca0f68adf0e3dad06c83847f",
+    "S03": "sha256:83af36bc931617ff5234747defef07b5610217d295b64522ad50450341ccab19"
+  },
+  "dependencyPublicDigests": {
+    "S01": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S03": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  "publicOutput": {},
+  "publicDigest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "validator": {
+    "id": "nvidia:nvidia/nemotron-3-super-120b-a12b",
+    "contractHash": "sha256:81412b40507c557c36953349efd29d28d1cc8eccfa104b6dc8a8ac3c6f90d7e2"
+  },
+  "tests": [
+    {
+      "id": "audit-schema",
+      "status": "PASS",
+      "artifactHash": "sha256:00fc41233f2e415a1c2a91bc56d66e87c16d465fd8058fda6e0af377129096e1"
+    }
+  ],
+  "createdAt": "2026-08-22T14:48:16.403Z",
+  "attestationHash": "sha256:c42e70d954d51ce8b7908dbbee3f3128431be200115d3e9657d0c831ee7f7299"
+}
