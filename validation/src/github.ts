@@ -1,7 +1,14 @@
 import { sha256 } from "./hash.ts";
 import { runCommand } from "./process.ts";
 import type { GuardedPatch } from "./patch.ts";
-import type { NodeAuditInput, PipelineConfig, PullRequestManifest, Sha256 } from "./types.ts";
+import type {
+  AuditFinding,
+  NodeAuditInput,
+  NodeAuditOutput,
+  PipelineConfig,
+  PullRequestManifest,
+  Sha256,
+} from "./types.ts";
 
 interface PullRequestResponse {
   number: number;
@@ -15,6 +22,15 @@ interface PullRequestResponse {
 
 interface PullRequestFileResponse {
   filename: string;
+}
+
+interface IssueResponse {
+  number: number;
+  html_url: string;
+  state: string;
+  title: string;
+  body?: string | null;
+  pull_request?: unknown;
 }
 
 interface GitReferenceResponse {
@@ -31,6 +47,7 @@ interface NodeCheckSummary {
   executionState: string;
   auditAttempts: number;
   requirementIds: string[];
+  findings: AuditFinding[];
   patch: {
     status: string;
     reason: string;
@@ -43,6 +60,11 @@ interface TargetCheckSummary {
   targetId: string;
   triggerPath: string;
   nodes: NodeCheckSummary[];
+}
+
+export interface FeedbackIssueLink {
+  number: number;
+  url: string;
 }
 
 async function githubRequest<T>(
@@ -108,9 +130,91 @@ function nodeDisplayStatus(node: NodeCheckSummary): string {
   return node.executionState;
 }
 
+function markdownText(value: string): string {
+  return value
+    .replaceAll("\r", " ")
+    .replaceAll("\n", " ")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("`", "'")
+    .trim();
+}
+
+function codeItems(values: string[]): string {
+  return values.length > 0 ? values.map((value) => `\`${markdownText(value)}\``).join(", ") : "none";
+}
+
+export function renderFindings(findings: AuditFinding[]): string {
+  if (findings.length === 0) return "No omissions were reported by this isolated Section audit.";
+  return findings.map((finding, index) => [
+    `### ${index + 1}. \`${markdownText(finding.requirementId)}\``,
+    "",
+    `- Result: \`${finding.status}\``,
+    `- Missing or uncertain item: ${markdownText(finding.finding)}`,
+    `- Page: ${finding.pageId ? `\`${markdownText(finding.pageId)}\`` : "not specified"}`,
+    `- Component: ${finding.componentId ? `\`${markdownText(finding.componentId)}\`` : "not specified"}`,
+    `- Evidence: ${codeItems(finding.evidenceRefs)}`,
+    `- Implementation: ${codeItems(finding.implementationRefs)}`,
+  ].join("\n")).join("\n\n");
+}
+
+function checkKey(targetId: string, sectionId: string): string {
+  return `${targetId}:${sectionId}`;
+}
+
+export function buildNodeCheckOutput(args: {
+  summary: TargetCheckSummary;
+  node: NodeCheckSummary;
+  feedbackIssue?: FeedbackIssueLink;
+}): { title: string; summary: string; text: string } {
+  const { summary, node } = args;
+  const status = nodeDisplayStatus(node);
+  const patchReason = node.patch?.reason
+    ? markdownText(node.patch.reason).slice(0, 8000)
+    : "No patch request was required.";
+  const pullRequest = node.patch?.pullRequest;
+  const disposition = pullRequest
+    ? `Verified code diff: [draft PR #${pullRequest.number}](${pullRequest.url}) on \`${pullRequest.branch}\`.`
+    : args.feedbackIssue
+      ? `Actionable verbal feedback: [issue #${args.feedbackIssue.number}](${args.feedbackIssue.url}).`
+      : node.executionState === "PASS" || node.executionState === "CACHED_PASS"
+        ? "No correction PR or feedback issue is required."
+        : "No safe code PR was published. Review the findings and patch disposition below.";
+  return {
+    title: `${node.sectionId} ${status}`.slice(0, 255),
+    summary: [
+      `- Target: \`${summary.targetId}\``,
+      `- Trigger: \`${summary.triggerPath}\``,
+      `- Audit status: \`${node.auditStatus}\``,
+      `- Execution state: \`${node.executionState}\``,
+      `- Provider audit calls: \`${node.auditAttempts}\``,
+      `- Patch status: \`${node.patch?.status ?? "NOT_RUN"}\``,
+      `- Fingerprint: \`${node.fingerprint ?? "unavailable"}\``,
+      `- Requirement IDs: ${codeItems(node.requirementIds)}`,
+      `- Patch disposition: ${patchReason}`,
+      `- Publication: ${disposition}`,
+      "",
+      `Independent request: \`${summary.runId}:audit:${node.sectionId}\``,
+    ].join("\n"),
+    text: [
+      "## Requirement-level feedback",
+      "",
+      renderFindings(node.findings),
+      "",
+      "## Next action",
+      "",
+      disposition,
+      "",
+      patchReason,
+    ].join("\n"),
+  };
+}
+
 export async function publishNodeCheckRuns(args: {
   config: PipelineConfig;
   summaries: TargetCheckSummary[];
+  feedbackIssues?: Map<string, FeedbackIssueLink>;
 }): Promise<void> {
   if (!args.config.github.token) return;
   const detailsUrl = args.config.runId
@@ -118,30 +222,11 @@ export async function publishNodeCheckRuns(args: {
     : undefined;
   for (const summary of args.summaries) {
     for (const node of summary.nodes) {
-      const status = nodeDisplayStatus(node);
-      const requirements = node.requirementIds.length > 0
-        ? node.requirementIds.map((id) => `\`${id}\``).join(", ")
-        : "none";
-      const patchReason = node.patch?.reason
-        ? node.patch.reason.slice(0, 4000)
-        : "No patch request was required.";
-      const pullRequest = node.patch?.pullRequest;
-      const checkSummary = [
-        `- Target: \`${summary.targetId}\``,
-        `- Trigger: \`${summary.triggerPath}\``,
-        `- Audit status: \`${node.auditStatus}\``,
-        `- Execution state: \`${node.executionState}\``,
-        `- Provider audit calls: \`${node.auditAttempts}\``,
-        `- Patch status: \`${node.patch?.status ?? "NOT_RUN"}\``,
-        `- Fingerprint: \`${node.fingerprint ?? "unavailable"}\``,
-        `- Requirement IDs: ${requirements}`,
-        `- Patch reason: ${patchReason}`,
-        pullRequest
-          ? `- Draft PR: [#${pullRequest.number}](${pullRequest.url}) on \`${pullRequest.branch}\``
-          : "- Draft PR: none",
-        "",
-        `Independent request: \`${summary.runId}:audit:${node.sectionId}\``,
-      ].join("\n");
+      const output = buildNodeCheckOutput({
+        summary,
+        node,
+        feedbackIssue: args.feedbackIssues?.get(checkKey(summary.targetId, node.sectionId)),
+      });
       await githubRequest(args.config, "POST", `/repos/${args.config.repository}/check-runs`, {
         name: `Design Validation / ${node.sectionId} ${node.name}`.slice(0, 100),
         head_sha: args.config.baseCommit,
@@ -149,13 +234,107 @@ export async function publishNodeCheckRuns(args: {
         conclusion: nodeCheckConclusion(node),
         external_id: `${summary.runId}:${summary.targetId}:${node.sectionId}`.slice(0, 255),
         ...(detailsUrl ? { details_url: detailsUrl } : {}),
-        output: {
-          title: `${node.sectionId} ${status}`.slice(0, 255),
-          summary: checkSummary,
-        },
+        output,
       });
     }
   }
+}
+
+function feedbackKey(targetId: string, sectionId: string): Sha256 {
+  return sha256(`design-validation-feedback:${targetId}:${sectionId}`);
+}
+
+function feedbackMarker(targetId: string, sectionId: string): string {
+  return `<!-- design-validation-feedback-key: ${feedbackKey(targetId, sectionId)} -->`;
+}
+
+export function needsFeedbackIssue(node: NodeCheckSummary): boolean {
+  if (node.patch?.pullRequest) return false;
+  if (node.executionState === "PASS" || node.executionState === "CACHED_PASS") return false;
+  return node.findings.length > 0 || (
+    node.patch !== null && !["NOT_REQUIRED", "PATCH_VERIFIED"].includes(node.patch.status)
+  );
+}
+
+function feedbackIssueBody(summary: TargetCheckSummary, node: NodeCheckSummary): string {
+  const patchReason = markdownText(node.patch?.reason ?? "No safe patch was produced.");
+  return [
+    "## Validation feedback",
+    "",
+    `The isolated \`${node.sectionId}\` audit found an item that cannot yet be published as a verified code PR. This issue contains the actionable feedback instead of creating an empty or report-only PR.`,
+    "",
+    "## Findings",
+    "",
+    renderFindings(node.findings),
+    "",
+    "## Why no code PR was opened",
+    "",
+    `- Audit status: \`${node.auditStatus}\``,
+    `- Execution state: \`${node.executionState}\``,
+    `- Patch status: \`${node.patch?.status ?? "NOT_RUN"}\``,
+    `- Reason: ${patchReason}`,
+    "",
+    "## Scope and provenance",
+    "",
+    `- Target: \`${summary.targetId}\``,
+    `- Trigger: \`${summary.triggerPath}\``,
+    `- Fingerprint: \`${node.fingerprint ?? "unavailable"}\``,
+    `- Independent request: \`${summary.runId}:audit:${node.sectionId}\``,
+    "",
+    "The pipeline must not invent a value or open a code PR until the missing evidence, contract conflict, provider result, dependency, or patch guard is resolved. A later PASS or verified code PR closes this feedback issue automatically.",
+    "",
+    feedbackMarker(summary.targetId, node.sectionId),
+  ].join("\n");
+}
+
+export async function publishActionableFeedbackIssues(args: {
+  config: PipelineConfig;
+  summaries: TargetCheckSummary[];
+}): Promise<Map<string, FeedbackIssueLink>> {
+  const links = new Map<string, FeedbackIssueLink>();
+  if (!args.config.createPrs || !args.config.github.token) return links;
+  const issues = await githubRequest<IssueResponse[]>(
+    args.config,
+    "GET",
+    `/repos/${args.config.repository}/issues?state=all&per_page=100&sort=updated&direction=desc`,
+  );
+  const feedbackIssues = issues.filter((issue) => !issue.pull_request && issue.body?.includes("design-validation-feedback-key"));
+
+  for (const summary of args.summaries) {
+    for (const node of summary.nodes) {
+      const marker = feedbackMarker(summary.targetId, node.sectionId);
+      const existing = feedbackIssues.find((issue) => issue.body?.includes(marker));
+      if (needsFeedbackIssue(node)) {
+        const title = `Design validation ${node.sectionId}: ${nodeDisplayStatus(node)}`.slice(0, 256);
+        const body = feedbackIssueBody(summary, node);
+        const issue = existing
+          ? await githubRequest<IssueResponse>(
+            args.config,
+            "PATCH",
+            `/repos/${args.config.repository}/issues/${existing.number}`,
+            { title, body, state: "open" },
+          )
+          : await githubRequest<IssueResponse>(args.config, "POST", `/repos/${args.config.repository}/issues`, {
+            title,
+            body,
+          });
+        links.set(checkKey(summary.targetId, node.sectionId), { number: issue.number, url: issue.html_url });
+        continue;
+      }
+      if (!existing || existing.state !== "open") continue;
+      const pullRequest = node.patch?.pullRequest;
+      await githubRequest(args.config, "POST", `/repos/${args.config.repository}/issues/${existing.number}/comments`, {
+        body: pullRequest
+          ? `Resolved by verified draft PR #${pullRequest.number}: ${pullRequest.url}`
+          : `Resolved by \`${node.executionState}\` for fingerprint \`${node.fingerprint ?? "unavailable"}\`.`,
+      });
+      await githubRequest(args.config, "PATCH", `/repos/${args.config.repository}/issues/${existing.number}`, {
+        state: "closed",
+        state_reason: "completed",
+      });
+    }
+  }
+  return links;
 }
 
 function keyMarker(key: Sha256): string {
@@ -181,7 +360,7 @@ async function allAutomationPullRequests(config: PipelineConfig, state: "open" |
   const pulls = await githubRequest<PullRequestResponse[]>(
     config,
     "GET",
-    `/repos/${config.repository}/pulls?state=${state}&base=${encodeURIComponent(config.github.baseBranch)}&per_page=100&sort=updated&direction=desc`,
+    `/repos/${config.repository}/pulls?state=${state}&per_page=100&sort=updated&direction=desc`,
   );
   return pulls.filter((pull) => pull.head?.ref.startsWith("auto/"));
 }
@@ -228,9 +407,24 @@ export async function reconcileStaleAutomationPullRequests(config: PipelineConfi
   const closed: number[] = [];
   for (const pull of await allAutomationPullRequests(config, "open")) {
     const manifest = manifestFromBody(pull.body);
-    if (!manifest || manifest.baseCommit === config.baseCommit) continue;
+    if (!manifest) {
+      await githubRequest(config, "POST", `/repos/${config.repository}/issues/${pull.number}/comments`, {
+        body: "LEGACY_AUTOMATION_PR: this draft has no v2 validation manifest or requirement-level audit feedback. It is not a valid output of the current pipeline and is being closed without merge.",
+      });
+      await githubRequest(config, "PATCH", `/repos/${config.repository}/pulls/${pull.number}`, { state: "closed" });
+      if (pull.head?.ref.startsWith("auto/")) {
+        await githubRequest(
+          config,
+          "DELETE",
+          `/repos/${config.repository}/git/refs/heads/${pull.head.ref.split("/").map(encodeURIComponent).join("/")}`,
+        );
+      }
+      closed.push(pull.number);
+      continue;
+    }
+    if (manifest.baseCommit === config.baseCommit && pull.base?.ref === config.github.baseBranch) continue;
     await githubRequest(config, "POST", `/repos/${config.repository}/issues/${pull.number}/comments`, {
-      body: `STALE_BASE: this automation PR was generated from \`${manifest.baseCommit}\`, while current \`${config.github.baseBranch}\` is \`${config.baseCommit}\`. The patch is discarded and its Section must be audited again. No rebase or force-push was performed.`,
+      body: `STALE_BASE: this automation PR was generated from \`${manifest.baseCommit}\` for base \`${pull.base?.ref ?? "unknown"}\`, while current \`${config.github.baseBranch}\` is \`${config.baseCommit}\`. The patch is discarded and its Section must be audited again. No rebase or force-push was performed.`,
     });
     await githubRequest(config, "PATCH", `/repos/${config.repository}/pulls/${pull.number}`, { state: "closed" });
     if (pull.head?.ref.startsWith("auto/")) {
@@ -245,19 +439,36 @@ export async function reconcileStaleAutomationPullRequests(config: PipelineConfi
   return closed;
 }
 
-function pullRequestBody(args: {
+function fencedCode(language: string, value: string): string {
+  const longest = Math.max(2, ...[...value.matchAll(/`+/g)].map((match) => match[0].length));
+  const fence = "`".repeat(longest + 1);
+  return `${fence}${language}\n${value.trimEnd()}\n${fence}`;
+}
+
+export function pullRequestTitle(sectionId: string, auditOutput: NodeAuditOutput): string {
+  const requirement = auditOutput.findings[0]?.requirementId ?? "DESIGN_INDEX requirement";
+  return `fix(${sectionId.toLowerCase()}): address ${markdownText(requirement)} omission`.slice(0, 256);
+}
+
+export function buildPullRequestBody(args: {
   input: NodeAuditInput;
+  auditOutput: NodeAuditOutput;
   patch: GuardedPatch;
   manifest: PullRequestManifest;
+  patchAttempt: number;
 }): string {
-  const findings = args.manifest.requirementIds.map((id) => `- \`${id}\``).join("\n") || "- none";
-  const evidence = args.manifest.evidenceRefs.map((id) => `- \`${id}\``).join("\n") || "- none";
+  const fullDiff = fencedCode("diff", args.patch.diff);
   return [
-    keyMarker(args.manifest.prKey),
-    manifestMarker(args.manifest),
-    "## Reason",
+    "## Review findings",
     "",
-    `A dedicated ${args.input.node.sectionId} NVIDIA audit found implementation omissions grounded in the immutable DESIGN_INDEX input.`,
+    renderFindings(args.auditOutput.findings),
+    "",
+    "## Proposed code diff",
+    "",
+    `- Changed files: ${codeItems(args.patch.changedPaths)}`,
+    `- Changed lines: \`+${args.patch.additions} / -${args.patch.deletions}\``,
+    "",
+    fullDiff,
     "",
     "## Scope",
     "",
@@ -269,19 +480,11 @@ function pullRequestBody(args: {
     `- Patch hash: \`${args.manifest.patchHash}\``,
     `- Write set: ${args.manifest.writeSet.map((item) => `\`${item.path}\``).join(", ")}`,
     "",
-    "## Requirements",
-    "",
-    findings,
-    "",
-    "## Evidence",
-    "",
-    evidence,
-    "",
     "## Independent NVIDIA Requests",
     "",
     `- Audit: \`${args.manifest.runId}:audit:${args.input.node.sectionId}\``,
-    `- Patch: \`${args.manifest.runId}:patch:${args.input.node.sectionId}:attempt:<n>\``,
-    `- Patched-code audit: \`${args.manifest.runId}:reaudit:${args.input.node.sectionId}:attempt:<n>\``,
+    `- Patch: \`${args.manifest.runId}:patch:${args.input.node.sectionId}:attempt:${args.patchAttempt}\``,
+    `- Patched-code audit: \`${args.manifest.runId}:reaudit:${args.input.node.sectionId}:attempt:${args.patchAttempt}\``,
     "",
     "The audit, patch generation, patched-code audit, and affected PASS regressions were separate stateless requests. No prior Section response was included in another Section audit.",
     "",
@@ -293,7 +496,10 @@ function pullRequestBody(args: {
     "",
     args.manifest.runUrl ? `Run artifact: ${args.manifest.runUrl}` : `Run ID: \`${args.manifest.runId}\``,
     "",
-    "This draft PR is never auto-approved or auto-merged.",
+    "This draft PR contains an actual verified code correction. It is never auto-approved or auto-merged.",
+    "",
+    keyMarker(args.manifest.prKey),
+    manifestMarker(args.manifest),
   ].join("\n");
 }
 
@@ -301,8 +507,10 @@ export async function publishPatchPullRequest(args: {
   config: PipelineConfig;
   worktreePath: string;
   input: NodeAuditInput;
+  auditOutput: NodeAuditOutput;
   patch: GuardedPatch;
   manifest: PullRequestManifest;
+  patchAttempt: number;
 }): Promise<{ branch: string; number: number; url: string; reused: boolean; merged: boolean }> {
   await assertCurrentBase(args.config);
   const branch = branchName(args.input);
@@ -357,10 +565,10 @@ export async function publishPatchPullRequest(args: {
     "POST",
     `/repos/${args.config.repository}/pulls`,
     {
-      title: `[${args.input.node.sectionId}] Apply grounded DESIGN_INDEX omissions`,
+      title: pullRequestTitle(args.input.node.sectionId, args.auditOutput),
       head: branch,
       base: args.config.github.baseBranch,
-      body: pullRequestBody(args),
+      body: buildPullRequestBody(args),
       draft: true,
     },
   );

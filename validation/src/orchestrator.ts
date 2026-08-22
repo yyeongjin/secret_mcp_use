@@ -4,6 +4,7 @@ import { createFreshAttestations, resolveCachedPassForNode } from "./cache.ts";
 import { buildChangeEvent, directDirtySections } from "./change.ts";
 import { sha256 } from "./hash.ts";
 import {
+  publishActionableFeedbackIssues,
   publishNodeCheckRuns,
   publishPatchPullRequest,
   pullRequestKey,
@@ -135,6 +136,7 @@ export interface NodeRunSummary {
   executionState: string;
   auditAttempts: number;
   requirementIds: string[];
+  findings: NodeAuditOutput["findings"];
   patch: PatchRecord | null;
 }
 
@@ -256,6 +258,7 @@ function buildNodeRunSummaries(args: {
       executionState: states.get(sectionId) ?? "FAILED_SCHEMA",
       auditAttempts: args.auditAttempts.get(sectionId) ?? 0,
       requirementIds: output?.findings.map((finding) => finding.requirementId) ?? [],
+      findings: output?.findings ?? [],
       patch: patches.get(sectionId) ?? null,
     };
   });
@@ -998,8 +1001,10 @@ async function runPatches(args: {
             config: args.config,
             worktreePath: worktree.path,
             input,
+            auditOutput: resolved.output,
             patch: guarded,
             manifest: prManifest,
+            patchAttempt: attempt,
           });
           const attemptRecord: PatchAttemptRecord = {
             attempt,
@@ -1497,9 +1502,14 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
     );
   }
 
+  const feedbackIssues = await publishActionableFeedbackIssues({
+    config,
+    summaries,
+  });
   await publishNodeCheckRuns({
     config,
     summaries,
+    feedbackIssues,
   });
 
   if (process.env.GITHUB_STEP_SUMMARY) {

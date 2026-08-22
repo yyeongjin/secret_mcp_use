@@ -27,6 +27,7 @@
 12. 서로 의존하지 않고 쓰기 파일도 겹치지 않는 노드는 병렬 실행할 수 있다.
 13. 같은 파일을 수정하거나 의존 관계가 있는 노드는 자동으로 직렬화한다.
 14. merge 전에는 최신 `main`을 기준으로 patch를 다시 검증하며, 오래된 patch는 자동 병합하지 않는다.
+15. 모든 비-PASS 결과는 사라지지 않는다. 검증된 코드 diff가 있으면 PR에 finding과 실제 diff를 함께 싣고, 아직 안전한 diff가 없으면 같은 finding 원문을 Check와 자동 피드백 Issue에 기록한다.
 
 `19개 항목`은 검증 격리 단위이지 `19개 PR을 반드시 생성한다`는 뜻이 아니다. 한 실행에서 17개가 이미 PASS이고 2개만 누락됐다면 PR은 최대 2개만 생성되어야 한다.
 
@@ -227,6 +228,8 @@ trigger 문서에서 실제로 바뀐 줄이 S05뿐이어도 새 trigger content
 - 애플리케이션 코드 변경 없이 검증 기록만 있는 경우
 
 PASS 기록을 남기기 위해 빈 PR이나 report-only PR을 만드는 방식은 사용하지 않는다.
+
+단, `PR 없음`은 `피드백 없음`을 뜻하지 않는다. 위 차단 상태, `UNKNOWN`, `PATCH_WAITING_DEPENDENCY`, patch guard 실패와 test 실패는 Section Check에 requirement-level finding 전체를 표시하고, live 자동 보정 실행에서는 동일 내용을 idempotent 피드백 Issue로 생성하거나 갱신한다. 이후 해당 Section이 PASS가 되거나 검증된 코드 PR이 생성되면 피드백 Issue를 자동으로 닫는다.
 
 ## 전체 아키텍처
 
@@ -1334,7 +1337,7 @@ write-set lock acquired
 sha256(targetId + sectionId + fingerprint + patchHash)
 ```
 
-PR을 만들기 전에 branch 이름, PR label, PR body의 hidden marker를 검색한다.
+PR을 만들기 전에 branch 이름과 PR body의 hidden marker를 검색한다.
 
 ```html
 <!-- design-validation-pr-key: sha256:... -->
@@ -1375,6 +1378,58 @@ PR을 만들기 전에 branch 이름, PR label, PR body의 hidden marker를 검�
 
 PR branch에는 실제 코드 변경만 둔다. 원본 API 응답, screenshot과 상세 로그는 Actions artifact에 저장하고 PR body에서 링크한다.
 
+### PR 리뷰 본문 계약
+
+PR은 단순히 `검증을 통과했다`고 알리는 상태 봉투가 아니다. 리뷰어가 Actions artifact를 먼저 열지 않아도 누락과 수정 내용을 판단할 수 있어야 하므로 본문 최상단에 다음 항목을 반드시 그대로 제공한다.
+
+1. audit가 반환한 모든 finding의 `requirementId`, 누락 문장, `pageId`, `componentId`, `evidenceRefs`, `implementationRefs`
+2. NVIDIA patch 요청이 만든 실제 unified diff
+3. 변경 파일과 `+추가/-삭제` 줄 수
+4. audit, patch, patched-code re-audit의 서로 다른 request ID
+5. scope, immutable input, base hash, build, test, visual, accessibility, regression guard 결과
+6. 실행 artifact 링크와 idempotency marker
+
+PR 제목은 최소한 Section과 첫 Requirement ID를 식별해야 한다.
+
+```text
+fix(s05): address S05-NAV-ACTIVE-001 omission
+```
+
+`[S05] Apply grounded DESIGN_INDEX omissions`처럼 실제 누락을 알 수 없는 일반 제목과, Requirement ID만 나열하고 finding 문장을 생략한 본문은 허용하지 않는다. PR 본문에 `<n>` 같은 자리표시자도 남기지 않고 실제 patch attempt 번호를 기록한다. GitHub의 `Files changed` 탭만 유일한 diff 전달 수단으로 삼지 않으며 본문에도 검증된 diff를 싣는다.
+
+### diff가 없는 결과의 피드백 계약
+
+GitHub PR은 branch 간 실제 변경이 있어야 하므로, 안전한 code diff가 없는 상태를 억지로 report 파일 commit이나 빈 PR로 만들지 않는다. 대신 다음 두 출력을 모두 만든다.
+
+- Section Check: 현재 commit에 붙는 실행 단위 결과. finding 원문, 근거, 구현 위치, patch 중단 사유와 다음 동작을 표시한다.
+- 피드백 Issue: live 실행에서 생성하는 지속 가능한 작업 항목. `targetId + sectionId` 고정 key로 중복 생성을 막고, 새 fingerprint가 들어오면 같은 Issue 본문을 갱신한다.
+
+피드백 Issue 대상은 `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`, `UNKNOWN`, `PATCH_WAITING_DEPENDENCY`, `VALIDATION_ONLY`, patch guard·test·re-audit·publish 실패다. PASS/CACHED_PASS에는 만들지 않는다. 검증된 PR이 생기거나 PASS가 되면 해결 근거 또는 PR 링크를 댓글로 남기고 닫는다.
+
+```markdown
+## Validation feedback
+
+The isolated `S13` audit found an item that cannot yet be published as a verified code PR.
+
+## Findings
+
+### 1. `S13-INTERACTION-004`
+
+- Result: `MISSING`
+- Missing or uncertain item: The documented control state transition is absent from the implementation.
+- Page: `P-01`
+- Component: `build-tabs`
+- Evidence: `E-D02`
+- Implementation: `frontend/app.js`
+
+## Why no code PR was opened
+
+- Audit status: `PATCH_REQUIRED`
+- Execution state: `PATCH_WAITING_DEPENDENCY`
+- Patch status: `WAITING_DEPENDENCY`
+- Reason: dependency S05 is neither current PASS nor attested PASS
+```
+
 ## PR 동작 예시
 
 ### Example 1: S09 누락 token 추가 PR
@@ -1388,45 +1443,52 @@ auto/gdweb-26357/S09/7f91c3a24b10
 제목:
 
 ```text
-fix(S09): add missing surface color token
-```
-
-labels:
-
-```text
-automated-design-validation
-section:S09
-patch-source:nvidia
-awaiting-review
+fix(s09): address S09-COLOR-SURFACE-004 omission
 ```
 
 본문:
 
-```markdown
-## Reason
+````markdown
+## Review findings
 
-`S09-COLOR-SURFACE-004` is present in DESIGN_INDEX and Evidence `E-D01`, but the corresponding CSS custom property is missing from the implementation.
+### 1. `S09-COLOR-SURFACE-004`
+
+- Result: `MISSING`
+- Missing or uncertain item: The documented surface color token is absent from the implementation.
+- Page: `P-01`
+- Component: `design-tokens`
+- Evidence: `E-D01`
+- Implementation: `frontend/styles/tokens.css`
+
+## Proposed code diff
+
+- Changed files: `frontend/styles/tokens.css`
+- Changed lines: `+1 / -0`
+
+```diff
+diff --git a/frontend/styles/tokens.css b/frontend/styles/tokens.css
+--- a/frontend/styles/tokens.css
++++ b/frontend/styles/tokens.css
+@@ -3,4 +3,5 @@
+ :root {
+   --color-text: #111827;
++  --color-surface: #F5F7FA;
+ }
+```
 
 ## Scope
 
 - Section: `S09`
 - Target: `gdweb-26357`
 - Base commit: `<sha>`
-- Changed files: `frontend/styles/tokens.css`
-- Changed lines: `+1 / -0`
-
-## Evidence
-
-- Requirement: `S09-COLOR-SURFACE-004`
-- Evidence: `E-D01`
 - Trigger source: `trigger/DESIGN_INDEX_gdweb-26357.md` section 9
 - Trigger document hash: `sha256:...`
-- DESIGN_INDEX value: `#F5F7FA`, `rgb(245 247 250)`, `hsl(216 33% 97%)`
 
 ## Independent NVIDIA Requests
 
 - Audit request: `run-...:audit:S09`
-- Patch request: `run-...:patch:S09`
+- Patch request: `run-...:patch:S09:attempt:1`
+- Patched-code audit: `run-...:reaudit:S09:attempt:1`
 - No S01-S08 or S10-S19 content was included in either request.
 
 ## Patch Guards
@@ -1446,7 +1508,7 @@ awaiting-review
 - Affected cached PASS regression: PASS
 
 <!-- design-validation-pr-key: sha256:... -->
-```
+````
 
 이 PR에는 S09 이외의 개선, 포맷 변경, 이름 정리와 token 재배치가 들어가면 안 된다.
 
@@ -1505,7 +1567,7 @@ reason: current fingerprint matches immutable PASS attestation
 
 GitHub Check에는 어떤 증명서를 재사용했는지와 현재 fingerprint만 표시한다.
 
-### Example 5: Evidence 부족으로 차단된 결과
+### Example 5: Evidence 부족으로 차단되어 Check와 Issue를 만드는 결과
 
 GitHub Check 제목:
 
@@ -1521,6 +1583,7 @@ Check summary:
 - Proposed value: none
 - Patch generated: no
 - PR created: no
+- Feedback issue: created or updated with the same full finding
 - Required Evidence: desktop hero title crop with unscaled text bounds
 ```
 
