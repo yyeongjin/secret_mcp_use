@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  allPatchCandidatesConfirmExistingImplementation,
   auditOutputNeedsIndependentRetry,
   blockedConflictContradictsExactFinding,
   callAudit,
@@ -298,6 +299,22 @@ test("ambiguous audit and blocked patch outputs require independent replacement 
   } satisfies NodePatchOutput;
   assert.equal(patchOutputNeedsIndependentRetry(patch), true);
   assert.equal(patchOutputNeedsIndependentRetry({ ...patch, status: "PATCH" }), false);
+});
+
+test("unanimous exhausted patch conflicts resolve a false-positive audit without an issue", () => {
+  assert.equal(allPatchCandidatesConfirmExistingImplementation([
+    { status: "BLOCKED_AUDIT_CONFLICT" },
+    { status: "BLOCKED_AUDIT_CONFLICT" },
+    { status: "BLOCKED_AUDIT_CONFLICT" },
+  ], 3), true);
+  assert.equal(allPatchCandidatesConfirmExistingImplementation([
+    { status: "BLOCKED_AUDIT_CONFLICT" },
+    { status: "BLOCKED_MODEL" },
+    { status: "BLOCKED_AUDIT_CONFLICT" },
+  ], 3), false);
+  assert.equal(allPatchCandidatesConfirmExistingImplementation([
+    { status: "BLOCKED_AUDIT_CONFLICT" },
+  ], 3), false);
 });
 
 test("an exact structural omission cannot be dismissed as an audit conflict", () => {

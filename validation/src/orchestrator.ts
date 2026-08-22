@@ -249,6 +249,15 @@ export function patchOutputNeedsIndependentRetry(output: NodePatchOutput): boole
   return output.status !== "PATCH";
 }
 
+export function allPatchCandidatesConfirmExistingImplementation(
+  attempts: Array<{ status: string }>,
+  expectedAttempts: number,
+): boolean {
+  return attempts.length === expectedAttempts &&
+    attempts.length >= 2 &&
+    attempts.every((attempt) => attempt.status === "BLOCKED_AUDIT_CONFLICT");
+}
+
 export function groundOwnedNewImplementationPaths(
   input: NodeAuditInput,
   output: NodeAuditOutput,
@@ -332,6 +341,26 @@ function buildNodeRunSummaries(args: {
       findings: output?.findings ?? [],
       patch: patches.get(sectionId) ?? null,
     };
+  });
+}
+
+function buildNodeStates(
+  inputs: Map<SectionId, NodeAuditInput>,
+  resolved: Map<SectionId, ResolvedNode>,
+): Array<{ sectionId: SectionId; state: string }> {
+  return SECTION_IDS.map((sectionId) => {
+    const item = resolved.get(sectionId);
+    if (!item) return { sectionId, state: "FAILED_SCHEMA" };
+    if (item.status === "CACHED_PASS") return { sectionId, state: "CACHED_PASS" };
+    const dependenciesPassing = inputs.get(sectionId)?.node.dependsOn.every(
+      (dependencyId) => resolved.get(dependencyId)?.output.status === "PASS",
+    ) ?? false;
+    const state = item.output.status === "PASS"
+      ? dependenciesPassing ? "PASS" : "PASS_PENDING_DEPENDENCY"
+      : item.output.status === "PATCH_REQUIRED"
+        ? dependenciesPassing ? "PATCH_REQUIRED" : "PATCH_WAITING_DEPENDENCY"
+        : item.output.status;
+    return { sectionId, state };
   });
 }
 
@@ -1215,6 +1244,34 @@ async function runPatches(args: {
       }
     }
 
+    if (
+      finalRecord?.status === "BLOCKED_AUDIT_CONFLICT" &&
+      allPatchCandidatesConfirmExistingImplementation(
+        attempts,
+        args.config.patchGenerationAttempts,
+      )
+    ) {
+      resolved.output.status = "PASS";
+      resolved.output.findings = [];
+      resolved.output.publicOutput = {
+        ...resolved.output.publicOutput,
+        conflictResolution: "ALL_PATCH_CANDIDATES_CONFIRMED_EXISTING_IMPLEMENTATION",
+      };
+      await writeJson(path.join(args.runDirectory, "nodes", sectionId, "audit-conflict-resolution.json"), {
+        schemaVersion: "design-validation/audit-conflict-resolution/v1",
+        sectionId,
+        status: "PASS",
+        candidateCount: attempts.length,
+        reason: "Every independent patch candidate confirmed that the supplied implementation already satisfies the audit finding.",
+      });
+      finalRecord = {
+        sectionId,
+        status: "NOT_REQUIRED",
+        reason: `All ${attempts.length} independent patch candidates confirmed the existing implementation already satisfies the finding.`,
+        attempts,
+      };
+    }
+
     records.push(finalRecord ?? {
       sectionId,
       status: "BLOCKED_MODEL",
@@ -1463,20 +1520,7 @@ async function runTrigger(args: {
   const orderedOutputs = SECTION_IDS.map((sectionId) => resolved.get(sectionId)?.output).filter(
     (output): output is NodeAuditOutput => output !== undefined,
   );
-  const nodeStates = SECTION_IDS.map((sectionId) => {
-    const item = resolved.get(sectionId);
-    if (!item) return { sectionId, state: "FAILED_SCHEMA" };
-    if (item.status === "CACHED_PASS") return { sectionId, state: "CACHED_PASS" };
-    const dependenciesPassing = inputs.get(sectionId)?.node.dependsOn.every(
-      (dependencyId) => resolved.get(dependencyId)?.output.status === "PASS",
-    ) ?? false;
-    const state = item.output.status === "PASS"
-      ? dependenciesPassing ? "PASS" : "PASS_PENDING_DEPENDENCY"
-      : item.output.status === "PATCH_REQUIRED"
-        ? dependenciesPassing ? "PATCH_REQUIRED" : "PATCH_WAITING_DEPENDENCY"
-        : item.output.status;
-    return { sectionId, state };
-  });
+  let nodeStates = buildNodeStates(inputs, resolved);
   await writeJson(path.join(runDirectory, "audit-matrix.json"), {
     schemaVersion: "design-validation/audit-matrix/v2",
     runId,
@@ -1554,6 +1598,11 @@ async function runTrigger(args: {
     triggerPath: trigger.path,
     runId,
     changeEvent: targetChangeEvent,
+  });
+  nodeStates = buildNodeStates(inputs, resolved);
+  await writeJson(path.join(runDirectory, "node-states.json"), {
+    schemaVersion: "design-validation/node-states/v2",
+    nodes: nodeStates,
   });
   await writeJson(path.join(runDirectory, "patch-matrix.json"), patchResult.records);
   await writeGapReport(path.join(runDirectory, "GAP_REPORT.md"), orderedOutputs, patchResult.records);
