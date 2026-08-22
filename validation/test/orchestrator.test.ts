@@ -148,6 +148,7 @@ test("an invalid PATCH response becomes bounded same-Section retry context", () 
   const result = rejectedPatchSummaryForRetry({
     value: {
       status: "PATCH",
+      addressedRequirementIds: ["S18-TEST"],
       reason: "The candidate had no changed lines.",
       diff: "diff --git a/frontend/styles.css b/frontend/styles.css\n",
     },

@@ -33,11 +33,13 @@ import {
 } from "./patch.ts";
 import {
   AUDIT_SYSTEM_PROMPT,
+  PATCH_REAUDIT_SYSTEM_PROMPT,
   PATCH_RETRY_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
   REGRESSION_AUDIT_SYSTEM_PROMPT,
   auditUserPrompt,
   patchRetryUserPrompt,
+  patchReauditUserPrompt,
   patchUserPrompt,
   regressionAuditUserPrompt,
 } from "./prompts.ts";
@@ -124,6 +126,8 @@ export interface PatchRecord {
   reason: string;
   patchHash?: string;
   changedPaths?: string[];
+  addressedRequirementIds?: string[];
+  unresolvedRequirementIds?: string[];
   pullRequest?: { number: number; url: string; branch: string };
   attempts?: PatchAttemptRecord[];
 }
@@ -190,13 +194,21 @@ export function rejectedPatchSummaryForRetry(args: {
   if (status !== "PATCH" && status !== "BLOCKED_MISSING_VALUE" && status !== "BLOCKED_PATCH_TOO_LARGE") {
     return null;
   }
+  const knownRequirementIds = new Set(args.auditOutput.findings.map((finding) => finding.requirementId));
+  const requirementIds = Array.isArray(source.addressedRequirementIds)
+    ? [...new Set(source.addressedRequirementIds.filter(
+      (value): value is string => typeof value === "string" && knownRequirementIds.has(value),
+    ))]
+    : [];
   return {
     schemaVersion: "design-validation/patch-output/v2",
     sectionId: args.input.node.sectionId,
     fingerprint: args.input.node.fingerprint,
     status,
-    requirementIds: [...new Set(args.auditOutput.findings.map((finding) => finding.requirementId))],
-    evidenceRefs: [...new Set(args.auditOutput.findings.flatMap((finding) => finding.evidenceRefs))],
+    requirementIds,
+    evidenceRefs: [...new Set(args.auditOutput.findings
+      .filter((finding) => requirementIds.includes(finding.requirementId))
+      .flatMap((finding) => finding.evidenceRefs))],
     readSet: [],
     writeSet: [],
     reason: typeof source.reason === "string" ? source.reason.slice(0, 500) : "Rejected patch candidate.",
@@ -846,6 +858,14 @@ async function runPatches(args: {
           maxAttempts: args.config.auditAttempts,
           validate: args.validateAudit,
           outputSchema: args.auditOutputSchema,
+          systemPrompt: PATCH_REAUDIT_SYSTEM_PROMPT,
+          userPrompt: patchReauditUserPrompt({
+            before: input,
+            after: nextInput,
+            auditOutput: resolved.output,
+            patchOutput: output,
+            diff: guarded.diff,
+          }),
         });
         reauditCalls += reaudit.attempts.length;
         await saveAuditCall(path.join(attemptDirectory, "reaudit"), nextInput, reaudit);
@@ -1038,6 +1058,10 @@ async function runPatches(args: {
             sectionId,
             ...attemptRecord,
             attempts,
+            addressedRequirementIds: output.requirementIds,
+            unresolvedRequirementIds: resolved.output.findings
+              .map((finding) => finding.requirementId)
+              .filter((requirementId) => !output.requirementIds.includes(requirementId)),
             pullRequest: { number: pull.number, url: pull.url, branch: pull.branch },
           };
           break;

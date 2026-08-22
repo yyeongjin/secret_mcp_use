@@ -261,6 +261,7 @@ test("patch metadata is derived from the isolated audit input", () => {
   const output = canonicalizePatchOutput({
     value: {
       status: "PATCH",
+      addressedRequirementIds: ["S10-COLOR"],
       reason: "Apply the grounded value.",
       diff: [
         "--- frontend/styles.css",
@@ -283,6 +284,41 @@ test("patch metadata is derived from the isolated audit input", () => {
   assert.match(output.diff, /^diff --git a\/frontend\/styles\.css b\/frontend\/styles\.css/m);
 });
 
+test("a patch cannot claim an unknown or empty Requirement ID set", () => {
+  const baseHash = `sha256:${"a".repeat(64)}` as Sha256;
+  const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;
+  const auditInput = {
+    node: { sectionId: "S10", fingerprint },
+    implementation: { files: [{
+      path: "frontend/styles.css",
+      contentHash: baseHash,
+      byteLength: 22,
+      encoding: "utf8",
+      content: "body { color: black; }\n",
+    }] },
+  } as unknown as NodeAuditInput;
+  const auditOutput = {
+    findings: [{ requirementId: "S10-COLOR", evidenceRefs: [], implementationRefs: ["frontend/styles.css"] }],
+  } as unknown as NodeAuditOutput;
+  const candidate = {
+    status: "PATCH",
+    reason: "Apply a value.",
+    diff: "diff --git a/frontend/styles.css b/frontend/styles.css\n--- a/frontend/styles.css\n+++ b/frontend/styles.css\n@@ -1 +1 @@\n-body { color: black; }\n+body { color: white; }\n",
+  };
+  assert.throws(
+    () => canonicalizePatchOutput({ value: { ...candidate, addressedRequirementIds: [] }, auditInput, auditOutput }),
+    /at least one fully addressed Requirement ID/,
+  );
+  assert.throws(
+    () => canonicalizePatchOutput({
+      value: { ...candidate, addressedRequirementIds: ["S10-NOT-SUPPLIED"] },
+      auditInput,
+      auditOutput,
+    }),
+    /unknown Requirement IDs/,
+  );
+});
+
 test("an owned declared text file can be created from an empty base", () => {
   const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;
   const auditInput = {
@@ -300,6 +336,7 @@ test("an owned declared text file can be created from an empty base", () => {
   const output = canonicalizePatchOutput({
     value: {
       status: "PATCH",
+      addressedRequirementIds: ["S18-TEST"],
       reason: "Add the grounded acceptance check.",
       diff: [
         "diff --git a/frontend/tests/home.spec.ts b/frontend/tests/home.spec.ts",

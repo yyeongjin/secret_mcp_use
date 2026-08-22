@@ -3,9 +3,14 @@
   "$id": "design-validation/patch-candidate-output/v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "reason", "diff"],
+  "required": ["status", "addressedRequirementIds", "reason", "diff"],
   "properties": {
     "status": { "enum": ["PATCH", "BLOCKED_MISSING_VALUE", "BLOCKED_PATCH_TOO_LARGE"] },
+    "addressedRequirementIds": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
     "reason": { "type": "string", "minLength": 1, "maxLength": 300 },
     "diff": {
       "type": "string",

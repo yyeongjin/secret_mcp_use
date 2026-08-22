@@ -95,13 +95,37 @@ test("a code PR leads with exact feedback and the verified unified diff", () => 
     patchAttempt: 3,
   });
 
-  assert.match(body, /## Review findings/);
+  assert.match(body, /## Corrected by this diff/);
   assert.match(body, /The current navigation item does not expose the documented active state/);
   assert.match(body, /## Proposed code diff/);
   assert.match(body, /\+<a href="\/games" aria-current="page">Games<\/a>/);
   assert.match(body, /run-123:patch:S05:attempt:3/);
   assert.doesNotMatch(body, /attempt:<n>/);
   assert.equal(pullRequestTitle("S05", auditOutput), "fix(s05): address S05-NAV-ACTIVE-001 omission");
+});
+
+test("a partial correction separates the verified diff from unresolved feedback", () => {
+  const secondFinding = {
+    ...auditOutput.findings[0],
+    requirementId: "S05-NAV-FOCUS-002",
+    finding: "The navigation focus ring is missing.",
+  };
+  const body = buildPullRequestBody({
+    input,
+    auditOutput: { ...auditOutput, findings: [...auditOutput.findings, secondFinding] },
+    patch: {
+      sectionId: "S05",
+      diff: "diff --git a/frontend/index.html b/frontend/index.html\n--- a/frontend/index.html\n+++ b/frontend/index.html\n@@ -1 +1 @@\n-old\n+new\n",
+      changedPaths: ["frontend/index.html"],
+      additions: 1,
+      deletions: 1,
+      patchHash: hash,
+    },
+    manifest,
+    patchAttempt: 1,
+  });
+  assert.match(body, /## Corrected by this diff[\s\S]*S05-NAV-ACTIVE-001/);
+  assert.match(body, /## Remaining audit feedback \(not changed by this PR\)[\s\S]*S05-NAV-FOCUS-002/);
 });
 
 test("a blocked node publishes exact verbal feedback instead of an empty PR", () => {
@@ -153,4 +177,39 @@ test("PASS nodes create neither feedback issues nor correction PR language", () 
     node,
   });
   assert.match(output.summary, /No correction PR or feedback issue is required/);
+});
+
+test("a partial PR still requires a feedback issue for unresolved Requirement IDs", () => {
+  const node = {
+    sectionId: "S13",
+    name: "Interaction and Motion",
+    fingerprint: hash,
+    auditStatus: "PATCH_REQUIRED",
+    executionState: "PATCH_REQUIRED",
+    auditAttempts: 1,
+    requirementIds: ["S13-A", "S13-B"],
+    findings: [
+      { ...auditOutput.findings[0], requirementId: "S13-A" },
+      { ...auditOutput.findings[0], requirementId: "S13-B" },
+    ],
+    patch: {
+      status: "PR_CREATED",
+      reason: "Created a verified partial PR.",
+      addressedRequirementIds: ["S13-A"],
+      unresolvedRequirementIds: ["S13-B"],
+      pullRequest: { number: 13, url: "https://example.test/pull/13", branch: "auto/s13" },
+    },
+  };
+  assert.equal(needsFeedbackIssue(node), true);
+  const output = buildNodeCheckOutput({
+    summary: { runId: "run-123", targetId: "target", triggerPath: "trigger/input.md", nodes: [node] },
+    node,
+    feedbackIssue: { number: 14, url: "https://example.test/issues/14" },
+  });
+  assert.match(output.summary, /draft PR #13/);
+  assert.match(output.summary, /issue #14/);
+  assert.match(output.summary, /Corrected by PR: `S13-A`/);
+  assert.match(output.summary, /Still open: `S13-B`/);
+  assert.match(output.text, /Corrected by the draft PR[\s\S]*S13-A/);
+  assert.match(output.text, /Remaining requirement-level feedback[\s\S]*S13-B/);
 });

@@ -246,6 +246,21 @@ export function canonicalizePatchOutput(args: {
     throw new Error(`Unsupported patch status: ${String(status)}.`);
   }
 
+  const knownRequirementIds = new Set(args.auditOutput.findings.map((finding) => finding.requirementId));
+  const addressedRequirementIds = Array.isArray(source.addressedRequirementIds)
+    ? [...new Set(source.addressedRequirementIds.filter((value): value is string => typeof value === "string"))]
+    : [];
+  const unknownRequirementIds = addressedRequirementIds.filter((value) => !knownRequirementIds.has(value));
+  if (unknownRequirementIds.length > 0) {
+    throw new Error(`Patch claims unknown Requirement IDs: ${unknownRequirementIds.join(", ")}.`);
+  }
+  if (status === "PATCH" && addressedRequirementIds.length === 0) {
+    throw new Error("PATCH must identify at least one fully addressed Requirement ID.");
+  }
+  if (status !== "PATCH" && addressedRequirementIds.length > 0) {
+    throw new Error(`${status} must not claim addressed Requirement IDs.`);
+  }
+
   const fileByPath = new Map(args.auditInput.implementation.files.map((file) => [file.path, file]));
   const baseTextByPath = new Map(
     args.auditInput.implementation.files.flatMap((file) => (
@@ -282,7 +297,10 @@ export function canonicalizePatchOutput(args: {
     }
   }
 
-  const findingPaths = args.auditOutput.findings.flatMap((finding) => finding.implementationRefs);
+  const addressedFindings = args.auditOutput.findings.filter((finding) => (
+    addressedRequirementIds.includes(finding.requirementId)
+  ));
+  const findingPaths = addressedFindings.flatMap((finding) => finding.implementationRefs);
   const readPaths = [...new Set([
     ...declaredPaths(source.readSet),
     ...findingPaths,
@@ -299,8 +317,8 @@ export function canonicalizePatchOutput(args: {
     sectionId: args.auditInput.node.sectionId,
     fingerprint: args.auditInput.node.fingerprint,
     status,
-    requirementIds: [...new Set(args.auditOutput.findings.map((finding) => finding.requirementId))],
-    evidenceRefs: [...new Set(args.auditOutput.findings.flatMap((finding) => finding.evidenceRefs))],
+    requirementIds: addressedRequirementIds,
+    evidenceRefs: [...new Set(addressedFindings.flatMap((finding) => finding.evidenceRefs))],
     readSet: readPaths.map((candidate) => ({
       path: candidate,
       baseHash: fileByPath.get(candidate)!.contentHash,

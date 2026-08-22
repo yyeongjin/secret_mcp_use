@@ -27,7 +27,7 @@
 12. 서로 의존하지 않고 쓰기 파일도 겹치지 않는 노드는 병렬 실행할 수 있다.
 13. 같은 파일을 수정하거나 의존 관계가 있는 노드는 자동으로 직렬화한다.
 14. merge 전에는 최신 `main`을 기준으로 patch를 다시 검증하며, 오래된 patch는 자동 병합하지 않는다.
-15. 모든 비-PASS 결과는 사라지지 않는다. 검증된 코드 diff가 있으면 PR에 finding과 실제 diff를 함께 싣고, 아직 안전한 diff가 없으면 같은 finding 원문을 Check와 자동 피드백 Issue에 기록한다.
+15. 모든 비-PASS 결과는 사라지지 않는다. 검증된 코드 diff가 있으면 그 diff가 실제로 해결한 finding만 PR의 수정 대상으로 싣는다. 같은 Section의 나머지 finding은 해결된 것으로 표시하지 않고 Check와 자동 피드백 Issue에 계속 기록한다.
 
 `19개 항목`은 검증 격리 단위이지 `19개 PR을 반드시 생성한다`는 뜻이 아니다. 한 실행에서 17개가 이미 PASS이고 2개만 누락됐다면 PR은 최대 2개만 생성되어야 한다.
 
@@ -229,7 +229,7 @@ trigger 문서에서 실제로 바뀐 줄이 S05뿐이어도 새 trigger content
 
 PASS 기록을 남기기 위해 빈 PR이나 report-only PR을 만드는 방식은 사용하지 않는다.
 
-단, `PR 없음`은 `피드백 없음`을 뜻하지 않는다. 위 차단 상태, `UNKNOWN`, `PATCH_WAITING_DEPENDENCY`, patch guard 실패와 test 실패는 Section Check에 requirement-level finding 전체를 표시하고, live 자동 보정 실행에서는 동일 내용을 idempotent 피드백 Issue로 생성하거나 갱신한다. 이후 해당 Section이 PASS가 되거나 검증된 코드 PR이 생성되면 피드백 Issue를 자동으로 닫는다.
+단, `PR 없음`은 `피드백 없음`을 뜻하지 않는다. 위 차단 상태, `UNKNOWN`, `PATCH_WAITING_DEPENDENCY`, patch guard 실패와 test 실패는 Section Check에 requirement-level finding 전체를 표시하고, live 자동 보정 실행에서는 동일 내용을 idempotent 피드백 Issue로 생성하거나 갱신한다. 부분 수정 PR이 생성된 경우에도 PR diff가 해결하지 않은 finding은 같은 Issue에 남긴다. 해당 Section이 PASS가 되거나 모든 finding이 검증된 코드 PR 범위에 포함된 경우에만 Issue를 자동으로 닫는다.
 
 ## 전체 아키텍처
 
@@ -599,7 +599,11 @@ interface NodePatchOutput {
 }
 ```
 
-patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제, 이동, 이름 변경, 전체 포맷, 무관한 리팩터링은 허용하지 않는다.
+모델의 patch 후보 응답은 `addressedRequirementIds`를 별도로 반환한다. `PATCH`일 때는 이 diff가 완전히 구현한 supplied Requirement ID를 하나 이상 적고, 차단 상태에서는 빈 배열이어야 한다. orchestrator는 이 값을 검증한 뒤 `NodePatchOutput.requirementIds`로 정규화하며, 알려지지 않은 ID 또는 빈 수정 범위를 거부한다.
+
+patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제, 이동, 이름 변경, 전체 포맷, 무관한 리팩터링은 허용하지 않는다. 한 Section에 finding이 여러 개 있어도 일부만 안전하게 고칠 수 있다면 해당 ID만 수정 대상으로 선언한다. diff에 포함되지 않은 finding을 해결했다고 주장해서는 안 된다.
+
+patch 적용 뒤에는 일반 완전성 audit를 다시 실행하지 않는다. 별도의 stateless 재검증 요청이 `addressedRequirementIds`, 원래 finding, 실제 diff, before/after 구현만 받아 각 주장 항목을 독립적으로 확인한다. 선언한 모든 항목이 after 코드에서 충족될 때만 해당 후보를 게시할 수 있다. 미선언 finding은 재검증 PASS의 대상이 아니며 PR 밖의 피드백으로 남는다.
 
 ## 19개 DAG 노드
 
@@ -1409,7 +1413,7 @@ GitHub PR은 branch 간 실제 변경이 있어야 하므로, 안전한 code dif
 - Section Check: 현재 commit에 붙는 실행 단위 결과. finding 원문, 근거, 구현 위치, patch 중단 사유와 다음 동작을 표시한다.
 - 피드백 Issue: live 실행에서 생성하는 지속 가능한 작업 항목. `targetId + sectionId` 고정 key로 중복 생성을 막고, 새 fingerprint가 들어오면 같은 Issue 본문을 갱신한다.
 
-피드백 Issue 대상은 `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`, `UNKNOWN`, `PATCH_WAITING_DEPENDENCY`, `VALIDATION_ONLY`, patch guard·test·re-audit·publish 실패다. PASS/CACHED_PASS에는 만들지 않는다. 검증된 PR이 생기거나 PASS가 되면 해결 근거 또는 PR 링크를 댓글로 남기고 닫는다.
+피드백 Issue 대상은 `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`, `UNKNOWN`, `PATCH_WAITING_DEPENDENCY`, `VALIDATION_ONLY`, patch guard·test·re-audit·publish 실패와 부분 수정 PR의 미해결 finding이다. PASS/CACHED_PASS에는 만들지 않는다. 모든 finding이 해소된 검증 PR이 생기거나 PASS가 되면 해결 근거 또는 PR 링크를 댓글로 남기고 닫는다. 일부 finding만 고친 PR은 Issue를 닫지 않는다.
 
 ```markdown
 ## Validation feedback
@@ -1454,7 +1458,7 @@ fix(s09): address S09-COLOR-SURFACE-004 omission
 본문:
 
 ````markdown
-## Review findings
+## Corrected by this diff
 
 ### 1. `S09-COLOR-SURFACE-004`
 
@@ -1480,6 +1484,10 @@ diff --git a/frontend/styles/tokens.css b/frontend/styles/tokens.css
 +  --color-surface: #F5F7FA;
  }
 ```
+
+## Remaining audit feedback (not changed by this PR)
+
+이 예시에서는 없음. finding이 더 있었다면 diff가 구현하지 않은 항목만 여기에 표시하고 동일 항목을 피드백 Issue에도 남긴다.
 
 ## Scope
 
@@ -1515,7 +1523,7 @@ diff --git a/frontend/styles/tokens.css b/frontend/styles/tokens.css
 <!-- design-validation-pr-key: sha256:... -->
 ````
 
-이 PR에는 S09 이외의 개선, 포맷 변경, 이름 정리와 token 재배치가 들어가면 안 된다.
+이 PR에는 S09 이외의 개선, 포맷 변경, 이름 정리와 token 재배치가 들어가면 안 된다. 본문의 `Corrected by this diff`에는 재검증을 통과한 `addressedRequirementIds`만 표시하며, Section audit의 다른 finding을 같은 PR이 해결한 것처럼 쓰지 않는다.
 
 ### Example 2: S12 모바일 breakpoint 복구 PR
 

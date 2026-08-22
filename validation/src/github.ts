@@ -51,6 +51,8 @@ interface NodeCheckSummary {
   patch: {
     status: string;
     reason: string;
+    addressedRequirementIds?: string[];
+    unresolvedRequirementIds?: string[];
     pullRequest?: { number: number; url: string; branch: string };
   } | null;
 }
@@ -174,8 +176,15 @@ export function buildNodeCheckOutput(args: {
     ? markdownText(node.patch.reason).slice(0, 8000)
     : "No patch request was required.";
   const pullRequest = node.patch?.pullRequest;
-  const disposition = pullRequest
-    ? `Verified code diff: [draft PR #${pullRequest.number}](${pullRequest.url}) on \`${pullRequest.branch}\`.`
+  const unresolved = node.patch?.unresolvedRequirementIds ?? [];
+  const addressedIds = new Set(node.patch?.addressedRequirementIds ?? []);
+  const unresolvedIds = new Set(unresolved);
+  const addressedFindings = node.findings.filter((finding) => addressedIds.has(finding.requirementId));
+  const unresolvedFindings = node.findings.filter((finding) => unresolvedIds.has(finding.requirementId));
+  const disposition = pullRequest && args.feedbackIssue
+    ? `Verified code diff: [draft PR #${pullRequest.number}](${pullRequest.url}) on \`${pullRequest.branch}\`. Remaining findings: [issue #${args.feedbackIssue.number}](${args.feedbackIssue.url}).`
+    : pullRequest
+      ? `Verified code diff: [draft PR #${pullRequest.number}](${pullRequest.url}) on \`${pullRequest.branch}\`.`
     : args.feedbackIssue
       ? `Actionable verbal feedback: [issue #${args.feedbackIssue.number}](${args.feedbackIssue.url}).`
       : node.executionState === "PASS" || node.executionState === "CACHED_PASS"
@@ -192,15 +201,27 @@ export function buildNodeCheckOutput(args: {
       `- Patch status: \`${node.patch?.status ?? "NOT_RUN"}\``,
       `- Fingerprint: \`${node.fingerprint ?? "unavailable"}\``,
       `- Requirement IDs: ${codeItems(node.requirementIds)}`,
+      `- Corrected by PR: ${codeItems(node.patch?.addressedRequirementIds ?? [])}`,
+      `- Still open: ${codeItems(unresolved)}`,
       `- Patch disposition: ${patchReason}`,
       `- Publication: ${disposition}`,
       "",
       `Independent request: \`${summary.runId}:audit:${node.sectionId}\``,
     ].join("\n"),
     text: [
-      "## Requirement-level feedback",
-      "",
-      renderFindings(node.findings),
+      ...(pullRequest ? [
+        "## Corrected by the draft PR",
+        "",
+        renderFindings(addressedFindings),
+        "",
+        "## Remaining requirement-level feedback",
+        "",
+        renderFindings(unresolvedFindings),
+      ] : [
+        "## Requirement-level feedback",
+        "",
+        renderFindings(node.findings),
+      ]),
       "",
       "## Next action",
       "",
@@ -249,7 +270,7 @@ function feedbackMarker(targetId: string, sectionId: string): string {
 }
 
 export function needsFeedbackIssue(node: NodeCheckSummary): boolean {
-  if (node.patch?.pullRequest) return false;
+  if (node.patch?.pullRequest) return (node.patch.unresolvedRequirementIds?.length ?? 0) > 0;
   if (node.executionState === "PASS" || node.executionState === "CACHED_PASS") return false;
   return node.findings.length > 0 || (
     node.patch !== null && !["NOT_REQUIRED", "PATCH_VERIFIED"].includes(node.patch.status)
@@ -258,21 +279,27 @@ export function needsFeedbackIssue(node: NodeCheckSummary): boolean {
 
 function feedbackIssueBody(summary: TargetCheckSummary, node: NodeCheckSummary): string {
   const patchReason = markdownText(node.patch?.reason ?? "No safe patch was produced.");
+  const unresolvedIds = new Set(node.patch?.unresolvedRequirementIds ?? node.requirementIds);
+  const findings = node.findings.filter((finding) => unresolvedIds.has(finding.requirementId));
+  const pullRequest = node.patch?.pullRequest;
   return [
     "## Validation feedback",
     "",
-    `The isolated \`${node.sectionId}\` audit found an item that cannot yet be published as a verified code PR. This issue contains the actionable feedback instead of creating an empty or report-only PR.`,
+    pullRequest
+      ? `The isolated \`${node.sectionId}\` audit produced a verified partial code correction in draft PR #${pullRequest.number}. This issue tracks only the findings that are not implemented by that diff.`
+      : `The isolated \`${node.sectionId}\` audit found an item that cannot yet be published as a verified code PR. This issue contains the actionable feedback instead of creating an empty or report-only PR.`,
     "",
     "## Findings",
     "",
-    renderFindings(node.findings),
+    renderFindings(findings),
     "",
-    "## Why no code PR was opened",
+    pullRequest ? "## Why these findings remain open" : "## Why no code PR was opened",
     "",
     `- Audit status: \`${node.auditStatus}\``,
     `- Execution state: \`${node.executionState}\``,
     `- Patch status: \`${node.patch?.status ?? "NOT_RUN"}\``,
     `- Reason: ${patchReason}`,
+    ...(pullRequest ? [`- Partial correction PR: ${pullRequest.url}`] : []),
     "",
     "## Scope and provenance",
     "",
@@ -281,7 +308,9 @@ function feedbackIssueBody(summary: TargetCheckSummary, node: NodeCheckSummary):
     `- Fingerprint: \`${node.fingerprint ?? "unavailable"}\``,
     `- Independent request: \`${summary.runId}:audit:${node.sectionId}\``,
     "",
-    "The pipeline must not invent a value or open a code PR until the missing evidence, contract conflict, provider result, dependency, or patch guard is resolved. A later PASS or verified code PR closes this feedback issue automatically.",
+    pullRequest
+      ? "The partial PR does not claim these findings. This issue remains open until a later verified diff covers them or the Section reaches PASS."
+      : "The pipeline must not invent a value or open a code PR until the missing evidence, contract conflict, provider result, dependency, or patch guard is resolved. A later PASS or fully covering verified code PR closes this feedback issue automatically.",
     "",
     feedbackMarker(summary.targetId, node.sectionId),
   ].join("\n");
@@ -445,8 +474,12 @@ function fencedCode(language: string, value: string): string {
   return `${fence}${language}\n${value.trimEnd()}\n${fence}`;
 }
 
-export function pullRequestTitle(sectionId: string, auditOutput: NodeAuditOutput): string {
-  const requirement = auditOutput.findings[0]?.requirementId ?? "DESIGN_INDEX requirement";
+export function pullRequestTitle(
+  sectionId: string,
+  auditOutput: NodeAuditOutput,
+  addressedRequirementIds: string[] = auditOutput.findings.map((finding) => finding.requirementId),
+): string {
+  const requirement = addressedRequirementIds[0] ?? "DESIGN_INDEX requirement";
   return `fix(${sectionId.toLowerCase()}): address ${markdownText(requirement)} omission`.slice(0, 256);
 }
 
@@ -457,11 +490,14 @@ export function buildPullRequestBody(args: {
   manifest: PullRequestManifest;
   patchAttempt: number;
 }): string {
+  const addressedIds = new Set(args.manifest.requirementIds);
+  const addressedFindings = args.auditOutput.findings.filter((finding) => addressedIds.has(finding.requirementId));
+  const remainingFindings = args.auditOutput.findings.filter((finding) => !addressedIds.has(finding.requirementId));
   const fullDiff = fencedCode("diff", args.patch.diff);
   return [
-    "## Review findings",
+    "## Corrected by this diff",
     "",
-    renderFindings(args.auditOutput.findings),
+    renderFindings(addressedFindings),
     "",
     "## Proposed code diff",
     "",
@@ -470,6 +506,14 @@ export function buildPullRequestBody(args: {
     "",
     fullDiff,
     "",
+    ...(remainingFindings.length > 0 ? [
+      "## Remaining audit feedback (not changed by this PR)",
+      "",
+      "These findings are intentionally excluded from this PR because the verified diff does not implement them. The pipeline publishes them as actionable feedback instead of claiming they were fixed.",
+      "",
+      renderFindings(remainingFindings),
+      "",
+    ] : []),
     "## Scope",
     "",
     `- Target: \`${args.manifest.targetId}\``,
@@ -565,7 +609,7 @@ export async function publishPatchPullRequest(args: {
     "POST",
     `/repos/${args.config.repository}/pulls`,
     {
-      title: pullRequestTitle(args.input.node.sectionId, args.auditOutput),
+      title: pullRequestTitle(args.input.node.sectionId, args.auditOutput, args.manifest.requirementIds),
       head: branch,
       base: args.config.github.baseBranch,
       body: buildPullRequestBody(args),

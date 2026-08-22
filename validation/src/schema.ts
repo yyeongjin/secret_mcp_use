@@ -148,4 +148,10 @@ export function assertPatchOutput(
   if (value.status !== "PATCH" && value.diff !== "") {
     throw new Error(`${sectionId} returned a diff while blocked.`);
   }
+  if (value.status === "PATCH" && value.requirementIds.length === 0) {
+    throw new Error(`${sectionId} returned PATCH without an addressed Requirement ID.`);
+  }
+  if (value.status !== "PATCH" && value.requirementIds.length !== 0) {
+    throw new Error(`${sectionId} claimed addressed Requirement IDs while blocked.`);
+  }
 }

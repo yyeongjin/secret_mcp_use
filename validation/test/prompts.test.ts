@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AUDIT_SYSTEM_PROMPT, auditUserPrompt, patchRetryUserPrompt, patchUserPrompt } from "../src/prompts.ts";
+import {
+  AUDIT_SYSTEM_PROMPT,
+  PATCH_REAUDIT_SYSTEM_PROMPT,
+  auditUserPrompt,
+  patchReauditUserPrompt,
+  patchRetryUserPrompt,
+  patchUserPrompt,
+} from "../src/prompts.ts";
 import type { NodeAuditInput, NodeAuditOutput, NodePatchOutput, Sha256 } from "../src/types.ts";
 
 const fingerprint = `sha256:${"1".repeat(64)}` as Sha256;
@@ -67,6 +74,7 @@ test("retry prompt carries a bounded rejection summary instead of the rejected d
     auditOutput,
     rejectedOutput: {
       status: "PATCH",
+      requirementIds: ["S10-COLOR"],
       reason: "bad candidate",
       diff: "x".repeat(20_000),
     } as NodePatchOutput,
@@ -75,7 +83,38 @@ test("retry prompt carries a bounded rejection summary instead of the rejected d
   assert.equal("rejectedOutput" in prompt, false);
   assert.deepEqual(prompt.rejectedCandidate, {
     status: "PATCH",
+    addressedRequirementIds: ["S10-COLOR"],
     reason: "bad candidate",
     diffLength: 20_000,
   });
+});
+
+test("patch re-audit verifies only the Requirement IDs claimed by the diff", () => {
+  assert.match(PATCH_REAUDIT_SYSTEM_PROMPT, /PASS is permitted only when every claimed finding/);
+  const after = {
+    ...auditInput,
+    implementation: {
+      ...auditInput.implementation,
+      files: auditInput.implementation.files.map((file) => file.path === "frontend/styles.css"
+        ? { ...file, content: "body { color: white; }\n" }
+        : file),
+    },
+  } as NodeAuditInput;
+  const prompt = JSON.parse(patchReauditUserPrompt({
+    before: auditInput,
+    after,
+    auditOutput,
+    patchOutput: {
+      requirementIds: ["S10-COLOR"],
+      writeSet: [{ path: "frontend/styles.css", baseHash: cssHash }],
+    } as NodePatchOutput,
+    diff: "+body { color: white; }",
+  })) as {
+    claimedRequirementIds: string[];
+    claimedFindings: Array<{ requirementId: string }>;
+    beforeImplementation: { files: Array<{ path: string }> };
+  };
+  assert.deepEqual(prompt.claimedRequirementIds, ["S10-COLOR"]);
+  assert.deepEqual(prompt.claimedFindings.map((finding) => finding.requirementId), ["S10-COLOR"]);
+  assert.deepEqual(prompt.beforeImplementation.files.map((file) => file.path), ["frontend/styles.css"]);
 });
