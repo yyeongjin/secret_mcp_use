@@ -15,6 +15,7 @@
   :root {
     --color-white: #fff;
     --color-black: #000;
+    --header-mobile: 56px;
     --space-4: 16px;
     --color-focus: #4169f5;
     --color-disabled: #bbb;
