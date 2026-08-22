@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "design-validation/attestation/v2",
+  "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
+  "sectionId": "S11",
+  "fingerprint": "sha256:0041f3540cd21b2124248273f6f842ac5f2d0e00d0f0ef96c7183089da1ef5ad",
+  "triggerSource": {
+    "path": "trigger/DESIGN_INDEX_gdweb-26357.md",
+    "documentHash": "sha256:f79f163969cbb3520f2741dde3250533a4ff3071dcb772e53dd5802b918e6336",
+    "fragmentHash": "sha256:a5a6bb7befd5b0a2a5c4f896ea37115c56248e141a09b0e77d0a75f1eed6284c"
+  },
+  "specificationSource": {
+    "path": "DESIGN_INDEX_SPECIFICATION.md",
+    "documentHash": "sha256:65233a5428ae3411c094ab72691793e2998232e55ea5ca4e299993f7c4cf251a",
+    "globalRulesHash": "sha256:397b59d360af5b81cb8816ecdf12ad45bbd3c55990df199c67adf9b399fb2987",
+    "fragmentHash": "sha256:0714a5ce49d33ef82479f08378273c6cbdef478ad4003817d2795fedc0673fe1"
+  },
+  "status": "PASS",
+  "baseCommit": "951b05e1c07d954f6380442f31a1889e0f31df2c",
+  "source": "fresh-audit",
+  "requirementIds": [
+    "S11-REQ-119EA901744C",
+    "S11-REQ-B53CC119039D",
+    "S11-REQ-F1582EF0CB9B",
+    "S11-REQ-EEFC841A575F",
+    "S11-REQ-5066045276EA",
+    "S11-REQ-36E99D16142D",
+    "S11-REQ-8570CF8A9AA9",
+    "S11-REQ-606FF5935702",
+    "S11-REQ-41C00A46BE15",
+    "S11-REQ-5A7585A9DA88",
+    "S11-REQ-76CD95BC5EBF",
+    "S11-REQ-665CF54170E9",
+    "S11-REQ-A9E784F23665",
+    "S11-REQ-8ADA84F8CCC9",
+    "S11-REQ-0E671080B45B"
+  ],
+  "dependencyAttestations": {
+    "S02": "sha256:8250a757451202566cd7f0a5fea4e6886253ea9c262394e7ca8a897922d9b6db",
+    "S03": "sha256:eab7ec633f58bf00690df3d1b9d69408831660fe009183bc0bc28744318de1bd"
+  },
+  "dependencyPublicDigests": {
+    "S02": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "S03": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  "publicOutput": {},
+  "publicDigest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "validator": {
+    "id": "nvidia:nvidia/nemotron-3-super-120b-a12b",
+    "contractHash": "sha256:8619860b8a44d4e9f0bc4cac158b93bf559d2514f7e757e8387eb3bb69d810e6"
+  },
+  "tests": [
+    {
+      "id": "audit-schema",
+      "status": "PASS",
+      "artifactHash": "sha256:2c8286f20e4307602ba420c0431ddec88086eab26702bfe43a4c8755a67be73e"
+    }
+  ],
+  "createdAt": "2026-08-22T14:12:18.465Z",
+  "attestationHash": "sha256:a4604398ae0e2c3e82fe804afe0a31820b8be03077fb32e7dc3ed4fa903365ce"
+}
