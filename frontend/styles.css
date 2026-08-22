@@ -29,6 +29,7 @@
     --color-decoration-alt: #ddddee;
     --color-primary: #4169f5;
     --color-primary-pressed: #2748be;
+    --z-overlay: 190;
     --bp-xl: 1280px;
     --color-overlay: rgb(0 0 0 / 52%);
     --container-main: 1012px;
