@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { sha256 } from "../src/hash.ts";
 import {
   buildNodeCheckOutput,
   buildPullRequestBody,
+  isReusableFeedbackIssue,
   isAutomationPullRequestForBase,
   needsFeedbackIssue,
   pullRequestTitle,
@@ -72,6 +74,23 @@ const manifest: PullRequestManifest = {
   runId: "run-123",
   runUrl: "https://example.test/run-123",
 };
+
+test("a new run never reopens a closed feedback issue", () => {
+  const targetId = "target";
+  const sectionId = "S05";
+  const body = `<!-- design-validation-feedback-key: ${sha256(`design-validation-feedback:${targetId}:${sectionId}`)} -->`;
+  const openIssue = {
+    state: "open",
+    body,
+  };
+  const closedIssue = {
+    state: "closed",
+    body,
+  };
+
+  assert.equal(isReusableFeedbackIssue(openIssue, targetId, sectionId), true);
+  assert.equal(isReusableFeedbackIssue(closedIssue, targetId, sectionId), false);
+});
 
 test("a code PR leads with exact feedback and the verified unified diff", () => {
   const body = buildPullRequestBody({

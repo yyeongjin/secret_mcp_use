@@ -273,6 +273,16 @@ function feedbackMarker(targetId: string, sectionId: string): string {
   return `<!-- design-validation-feedback-key: ${feedbackKey(targetId, sectionId)} -->`;
 }
 
+export function isReusableFeedbackIssue(
+  issue: { state: string; body?: string | null; pull_request?: unknown },
+  targetId: string,
+  sectionId: string,
+): boolean {
+  return issue.state === "open" &&
+    !issue.pull_request &&
+    Boolean(issue.body?.includes(feedbackMarker(targetId, sectionId)));
+}
+
 export function needsFeedbackIssue(node: NodeCheckSummary): boolean {
   if (node.patch?.pullRequest) return (node.patch.unresolvedRequirementIds?.length ?? 0) > 0;
   if (node.executionState === "PASS" || node.executionState === "CACHED_PASS") return false;
@@ -329,14 +339,17 @@ export async function publishActionableFeedbackIssues(args: {
   const issues = await githubRequest<IssueResponse[]>(
     args.config,
     "GET",
-    `/repos/${args.config.repository}/issues?state=all&per_page=100&sort=updated&direction=desc`,
+    `/repos/${args.config.repository}/issues?state=open&per_page=100&sort=updated&direction=desc`,
   );
-  const feedbackIssues = issues.filter((issue) => !issue.pull_request && issue.body?.includes("design-validation-feedback-key"));
+  const feedbackIssues = issues.filter((issue) => (
+    issue.state === "open" && !issue.pull_request && issue.body?.includes("design-validation-feedback-key")
+  ));
 
   for (const summary of args.summaries) {
     for (const node of summary.nodes) {
-      const marker = feedbackMarker(summary.targetId, node.sectionId);
-      const existing = feedbackIssues.find((issue) => issue.body?.includes(marker));
+      const existing = feedbackIssues.find((issue) => (
+        isReusableFeedbackIssue(issue, summary.targetId, node.sectionId)
+      ));
       if (needsFeedbackIssue(node)) {
         const title = `Design validation ${node.sectionId}: ${nodeDisplayStatus(node)}`.slice(0, 256);
         const body = feedbackIssueBody(summary, node);
