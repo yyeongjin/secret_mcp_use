@@ -263,11 +263,34 @@ test("exact CSS comparison adds a grounded finding for a referenced missing cont
   assert.match(result.output.findings[0].finding, /--color-primary-hover/);
 });
 
-test("exact CSS comparison ignores unreferenced optional contract tokens", () => {
+test("exact CSS comparison adds an unreferenced required token when its declaration host is unambiguous", () => {
+  const input = auditInput(":root { --color-primary: #4169f5; }\n");
+  input.contract.designIndexFragment += [
+    "",
+    "```css",
+    ":root { --color-focus: #4169f5; }",
+    "```",
+  ].join("\n");
+  input.node.requirementIds = ["S09-REQ-FOCUS"];
+  input.payload = {
+    sourceFacts: [{ factId: "S09-FACT-FOCUS", text: "--color-focus: #4169f5;" }],
+  };
+  const pass = { ...auditOutput(), status: "PASS" as const, findings: [] };
+
+  const result = augmentAuditWithExactCssFindings(input, pass);
+  assert.deepEqual(result.addedRequirementIds, ["S09-REQ-FOCUS"]);
+  assert.equal(result.output.findings[0].componentId, "--color-focus");
+  assert.deepEqual(result.output.findings[0].implementationRefs, ["frontend/styles.css"]);
+});
+
+test("exact CSS comparison ignores an unreferenced token explicitly marked optional and invisible", () => {
   const input = auditInput(":root { --color-primary: #4169f5; }\n");
   input.node.requirementIds = ["S09-REQ-DISABLED"];
   input.payload = {
-    sourceFacts: [{ factId: "S09-FACT-DISABLED", text: "--color-disabled: #bbb;" }],
+    sourceFacts: [
+      { factId: "S09-FACT-DISABLED", text: "--color-disabled: #bbb;" },
+      { factId: "S09-FACT-DISABLED-OPTIONAL", text: "| `--color-disabled` | Optional | Not visible |" },
+    ],
   };
   const pass = { ...auditOutput(), status: "PASS" as const, findings: [] };
 

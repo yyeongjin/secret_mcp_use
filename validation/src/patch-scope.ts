@@ -99,6 +99,23 @@ function implementationCustomPropertyReferences(input: NodeAuditInput): Map<stri
   return references;
 }
 
+function implementationCustomPropertyHosts(input: NodeAuditInput): string[] {
+  const paths: string[] = [];
+  for (const file of input.implementation.files) {
+    if (!file.path.endsWith(".css") || file.content === null) continue;
+    try {
+      let hasCustomProperty = false;
+      postcss.parse(file.content, { from: file.path }).walkDecls(/^--/, () => {
+        hasCustomProperty = true;
+      });
+      if (hasCustomProperty) paths.push(file.path);
+    } catch {
+      // Invalid CSS cannot establish a deterministic token declaration host.
+    }
+  }
+  return paths.sort();
+}
+
 function sourceFacts(input: NodeAuditInput): Array<{ factId: string; text: string }> {
   const candidates = input.payload?.sourceFacts;
   if (!Array.isArray(candidates)) return [];
@@ -117,8 +134,24 @@ function isOptionalInvisibleFinding(
 ): boolean {
   return finding.evidenceRefs.some((factId) => {
     const text = factsById.get(factId) ?? "";
-    return /\bOptional\b/i.test(text) && /\bNot visible\b/i.test(text);
+    return isOptionalInvisibleText(text);
   });
+}
+
+function isOptionalInvisibleText(text: string): boolean {
+  return /\bOptional\b/i.test(text) && /\bNot visible\b/i.test(text);
+}
+
+function textMentionsProperty(text: string, property: string): boolean {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^A-Za-z0-9_-])${escaped}(?![A-Za-z0-9_-])`).test(text);
+}
+
+function isOptionalInvisibleProperty(
+  property: string,
+  facts: ReadonlyArray<{ factId: string; text: string }>,
+): boolean {
+  return facts.some((fact) => textMentionsProperty(fact.text, property) && isOptionalInvisibleText(fact.text));
 }
 
 function tokenExpectation(finding: string): TokenExpectation | null {
@@ -238,14 +271,14 @@ export function augmentAuditWithExactCssFindings(
   const contractTokens = contractCustomProperties(input.contract.designIndexFragment);
   const implementationTokens = implementationCustomProperties(input);
   const references = implementationCustomPropertyReferences(input);
+  const tokenHosts = implementationCustomPropertyHosts(input);
   const facts = sourceFacts(input);
   const knownRequirementIds = new Set(input.node.requirementIds);
   const existingRequirementIds = new Set(output.findings.map((finding) => finding.requirementId));
   const deterministicFindings: AuditFinding[] = [];
 
-  for (const [property, referencedPaths] of references) {
-    const contractValues = contractTokens.get(property) ?? [];
-    if (contractValues.length === 0) continue;
+  for (const [property, contractValues] of contractTokens) {
+    if (contractValues.length !== 1 || isOptionalInvisibleProperty(property, facts)) continue;
     const actualValues = implementationTokens.get(property) ?? [];
     if (actualValues.some((actual) => contractValues.some((expected) => valuesEquivalent(expected, actual)))) {
       continue;
@@ -254,6 +287,11 @@ export function augmentAuditWithExactCssFindings(
     if (!sourceFact) continue;
     const requirementId = sourceFact.factId.replace("-FACT-", "-REQ-");
     if (!knownRequirementIds.has(requirementId) || existingRequirementIds.has(requirementId)) continue;
+    const referencedPaths = references.get(property);
+    const implementationRefs = referencedPaths && referencedPaths.size > 0
+      ? [...referencedPaths].sort()
+      : tokenHosts.length === 1 ? tokenHosts : [];
+    if (implementationRefs.length === 0) continue;
     const expectedValue = contractValues[0];
     deterministicFindings.push({
       requirementId,
@@ -264,7 +302,7 @@ export function augmentAuditWithExactCssFindings(
         ? `Token \`${property}\` with value \`${expectedValue}\` is required but not found in the supplied CSS.`
         : `Token \`${property}\` must use exact contract value \`${expectedValue}\`; the supplied CSS uses a different value.`,
       evidenceRefs: [sourceFact.factId],
-      implementationRefs: [...referencedPaths].sort(),
+      implementationRefs,
       proposedValue: null,
     });
   }
@@ -281,7 +319,10 @@ export function augmentAuditWithExactCssFindings(
       findings,
       publicOutput: {
         ...output.publicOutput,
-        exactContractRequirementIds: addedRequirementIds,
+        exactContractRequirementIds: [...new Set([
+          ...exactRequirementIds(output),
+          ...addedRequirementIds,
+        ])],
       },
     },
     addedRequirementIds,
