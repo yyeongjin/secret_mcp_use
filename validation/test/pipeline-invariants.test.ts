@@ -17,6 +17,8 @@ test("PATCH_REQUIRED scheduling cannot regain dependency or write-set wait gates
   assert.match(runPatches, /stackParentBranch/);
   assert.match(runPatches, /stackParentCommit/);
   assert.match(runPatches, /ACQUIRED_STACKED/);
+  assert.match(runPatches, /nextRequirementId/);
+  assert.match(runPatches, /finding\.requirementId === nextRequirementId/);
 });
 
 test("the normative pipeline document permanently forbids dependency blocking", async () => {

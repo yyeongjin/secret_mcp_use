@@ -15,7 +15,7 @@
 5. 이 규칙을 바꾸려면 먼저 이 파일의 절대 차단 금지 규칙과 해당 CI test를 명시적으로 함께 변경해야 하며, README만 바꿔 동작을 변경할 수 없다.
 6. 1차 `DOCUMENT_GAP` Section 수가 `D`이면 같은 실행에서 Section별 GitHub Issue `D`개를 생성하거나 동일 key의 기존 열린 Issue를 갱신해야 한다.
 7. 2차 `PATCH_REQUIRED` Section 수가 `N`이면 Section별 correction PR chain이 `N`개여야 한다. `N=19`이면 S01-S19 각각 최소 한 개씩, 최소 19개의 PR이 생성되어야 한다.
-8. 한 Section의 Requirement ID가 한 번의 bounded diff에 모두 들어가지 않으면 `SXX-1...SXX-K`로 재귀 분할한다. 각 하위 노드는 별도 NVIDIA 호출과 별도 PR이므로 총 patch 호출과 PR 수는 19를 넘을 수 있다.
+8. 한 Section에 Requirement ID가 여러 개면 처음부터 `SXX-1...SXX-K`로 재귀 분할한다. Requirement ID 하나마다 별도 NVIDIA 호출과 별도 PR을 생성하므로, 한 Section에 수십 개가 있으면 총 patch 호출과 PR 수도 그만큼 늘어나 19를 넘는다.
 
 ## 문서 상태
 
@@ -39,7 +39,7 @@
 7. 선행 노드의 자연어 응답은 후행 노드에 전달하지 않는다. patch scheduler는 서명된 상태와 공개 출력 해시만 읽는다.
 8. 기존 PASS 증명서의 fingerprint가 현재 입력 fingerprint와 같으면 API를 호출하지 않고 `CACHED_PASS`로 종료한다.
 9. `PASS`인 노드는 PR을 만들지 않는다. 정적 PASS 증명서만 `validation-state` 브랜치에 기록한다.
-10. `PATCH_REQUIRED`인 노드만 별도의 NVIDIA patch 요청으로 최소 unified diff를 생성한다. 한 응답으로 범위 전체를 처리하기 크면 남은 Requirement ID를 `SXX-1`, `SXX-2` 하위 노드로 재분할하며, 각 하위 노드도 별도 세션이다.
+10. `PATCH_REQUIRED`인 노드만 별도의 NVIDIA patch 요청으로 최소 unified diff를 생성한다. `SXX-1`, `SXX-2` 각 하위 노드는 Requirement ID 하나만 입력받는 별도 세션이며, 여러 Requirement ID를 한 응답이나 한 PR로 묶지 않는다.
 11. diff가 허용 파일, 기준 해시, 변경 범위, 테스트와 회귀 검사를 모두 통과한 경우 해당 하위 PR을 반드시 만든다. 실행의 첫 correction PR은 실행 base를, 이후 모든 하위 PR과 다른 수정 Section의 PR은 직전 검증 branch를 base로 사용한다.
 12. 모든 `PATCH_REQUIRED` Section은 topological order로 직렬화한다. 병렬화 최적화는 전체 correction PR 생성 보장이 검증된 이후에만 허용하며 기본 구현에는 사용하지 않는다.
 13. 같은 파일을 수정하거나 의존 관계가 있어도 차단하지 않는다. 직전 검증 commit에서 source slice와 fingerprint를 다시 계산한 뒤 그 부모 위에 다음 PR을 쌓는다.
@@ -60,11 +60,11 @@
 ### 동적 하위 patch 노드 계약
 
 - S01-S19는 항상 상위 감사 노드다. 하위 번호는 patch 단계에서만 만든다.
-- 한 상위 Section의 첫 patch 요청은 `SXX-1`이며 그 시점의 unresolved Requirement ID 전체와 해당 파일 slice만 받는다.
-- 응답이 그중 일부를 완전히 구현하고 guard·test·재감사를 통과하면 그 diff를 `SXX-1` PR로 게시한다. 응답 여러 개를 하나의 거대한 diff로 이어 붙이지 않는다.
-- 남은 Requirement ID가 있으면 게시된 `SXX-1` commit에서 입력과 fingerprint를 다시 계산해 `SXX-2`를 호출한다. 다음 하위 노드도 같은 규칙으로 재귀한다.
-- 각 하위 노드는 최소 한 개의 새 Requirement ID를 완전히 해결해야 한다. 진전 없는 응답은 같은 하위 노드의 교체 후보로만 재시도한다.
-- 하위 노드 수는 해당 Section의 유한한 Requirement ID 수로 자연스럽게 제한되며 19회로 고정하지 않는다.
+- 한 상위 Section의 첫 patch 요청은 `SXX-1`이며 정렬된 첫 번째 unresolved Requirement ID 하나와 그 항목의 파일 slice만 받는다.
+- 해당 Requirement ID를 완전히 구현하고 guard·test·재감사를 통과하면 그 diff만 `SXX-1` PR로 게시한다. 다른 Requirement ID의 변경을 같은 응답이나 PR에 넣지 않는다.
+- 남은 Requirement ID가 있으면 게시된 `SXX-1` commit에서 입력과 fingerprint를 다시 계산해 다음 Requirement ID 하나만 담은 `SXX-2`를 호출한다. 이후에도 같은 규칙으로 재귀한다.
+- 각 하위 노드는 자신에게 할당된 Requirement ID 하나를 완전히 해결해야 한다. 진전 없는 응답은 같은 하위 노드의 교체 후보로만 재시도한다.
+- 하위 노드 수는 해당 Section의 고유 Requirement ID 수와 같다. 따라서 상위 감사는 19회여도 하위 patch 호출과 PR은 필요한 만큼 늘어난다.
 - 한 실행의 PR base는 Section 경계를 넘어 하나의 검증 사슬을 이룬다. 예: `S09-1 -> main`, `S09-2 -> S09-1`, `S10-1 -> S09-2`, `S04-1 -> S10-1`. 각 자식은 직전 부모 commit에서 입력을 다시 만들며 가장 깊은 PR부터 상위 방향으로 병합한다.
 - 하위 PR마다 고유 request ID, fingerprint, patch hash, branch, PR key와 manifest를 가진다. 이전 하위 PR의 자연어 응답은 다음 모델 입력에 넣지 않고 게시된 source state와 남은 Requirement ID만 사용한다.
 
@@ -644,11 +644,11 @@ interface NodePatchOutput {
 }
 ```
 
-모델의 patch 후보 응답은 `addressedRequirementIds`를 별도로 반환한다. `PATCH`일 때는 현재 하위 노드에 공급된 Requirement ID 중 실제 diff가 완전히 구현한 ID를 적고, 차단 상태에서는 빈 배열이어야 한다. orchestrator는 이 값을 `NodePatchOutput.requirementIds`로 정규화하며 알려지지 않은 ID와 빈 수정 범위는 거부한다. 일부 ID만 포함했더라도 최소 한 항목을 완전히 구현하고 모든 검증을 통과하면 해당 하위 PR로 게시한 뒤 남은 ID만 다음 하위 노드에 전달한다.
+모델의 patch 후보 응답은 `addressedRequirementIds`를 별도로 반환한다. `PATCH`일 때는 현재 하위 노드에 공급된 단일 Requirement ID를 실제 diff가 완전히 구현했을 때만 그 ID를 적고, 차단 상태에서는 빈 배열이어야 한다. orchestrator는 이 값을 `NodePatchOutput.requirementIds`로 정규화하며 알려지지 않은 ID, 할당되지 않은 추가 ID, 빈 수정 범위를 거부한다. 검증을 통과하면 해당 하위 PR로 게시한 뒤 다음 Requirement ID 하나를 새 하위 노드에 전달한다.
 
-patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제, 이동, 이름 변경, 전체 포맷, 무관한 리팩터링은 허용하지 않는다. 한 Section에 finding이 여러 개이면 한 후보가 전부 처리할 필요는 없지만, 자신이 주장한 Requirement ID는 모두 구현해야 한다. 검증된 부분 범위는 독립 하위 PR이 되고, 다음 요청은 그 부모 commit의 코드와 남은 ID만 받는다.
+patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제, 이동, 이름 변경, 전체 포맷, 무관한 리팩터링은 허용하지 않는다. 한 Section에 finding이 여러 개여도 각 후보는 할당된 Requirement ID 하나만 처리하고 완전히 구현해야 한다. 검증된 단일 항목 범위는 독립 하위 PR이 되고, 다음 요청은 그 부모 commit의 코드와 다음 ID 하나만 받는다.
 
-patch 모델 하나가 supplied base code가 audit finding을 이미 충족한다고 판단해 `BLOCKED_AUDIT_CONFLICT`를 반환해도 audit의 근거 있는 누락을 취소할 수 없다. `BLOCKED_AUDIT_CONFLICT`, `BLOCKED_MISSING_VALUE`, `BLOCKED_PATCH_TOO_LARGE`는 해당 후보의 결과일 뿐 Section의 최종 결과가 아니며, 오케스트레이터는 같은 격리 입력과 변경되지 않은 base에서 새 seed와 request ID를 가진 독립 patch 후보를 `PIPELINE_PATCH_ATTEMPTS`까지 호출한다. 모든 독립 후보가 만장일치로 `BLOCKED_AUDIT_CONFLICT`를 반환하면 원래 audit이 false positive였다는 consensus artifact를 기록하고 해당 Section을 현재 실행의 PASS로 해소해 후행 DAG를 계속 진행한다. 판정이 섞이거나 다른 실패를 모두 소진한 경우에는 최종 차단 상태와 전체 시도 기록을 Section Check와 불변 실행 artifact에만 기록한다.
+patch 모델 하나가 supplied base code가 audit finding을 이미 충족한다고 판단해 `BLOCKED_AUDIT_CONFLICT`를 반환해도 audit의 근거 있는 누락을 취소하거나 해당 Section을 PASS로 바꿀 수 없다. `BLOCKED_AUDIT_CONFLICT`, `BLOCKED_MISSING_VALUE`, `BLOCKED_PATCH_TOO_LARGE`는 해당 후보의 실패 결과일 뿐이며, 오케스트레이터는 같은 격리 입력과 변경되지 않은 base에서 새 seed와 request ID를 가진 독립 patch 후보를 `PIPELINE_PATCH_ATTEMPTS`까지 호출한다. 후보를 모두 소진해도 검증된 diff를 만들지 못하면 Issue나 대기 상태로 돌리지 않고 전체 시도 기록을 Check와 불변 artifact에 남긴 뒤 workflow를 실패 처리한다. 이 실패는 다른 `PATCH_REQUIRED` Section의 API 호출과 PR 생성을 생략하는 조건으로 사용할 수 없다.
 
 patch 적용 뒤에는 일반 완전성 audit를 다시 실행하지 않는다. 별도의 stateless 재검증 요청이 현재 하위 노드의 `addressedRequirementIds`, 해당 finding, 실제 diff, before/after 구현만 받아 각 주장 항목을 독립적으로 확인한다. 그 하위 노드가 주장한 항목이 after 코드에서 모두 충족될 때만 게시할 수 있다.
 
@@ -1464,7 +1464,7 @@ GitHub PR은 branch 간 실제 변경이 있어야 하므로, 안전한 code dif
 - Section Check: 현재 commit에 붙는 실행 단위 결과. finding 원문, 근거, 구현 위치, patch 중단 사유와 다음 동작을 표시한다.
 - 실행 artifact: Section 입력, 모든 독립 응답, finding, 중단 사유, fingerprint와 재실행 조건을 불변 파일로 보존한다.
 
-GitHub Issue는 1차 `DOCUMENT_GAP`에만 생성한다. 2차 구현 감사, patch 생성, guard·test·re-audit·publish 실패는 Issue를 만들지 않는다. dependency wait와 write-set wait는 존재하지 않는다. 각 하위 PR은 자신이 주장한 Requirement ID 전체를 구현해야 하며, 아직 남은 항목은 descendant 하위 PR로 재귀 처리한다. 2차 `PATCH_REQUIRED` chain이 미완료이면 Check와 artifact를 남기고 workflow를 실패 처리한다.
+GitHub Issue는 1차 `DOCUMENT_GAP`에만 생성한다. 2차 구현 감사, patch 생성, guard·test·re-audit·publish 실패는 Issue를 만들지 않는다. dependency wait와 write-set wait는 존재하지 않는다. 각 하위 PR은 할당된 Requirement ID 하나를 구현하며, 아직 남은 항목은 Requirement ID별 descendant 하위 PR로 재귀 처리한다. 2차 `PATCH_REQUIRED` chain이 미완료이면 Check와 artifact를 남기고 workflow를 실패 처리한다.
 
 S18이 명세에 있는 페이지별 acceptance test의 부재를 찾았는데 새 파일의 `implementationRefs`만 생략한 경우는 근거 부족이 아니다. S18의 소유 경로 `frontend/tests/**`에서 결정적 기본 경로 `frontend/tests/design-index-s18.spec.ts`를 배정하고 독립 patch 요청으로 보낸다. 경로만 오케스트레이터가 결정하며 테스트 내용과 diff는 NVIDIA가 명세 근거로 생성하고 전체 guard를 통과해야 한다.
 
@@ -1950,7 +1950,7 @@ S19 audit BLOCKED_MISSING_EVIDENCE
 
 가장 중요한 것은 `항목 수`, `API 호출 수`, `PR 수`를 같은 숫자로 취급하지 않는 것이다.
 
-- 상위 감사 항목 수는 항상 19개지만 patch 하위 노드는 `SXX-1`, `SXX-2`처럼 필요한 만큼 동적으로 늘어난다.
+- 상위 감사 항목 수는 항상 19개지만 patch 하위 노드는 각 고유 Requirement ID마다 `SXX-1`, `SXX-2`처럼 하나씩 동적으로 늘어난다.
 - 최초·강제 전체 audit의 논리 NVIDIA primary 요청 수는 정확히 38개다. 1차 19개와 2차 19개를 별도 집계하고 `UNKNOWN`·차단·스키마 오류의 같은-Stage·Section 독립 재시도는 별도 실제 호출 수로 추가 기록한다.
 - 증분 audit 호출 수는 dirty Section 수만큼이며, 언제나 Section별 별도 요청이다.
 - PATCH_REQUIRED가 있으면 primary audit 38개와 별도로 해당 Section의 patch 요청이 추가되므로 전체 API 호출 수는 38개를 넘을 수 있다.

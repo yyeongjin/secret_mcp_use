@@ -963,6 +963,7 @@ async function runPatches(args: {
     let childIndex = 1;
     let finalRecord: PatchRecord | undefined;
     let allPatchableFindings: NodeAuditOutput["findings"] = [];
+    let allPatchableRequirementIds: string[] = [];
 
     try {
       if (parentCommit !== args.config.baseCommit) {
@@ -1020,11 +1021,18 @@ async function runPatches(args: {
         };
       }
       allPatchableFindings = patchScope.auditOutput.findings;
+      allPatchableRequirementIds = [...new Set(
+        allPatchableFindings.map((finding) => finding.requirementId),
+      )].sort();
 
-      while (addressedRequirementIds.size < allPatchableFindings.length) {
+      while (addressedRequirementIds.size < allPatchableRequirementIds.length) {
         if (finalRecord) break;
+        const nextRequirementId = allPatchableRequirementIds.find(
+          (requirementId) => !addressedRequirementIds.has(requirementId),
+        );
+        if (!nextRequirementId) break;
         const remainingFindings = allPatchableFindings.filter(
-          (finding) => !addressedRequirementIds.has(finding.requirementId),
+          (finding) => finding.requirementId === nextRequirementId,
         );
         const remainingAuditOutput: NodeAuditOutput = {
           ...patchScope.auditOutput,
@@ -1526,7 +1534,7 @@ async function runPatches(args: {
       if (activeParentWorktree) await activeParentWorktree.cleanup();
     }
 
-    if (!finalRecord && addressedRequirementIds.size === allPatchableFindings.length) {
+    if (!finalRecord && addressedRequirementIds.size === allPatchableRequirementIds.length) {
       const lastPull = childPullRequests.at(-1);
       const allReused = childPullRequests.length > 0 && attempts
         .filter((attempt) => attempt.status === "PR_CREATED" || attempt.status === "PR_REUSED")
@@ -1545,9 +1553,8 @@ async function runPatches(args: {
       finalRecord = {
         ...finalRecord,
         addressedRequirementIds: [...addressedRequirementIds],
-        unresolvedRequirementIds: allPatchableFindings
-          .filter((finding) => !addressedRequirementIds.has(finding.requirementId))
-          .map((finding) => finding.requirementId),
+        unresolvedRequirementIds: allPatchableRequirementIds
+          .filter((requirementId) => !addressedRequirementIds.has(requirementId)),
         childPullRequests,
         ...(childPullRequests.at(-1)
           ? {
