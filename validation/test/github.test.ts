@@ -5,6 +5,7 @@ import {
   buildPullRequestBody,
   needsFeedbackIssue,
   pullRequestTitle,
+  stalePullRequestNotice,
 } from "../src/github.ts";
 import type {
   NodeAuditInput,
@@ -212,4 +213,20 @@ test("a partial PR still requires a feedback issue for unresolved Requirement ID
   assert.match(output.summary, /Still open: `S13-B`/);
   assert.match(output.text, /Corrected by the draft PR[\s\S]*S13-A/);
   assert.match(output.text, /Remaining requirement-level feedback[\s\S]*S13-B/);
+});
+
+test("a stale automation PR stays open and is refreshed in place", () => {
+  const notice = stalePullRequestNotice({
+    pullNumber: 13,
+    previousBase: "old-base",
+    currentBase: "new-base",
+    hasManifest: true,
+  });
+
+  assert.match(notice, /This draft PR remains open/);
+  assert.match(notice, /same PR number, branch, and review conversation/);
+  assert.match(notice, /--force-with-lease/);
+  assert.match(notice, /stays open for a human decision/);
+  assert.doesNotMatch(notice, /is being closed|its branch will be deleted/);
+  assert.match(notice, /design-validation-stale-preserved: 13:new-base/);
 });

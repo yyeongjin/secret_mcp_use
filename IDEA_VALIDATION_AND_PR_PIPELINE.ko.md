@@ -1156,10 +1156,10 @@ S12 patch writeSet = [frontend/styles.css]
 
 1. open PR의 `baseCommit`과 현재 main이 달라진다.
 2. PR을 `STALE_BASE`로 표시하고 merge queue 진입을 막는다.
-3. changed files와 기존 PR write-set이 겹치면 기존 patch를 즉시 폐기한다.
-4. 최신 main에서 해당 Section audit를 새 요청으로 다시 호출한다.
-5. 사람이 이미 누락을 고쳤다면 PASS 증명서를 쓰고 기존 자동 PR을 `obsolete`로 닫는다.
-6. 여전히 누락이면 새로운 fingerprint와 patch hash로 기존 PR을 대체한다.
+3. 기존 diff를 최신 base에 그대로 rebase하지 않고, 최신 main에서 해당 Section audit를 새 요청으로 다시 호출한다.
+4. 사람이 이미 누락을 고쳤다면 PASS 증명서와 설명 comment를 남기되 기존 자동 PR은 사람의 판단을 위해 열린 상태로 보존한다. 자동화가 PR을 닫거나 branch를 삭제하지 않는다.
+5. 여전히 누락이면 새 fingerprint와 patch hash로 만든 diff를 처음부터 검증한다. 모든 guard를 통과한 경우에만 봇 소유 branch를 `--force-with-lease`로 갱신하고 같은 PR 번호, review 대화, 제목과 본문을 최신 결과로 바꾼다.
+6. 새 결과가 차단되거나 안전한 diff를 만들 수 없으면 기존 PR은 열린 상태로 두고 Section Check와 피드백 Issue에 현재 결과를 게시한다.
 
 ### 사례 J: 같은 push event가 중복 전달된 경우
 
@@ -1318,8 +1318,10 @@ function patchReady(node: Node, state: State): boolean {
 
 - PR은 merge queue에서 한 번에 하나씩 최신 `main`에 재배치해 검증한다.
 - base commit이 바뀌면 fingerprint, base hashes, 직접 영향 PASS 회귀 검사를 다시 계산한다.
-- 재검증이 실패하면 PR을 자동 update하지 않고 patch를 폐기하고 해당 노드를 다시 예약한다.
-- force push로 수동 conflict resolution 결과를 덮어쓰지 않는다.
+- 재검증이 실패하거나 새 patch를 안전하게 만들 수 없으면 기존 PR을 자동 종료하지 않고 merge를 계속 차단한 채 해당 노드를 다시 예약한다.
+- 최신 main에서 새로 생성하고 완전히 검증한 diff만 같은 자동화 PR에 반영할 수 있다. 오래된 NVIDIA diff를 단순 rebase해 재사용하지 않는다.
+- 갱신은 봇이 만든 `auto/` branch에만 현재 원격 SHA를 지정한 `--force-with-lease`로 수행한다. lease가 맞지 않으면 중단하며 사람의 수동 commit이나 conflict resolution을 덮어쓰지 않는다.
+- PASS, BLOCKED 또는 UNKNOWN 결과도 열린 PR을 자동 종료하거나 branch를 삭제하는 권한으로 사용하지 않는다.
 
 ## PR 생성 계약
 
@@ -1651,8 +1653,8 @@ manual main push: same 390px rule implemented
 1. #203을 `STALE_BASE`로 표시한다.
 2. 최신 main으로 S12 독립 audit를 실행한다.
 3. 결과가 PASS이면 PASS 증명서를 기록한다.
-4. #203에 `superseded by main <sha>` comment를 남기고 닫는다.
-5. 대체 PR을 만들지 않는다.
+4. #203에 `already satisfied by main <sha>` comment와 검증 근거를 남긴다.
+5. 대체 PR을 만들지 않으며 #203과 branch는 삭제하지 않는다. 최종 종료 여부는 사람이 결정한다.
 
 ### Example 10: 자동 PR이 테스트에서 실패한 경우
 
@@ -1673,12 +1675,14 @@ PR 상태 comment:
 ```markdown
 This automated patch is stale because `main` changed from `<old-sha>` to `<new-sha>`.
 
-- Original patch was not rebased automatically.
-- Original NVIDIA diff was discarded.
+- This PR remains open and its branch is preserved.
+- Original NVIDIA diff will not be rebased or trusted automatically.
 - The node has been queued for a fresh isolated audit against `<new-sha>`.
+- A fully verified replacement will update this same PR with `--force-with-lease`.
+- PASS or blocked results will be reported here without closing the PR.
 ```
 
-새 audit가 PASS면 PR을 닫고, PATCH_REQUIRED면 새로운 fingerprint로 patch를 다시 만든다. Git이 우연히 rebase에 성공했다는 이유만으로 오래된 NVIDIA diff를 신뢰하지 않는다.
+새 audit가 PASS이면 증명서와 comment를 남기고 PR은 열린 상태로 보존한다. `PATCH_REQUIRED`이면 새로운 fingerprint로 patch를 다시 만들고 모든 검증을 통과한 경우에만 같은 PR의 자동화 branch와 본문을 갱신한다. 차단 결과도 피드백으로 남길 뿐 PR을 닫지 않는다. Git이 우연히 rebase에 성공했다는 이유만으로 오래된 NVIDIA diff를 신뢰하지 않는다.
 
 ### Example 12: PR이 병합된 후 후행 DAG가 진행되는 경우
 
@@ -1704,7 +1708,7 @@ S06과 S12는 각각 별도의 NVIDIA audit 요청으로 실행된다. S05 PR �
 | WAITING_WRITE_LOCK | 없음 | 없음 | 충돌 PR 병합 대기 |
 | BLOCKED_* | 없음 | 없음 | Check 또는 Issue |
 | PR_OPEN | 있음 | 하나 | review와 merge queue |
-| STALE_BASE | 기존 branch | merge 금지 | 새 audit 후 닫기 또는 대체 |
+| STALE_BASE | 기존 branch 보존 | merge 금지 | 새 audit 후 같은 PR 갱신 또는 피드백, 자동 종료 금지 |
 | MERGED | 삭제 가능 | merged | post-merge audit와 증명서 |
 | CLOSED_UNMERGED | 삭제 가능 | closed | PASS 처리 금지 |
 

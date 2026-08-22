@@ -33,6 +33,10 @@ interface IssueResponse {
   pull_request?: unknown;
 }
 
+interface IssueCommentResponse {
+  body?: string | null;
+}
+
 interface GitReferenceResponse {
   object: { sha: string };
 }
@@ -402,6 +406,26 @@ async function pullRequestByKey(config: PipelineConfig, key: Sha256): Promise<Pu
   )) ?? null;
 }
 
+function automationBranchPrefix(targetId: string, sectionId: string): string {
+  const target = targetId.toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 100);
+  return `auto/${target}/${sectionId}/`;
+}
+
+async function openPullRequestForSection(
+  config: PipelineConfig,
+  targetId: string,
+  sectionId: string,
+): Promise<PullRequestResponse | null> {
+  const prefix = automationBranchPrefix(targetId, sectionId);
+  return (await allAutomationPullRequests(config, "open")).find((pull) => {
+    const manifest = manifestFromBody(pull.body);
+    return (
+      (manifest?.targetId === targetId && manifest.sectionId === sectionId) ||
+      pull.head?.ref.startsWith(prefix)
+    );
+  }) ?? null;
+}
+
 async function conflictingPullRequest(
   config: PipelineConfig,
   branch: string,
@@ -427,45 +451,60 @@ async function assertCurrentBase(config: PipelineConfig): Promise<void> {
     `/repos/${config.repository}/git/ref/heads/${encodeURIComponent(config.github.baseBranch)}`,
   );
   if (reference.object.sha !== config.baseCommit) {
-    throw new Error(`STALE_BASE: expected ${config.baseCommit}, current ${config.github.baseBranch} is ${reference.object.sha}. Re-audit latest main; do not rebase or force-push this patch.`);
+    throw new Error(`STALE_BASE: expected ${config.baseCommit}, current ${config.github.baseBranch} is ${reference.object.sha}. Re-audit latest main before publishing or refreshing this PR.`);
   }
+}
+
+function staleNoticeMarker(pullNumber: number, baseCommit: string): string {
+  return `<!-- design-validation-stale-preserved: ${pullNumber}:${baseCommit} -->`;
+}
+
+export function stalePullRequestNotice(args: {
+  pullNumber: number;
+  previousBase: string;
+  currentBase: string;
+  hasManifest: boolean;
+}): string {
+  return [
+    args.hasManifest ? "STALE_BASE_REVALIDATION_REQUIRED" : "LEGACY_AUTOMATION_PR_REVALIDATION_REQUIRED",
+    "",
+    `This draft PR remains open. The automation will not close it or delete its branch because \`main\` changed.`,
+    "",
+    `- Previous validated base: \`${args.previousBase}\``,
+    `- Current base: \`${args.currentBase}\``,
+    "- Merge remains blocked while a fresh isolated Section audit runs.",
+    "- If a new diff is verified, this same PR number, branch, and review conversation will be updated with `--force-with-lease`.",
+    "- If the finding is already satisfied or cannot be patched safely, the PR stays open for a human decision and the pipeline publishes verbal feedback.",
+    "",
+    staleNoticeMarker(args.pullNumber, args.currentBase),
+  ].join("\n");
 }
 
 export async function reconcileStaleAutomationPullRequests(config: PipelineConfig): Promise<number[]> {
   if (!config.createPrs || !config.github.token) return [];
-  const closed: number[] = [];
+  const preserved: number[] = [];
   for (const pull of await allAutomationPullRequests(config, "open")) {
     const manifest = manifestFromBody(pull.body);
-    if (!manifest) {
+    if (manifest?.baseCommit === config.baseCommit && pull.base?.ref === config.github.baseBranch) continue;
+    const marker = staleNoticeMarker(pull.number, config.baseCommit);
+    const comments = await githubRequest<IssueCommentResponse[]>(
+      config,
+      "GET",
+      `/repos/${config.repository}/issues/${pull.number}/comments?per_page=100`,
+    );
+    if (!comments.some((comment) => comment.body?.includes(marker))) {
       await githubRequest(config, "POST", `/repos/${config.repository}/issues/${pull.number}/comments`, {
-        body: "LEGACY_AUTOMATION_PR: this draft has no v2 validation manifest or requirement-level audit feedback. It is not a valid output of the current pipeline and is being closed without merge.",
+        body: stalePullRequestNotice({
+          pullNumber: pull.number,
+          previousBase: manifest?.baseCommit ?? "unavailable (legacy PR)",
+          currentBase: config.baseCommit,
+          hasManifest: manifest !== null,
+        }),
       });
-      await githubRequest(config, "PATCH", `/repos/${config.repository}/pulls/${pull.number}`, { state: "closed" });
-      if (pull.head?.ref.startsWith("auto/")) {
-        await githubRequest(
-          config,
-          "DELETE",
-          `/repos/${config.repository}/git/refs/heads/${pull.head.ref.split("/").map(encodeURIComponent).join("/")}`,
-        );
-      }
-      closed.push(pull.number);
-      continue;
     }
-    if (manifest.baseCommit === config.baseCommit && pull.base?.ref === config.github.baseBranch) continue;
-    await githubRequest(config, "POST", `/repos/${config.repository}/issues/${pull.number}/comments`, {
-      body: `STALE_BASE: this automation PR was generated from \`${manifest.baseCommit}\` for base \`${pull.base?.ref ?? "unknown"}\`, while current \`${config.github.baseBranch}\` is \`${config.baseCommit}\`. The patch is discarded and its Section must be audited again. No rebase or force-push was performed.`,
-    });
-    await githubRequest(config, "PATCH", `/repos/${config.repository}/pulls/${pull.number}`, { state: "closed" });
-    if (pull.head?.ref.startsWith("auto/")) {
-      await githubRequest(
-        config,
-        "DELETE",
-        `/repos/${config.repository}/git/refs/heads/${pull.head.ref.split("/").map(encodeURIComponent).join("/")}`,
-      );
-    }
-    closed.push(pull.number);
+    preserved.push(pull.number);
   }
-  return closed;
+  return preserved;
 }
 
 function fencedCode(language: string, value: string): string {
@@ -557,16 +596,30 @@ export async function publishPatchPullRequest(args: {
   patchAttempt: number;
 }): Promise<{ branch: string; number: number; url: string; reused: boolean; merged: boolean }> {
   await assertCurrentBase(args.config);
-  const branch = branchName(args.input);
+  const generatedBranch = branchName(args.input);
   const keyedPull = await pullRequestByKey(args.config, args.manifest.prKey);
   if (keyedPull) {
-    return {
-      branch: keyedPull.head?.ref ?? branch,
-      number: keyedPull.number,
-      url: keyedPull.html_url,
-      reused: true,
-      merged: Boolean(keyedPull.merged_at),
-    };
+    const keyedManifest = manifestFromBody(keyedPull.body);
+    if (!keyedPull.merged_at && keyedManifest?.baseCommit !== args.config.baseCommit) {
+      // Continue below and refresh the same Section PR against current main.
+    } else {
+      return {
+        branch: keyedPull.head?.ref ?? generatedBranch,
+        number: keyedPull.number,
+        url: keyedPull.html_url,
+        reused: true,
+        merged: Boolean(keyedPull.merged_at),
+      };
+    }
+  }
+  const existingSectionPull = await openPullRequestForSection(
+    args.config,
+    args.input.run.targetId,
+    args.input.node.sectionId,
+  );
+  const branch = existingSectionPull?.head?.ref ?? generatedBranch;
+  if (existingSectionPull && !existingSectionPull.head?.sha) {
+    throw new Error(`Cannot refresh PR #${existingSectionPull.number}: the automation branch SHA is unavailable.`);
   }
   const conflict = await conflictingPullRequest(args.config, branch, args.patch.changedPaths);
   if (conflict) {
@@ -578,6 +631,30 @@ export async function publishPatchPullRequest(args: {
   await runCommand("git", ["config", "user.email", "secret-mcp-validation[bot]@users.noreply.github.com"], { cwd: args.worktreePath });
   await runCommand("git", ["add", "--", ...args.patch.changedPaths], { cwd: args.worktreePath });
   await runCommand("git", ["commit", "-m", `fix(${args.input.node.sectionId.toLowerCase()}): satisfy DESIGN_INDEX requirements`], { cwd: args.worktreePath });
+
+  const title = pullRequestTitle(args.input.node.sectionId, args.auditOutput, args.manifest.requirementIds);
+  const body = buildPullRequestBody(args);
+  if (existingSectionPull?.head?.sha) {
+    await runCommand("git", [
+      "push",
+      `--force-with-lease=refs/heads/${branch}:${existingSectionPull.head.sha}`,
+      "origin",
+      `HEAD:refs/heads/${branch}`,
+    ], { cwd: args.worktreePath });
+    const refreshed = await githubRequest<PullRequestResponse>(
+      args.config,
+      "PATCH",
+      `/repos/${args.config.repository}/pulls/${existingSectionPull.number}`,
+      { title, body, base: args.config.github.baseBranch },
+    );
+    return {
+      branch,
+      number: refreshed.number,
+      url: refreshed.html_url,
+      reused: true,
+      merged: false,
+    };
+  }
 
   const remote = await runCommand("git", ["ls-remote", "--exit-code", "--heads", "origin", branch], {
     cwd: args.worktreePath,
@@ -609,10 +686,10 @@ export async function publishPatchPullRequest(args: {
     "POST",
     `/repos/${args.config.repository}/pulls`,
     {
-      title: pullRequestTitle(args.input.node.sectionId, args.auditOutput, args.manifest.requirementIds),
+      title,
       head: branch,
       base: args.config.github.baseBranch,
-      body: buildPullRequestBody(args),
+      body,
       draft: true,
     },
   );

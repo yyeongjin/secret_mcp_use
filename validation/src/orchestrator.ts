@@ -1500,11 +1500,11 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
   const client = new NvidiaClient(config);
   const summaries: WorkRunSummary[] = [];
 
-  const closedStalePullRequests = await reconcileStaleAutomationPullRequests(config);
+  const preservedStalePullRequests = await reconcileStaleAutomationPullRequests(config);
   await writeJson(path.join(config.outputRoot, "change-event.json"), changeEvent);
   await writeJson(path.join(config.outputRoot, "stale-pr-reconciliation.json"), {
     baseCommit: config.baseCommit,
-    closedPullRequests: closedStalePullRequests,
+    preservedOpenPullRequests: preservedStalePullRequests,
   });
 
   for (const triggerPath of config.triggerPaths) {
