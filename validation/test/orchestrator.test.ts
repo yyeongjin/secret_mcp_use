@@ -1,66 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  allPatchCandidatesConfirmExistingImplementation,
+  auditExecutionState,
   auditOutputNeedsIndependentRetry,
   blockedConflictContradictsExactFinding,
   callAudit,
   enforcePatchGrounding,
   groundOwnedNewImplementationPaths,
+  incompletePatchSectionIds,
   patchOutputNeedsIndependentRetry,
   rejectedPatchSummaryForRetry,
-  unresolvedPatchDependencies,
 } from "../src/orchestrator.ts";
 import { quarantineAuditOutput } from "../src/nvidia.ts";
 import type { NvidiaClient } from "../src/nvidia.ts";
 import type {
-  FreshNode,
   NodeAuditInput,
   NodeAuditOutput,
   NodePatchOutput,
-  PassAttestation,
-  ResolvedNode,
-  SectionId,
   Sha256,
 } from "../src/types.ts";
+import { SECTION_IDS } from "../src/types.ts";
 
 const fingerprint = `sha256:${"1".repeat(64)}` as Sha256;
 
-function fresh(status: FreshNode["output"]["status"]): FreshNode {
-  return {
-    status: "FRESH",
-    rawResponseHash: fingerprint,
-    output: {
-      schemaVersion: "design-validation/audit-output/v2",
-      sectionId: "S02",
-      fingerprint,
-      status,
-      findings: status === "PASS" ? [] : [{
-        requirementId: "test",
-        pageId: null,
-        componentId: null,
-        status: "UNKNOWN",
-        finding: "test",
-        evidenceRefs: [],
-        implementationRefs: [],
-        proposedValue: null,
-      }],
-      publicOutput: {},
-    },
-  };
-}
-
-test("current-run PASS satisfies patch DAG dependencies without a persisted attestation", () => {
-  const resolved = new Map<SectionId, ResolvedNode>([
-    ["S02", fresh("PASS")],
-    ["S06", fresh("BLOCKED_MISSING_EVIDENCE")],
-  ]);
-  const attestations = new Map<SectionId, PassAttestation>();
-
-  assert.deepEqual(
-    unresolvedPatchDependencies(["S02", "S06"], resolved, attestations),
-    ["S06"],
-  );
+test("PATCH_REQUIRED is scheduled even when a DAG dependency is not PASS", () => {
+  assert.equal(auditExecutionState("PATCH_REQUIRED", false), "PATCH_REQUIRED");
+  assert.equal(auditExecutionState("PASS", false), "PASS_PENDING_DEPENDENCY");
 });
 
 function groundingInput(writes: string[]): NodeAuditInput {
@@ -301,20 +266,39 @@ test("ambiguous audit and blocked patch outputs require independent replacement 
   assert.equal(patchOutputNeedsIndependentRetry({ ...patch, status: "PATCH" }), false);
 });
 
-test("unanimous exhausted patch conflicts resolve a false-positive audit without an issue", () => {
-  assert.equal(allPatchCandidatesConfirmExistingImplementation([
-    { status: "BLOCKED_AUDIT_CONFLICT" },
-    { status: "BLOCKED_AUDIT_CONFLICT" },
-    { status: "BLOCKED_AUDIT_CONFLICT" },
-  ], 3), true);
-  assert.equal(allPatchCandidatesConfirmExistingImplementation([
-    { status: "BLOCKED_AUDIT_CONFLICT" },
-    { status: "BLOCKED_MODEL" },
-    { status: "BLOCKED_AUDIT_CONFLICT" },
-  ], 3), false);
-  assert.equal(allPatchCandidatesConfirmExistingImplementation([
-    { status: "BLOCKED_AUDIT_CONFLICT" },
-  ], 3), false);
+test("every PATCH_REQUIRED Section must publish a complete PR chain", () => {
+  const complete = (sectionId: typeof SECTION_IDS[number]) => ({
+    sectionId,
+    status: "PR_CREATED" as const,
+    reason: "published",
+    addressedRequirementIds: [`${sectionId}-A`],
+    unresolvedRequirementIds: [],
+    pullRequest: { number: 1, url: "https://example.test/pr/1", branch: `auto/${sectionId}` },
+    childPullRequests: [{
+      patchNodeId: `${sectionId}-1`,
+      parentPatchNodeId: null,
+      number: 1,
+      url: "https://example.test/pr/1",
+      branch: `auto/${sectionId}`,
+      baseBranch: "main",
+      requirementIds: [`${sectionId}-A`],
+    }],
+    attempts: [],
+  });
+  assert.deepEqual(incompletePatchSectionIds({
+    requiredSectionIds: [...SECTION_IDS],
+    records: SECTION_IDS.map(complete),
+    createPrs: true,
+  }), []);
+  assert.deepEqual(incompletePatchSectionIds({
+    requiredSectionIds: [...SECTION_IDS],
+    records: SECTION_IDS
+      .filter((sectionId) => sectionId !== "S19")
+      .map((sectionId) => sectionId === "S02"
+        ? { ...complete(sectionId), unresolvedRequirementIds: ["S02-B"] }
+        : complete(sectionId)),
+    createPrs: true,
+  }), ["S02", "S19"]);
 });
 
 test("an exact structural omission cannot be dismissed as an audit conflict", () => {

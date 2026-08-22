@@ -9,6 +9,7 @@ import {
 import { buildChangeEvent, directDirtySections } from "./change.ts";
 import { sha256 } from "./hash.ts";
 import {
+  publishDocumentGapIssues,
   publishNodeCheckRuns,
   publishPatchPullRequest,
   pullRequestKey,
@@ -160,7 +161,6 @@ export interface PatchRecord {
   attempt?: number;
   status:
     | "NOT_REQUIRED"
-    | "WAITING_DEPENDENCY"
     | "VALIDATION_ONLY"
     | "BLOCKED_MODEL"
     | "BLOCKED_MISSING_VALUE"
@@ -336,15 +336,6 @@ export function patchOutputNeedsIndependentRetry(output: NodePatchOutput): boole
   return output.status !== "PATCH";
 }
 
-export function allPatchCandidatesConfirmExistingImplementation(
-  attempts: Array<{ status: string }>,
-  expectedAttempts: number,
-): boolean {
-  return attempts.length === expectedAttempts &&
-    attempts.length >= 2 &&
-    attempts.every((attempt) => attempt.status === "BLOCKED_AUDIT_CONFLICT");
-}
-
 export function groundOwnedNewImplementationPaths(
   input: NodeAuditInput,
   output: NodeAuditOutput,
@@ -451,12 +442,35 @@ function buildNodeStates(
     const dependenciesPassing = inputs.get(sectionId)?.node.dependsOn.every(
       (dependencyId) => resolved.get(dependencyId)?.output.status === "PASS",
     ) ?? false;
-    const state = item.output.status === "PASS"
-      ? dependenciesPassing ? "PASS" : "PASS_PENDING_DEPENDENCY"
-      : item.output.status === "PATCH_REQUIRED"
-        ? dependenciesPassing ? "PATCH_REQUIRED" : "PATCH_WAITING_DEPENDENCY"
-        : item.output.status;
+    const state = auditExecutionState(item.output.status, dependenciesPassing);
     return { sectionId, state };
+  });
+}
+
+export function auditExecutionState(
+  status: NodeAuditOutput["status"],
+  dependenciesPassing: boolean,
+): string {
+  if (status === "PASS") return dependenciesPassing ? "PASS" : "PASS_PENDING_DEPENDENCY";
+  if (status === "PATCH_REQUIRED") return "PATCH_REQUIRED";
+  return status;
+}
+
+export function incompletePatchSectionIds(args: {
+  requiredSectionIds: SectionId[];
+  records: PatchRecord[];
+  createPrs: boolean;
+}): SectionId[] {
+  const records = new Map(args.records.map((record) => [record.sectionId, record]));
+  return args.requiredSectionIds.filter((sectionId) => {
+    const record = records.get(sectionId);
+    if (!record || (record.unresolvedRequirementIds?.length ?? 0) > 0) return true;
+    if (!args.createPrs) return record.status !== "PATCH_VERIFIED";
+    return !(
+      (record.status === "PR_CREATED" || record.status === "PR_REUSED") &&
+      record.pullRequest &&
+      (record.childPullRequests?.length ?? 0) > 0
+    );
   });
 }
 
@@ -467,16 +481,6 @@ async function exists(pathname: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-export function unresolvedPatchDependencies(
-  dependencies: SectionId[],
-  resolved: Map<SectionId, ResolvedNode>,
-  attestations: Map<SectionId, PassAttestation>,
-): SectionId[] {
-  return dependencies.filter((dependency) => (
-    !attestations.has(dependency) && resolved.get(dependency)?.output.status !== "PASS"
-  ));
 }
 
 export function enforcePatchGrounding(
@@ -925,9 +929,12 @@ async function runPatches(args: {
   documentOutputs: Map<SectionId, DocumentAuditOutput>;
 }): Promise<{ records: PatchRecord[]; patchCalls: number; reauditCalls: number }> {
   const records: PatchRecord[] = [];
-  const claimedPaths = new Set<string>();
   let patchCalls = 0;
   let reauditCalls = 0;
+  let stackParentBranch = args.config.github.baseBranch;
+  let stackParentCommit = args.config.baseCommit;
+  let stackParentPatchNodeId: string | null = null;
+  const stackAncestorBranches = new Set<string>();
   const scratchDirectory = path.join(args.runDirectory, "patches");
   await mkdir(scratchDirectory, { recursive: true });
 
@@ -947,70 +954,78 @@ async function runPatches(args: {
       });
       continue;
     }
-    const missingDependencies = unresolvedPatchDependencies(
-      input.node.dependsOn,
-      args.resolved,
-      args.attestations,
-    );
-    if (missingDependencies.length > 0) {
-      records.push({
-        sectionId,
-        status: "WAITING_DEPENDENCY",
-        reason: `Dependencies are neither current-run PASS nor attested PASS: ${missingDependencies.join(", ")}.`,
-      });
-      continue;
-    }
-
     const attempts: PatchAttemptRecord[] = [];
-    const patchScope = buildPatchScope(input, resolved.output);
-    await writeJson(path.join(args.runDirectory, "nodes", sectionId, "patch-scope.json"), {
-      schemaVersion: "design-validation/patch-scope/v1",
-      sectionId,
-      originalRequirementIds: resolved.output.findings.map((finding) => finding.requirementId),
-      includedRequirementIds: patchScope.includedRequirementIds,
-      feedbackRequirementIds: patchScope.feedbackOutput.findings.map((finding) => finding.requirementId),
-      excluded: patchScope.excluded,
-    });
-    if (patchScope.auditOutput.findings.length === 0) {
-      const onlyAlreadySatisfied = patchScope.excluded.length > 0 && patchScope.excluded.every(
-        (item) => item.reason === "ALREADY_SATISFIED" || item.reason === "DUPLICATE_EXACT_FINDING",
-      );
-      records.push({
-        sectionId,
-        status: onlyAlreadySatisfied ? "BLOCKED_AUDIT_CONFLICT" : "BLOCKED_MISSING_VALUE",
-        reason: onlyAlreadySatisfied
-          ? "Every reported finding is already satisfied by the exact current implementation."
-          : "No reported finding has an unambiguous application value in the assigned DESIGN_INDEX CSS contract.",
-      });
-      continue;
-    }
-    const includedRequirementIds = new Set(patchScope.includedRequirementIds);
-    const unresolvedSectionFindings = patchScope.feedbackOutput.findings.filter(
-      (finding) => !includedRequirementIds.has(finding.requirementId),
-    );
-    if (unresolvedSectionFindings.length > 0) {
-      records.push({
-        sectionId,
-        status: "BLOCKED_MISSING_VALUE",
-        reason: `A complete Section PR cannot be generated because these supplied findings lack a patchable contract value: ${unresolvedSectionFindings.map((finding) => finding.requirementId).join(", ")}.`,
-      });
-      continue;
-    }
-    const allPatchableFindings = patchScope.auditOutput.findings;
     const addressedRequirementIds = new Set<string>();
-    const sectionChangedPaths = new Set<string>();
     const childPullRequests: NonNullable<PatchRecord["childPullRequests"]> = [];
     let currentInput = input;
     let currentInputs = args.inputs;
-    let parentBranch = args.config.github.baseBranch;
-    let parentCommit = args.config.baseCommit;
-    let parentPatchNodeId: string | null = null;
+    let parentBranch = stackParentBranch;
+    let parentCommit = stackParentCommit;
+    let parentPatchNodeId: string | null = stackParentPatchNodeId;
     let activeParentWorktree: Awaited<ReturnType<typeof createPatchedWorktree>> | null = null;
     let childIndex = 1;
     let finalRecord: PatchRecord | undefined;
+    let allPatchableFindings: NodeAuditOutput["findings"] = [];
 
     try {
+      if (parentCommit !== args.config.baseCommit) {
+        activeParentWorktree = await createAuditWorktree(args.config, `${sectionId}-stack-parent`, parentCommit);
+        currentInputs = await patchedInputs({
+          originalConfig: { ...args.config, baseCommit: parentCommit },
+          worktreePath: activeParentWorktree.path,
+          triggerPath: args.triggerPath,
+          runId: `${args.runId}:${sectionId}:stack-parent`,
+          manifest: args.manifest,
+          contractSchemaHash: args.contractSchemaHash,
+          changeEvent: args.changeEvent,
+          documentOutputs: args.documentOutputs,
+        });
+        const stackedInput = currentInputs.get(sectionId);
+        if (!stackedInput) throw new Error(`Stacked parent input is missing ${sectionId}.`);
+        currentInput = stackedInput;
+      }
+
+      const patchScope = buildPatchScope(currentInput, resolved.output);
+      await writeJson(path.join(args.runDirectory, "nodes", sectionId, "patch-scope.json"), {
+        schemaVersion: "design-validation/patch-scope/v1",
+        sectionId,
+        parentPatchNodeId,
+        parentBranch,
+        parentCommit,
+        originalRequirementIds: resolved.output.findings.map((finding) => finding.requirementId),
+        includedRequirementIds: patchScope.includedRequirementIds,
+        feedbackRequirementIds: patchScope.feedbackOutput.findings.map((finding) => finding.requirementId),
+        excluded: patchScope.excluded,
+      });
+      if (patchScope.auditOutput.findings.length === 0) {
+        const onlyAlreadySatisfied = patchScope.excluded.length > 0 && patchScope.excluded.every(
+          (item) => item.reason === "ALREADY_SATISFIED" || item.reason === "DUPLICATE_EXACT_FINDING",
+        );
+        finalRecord = {
+          sectionId,
+          status: onlyAlreadySatisfied ? "BLOCKED_AUDIT_CONFLICT" : "BLOCKED_MISSING_VALUE",
+          reason: onlyAlreadySatisfied
+            ? "Every reported finding is already satisfied by the exact stacked parent implementation."
+            : "No reported finding has an unambiguous application value in the assigned DESIGN_INDEX contract.",
+          attempts,
+        };
+      }
+      const includedRequirementIds = new Set(patchScope.includedRequirementIds);
+      const unresolvedSectionFindings = patchScope.feedbackOutput.findings.filter(
+        (finding) => !includedRequirementIds.has(finding.requirementId),
+      );
+      if (!finalRecord && unresolvedSectionFindings.length > 0) {
+        finalRecord = {
+          sectionId,
+          status: "BLOCKED_MISSING_VALUE",
+          reason: `A complete Section PR cannot be generated because these supplied findings lack a patchable contract value: ${unresolvedSectionFindings.map((finding) => finding.requirementId).join(", ")}.`,
+          attempts,
+        };
+      }
+      allPatchableFindings = patchScope.auditOutput.findings;
+
       while (addressedRequirementIds.size < allPatchableFindings.length) {
+        if (finalRecord) break;
         const remainingFindings = allPatchableFindings.filter(
           (finding) => !addressedRequirementIds.has(finding.requirementId),
         );
@@ -1159,30 +1174,17 @@ async function runPatches(args: {
             break;
           }
 
-          const conflicts = guarded.changedPaths.filter((changedPath) => claimedPaths.has(changedPath));
           await writeJson(path.join(args.runDirectory, "locks", `${patchNodeId}-attempt-${attempt}.json`), {
             schemaVersion: "design-validation/write-lock/v2",
             sectionId,
             patchNodeId,
             attempt,
             writeSet: guarded.changedPaths,
-            status: conflicts.length > 0 ? "BLOCKED_CONFLICT" : "ACQUIRED",
-            conflicts,
+            status: "ACQUIRED_STACKED",
+            conflicts: [],
+            parentBranch,
+            parentCommit,
           });
-          if (conflicts.length > 0) {
-            const attemptRecord: PatchAttemptRecord = {
-              attempt,
-              patchNodeId,
-              status: "BLOCKED_CONFLICT",
-              reason: `Another verified Section patch owns: ${conflicts.join(", ")}.`,
-              patchHash: guarded.patchHash,
-              changedPaths: guarded.changedPaths,
-            };
-            attempts.push(attemptRecord);
-            await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-            finalRecord = { sectionId, ...attemptRecord, attempts };
-            break;
-          }
 
           let worktree: Awaited<ReturnType<typeof createPatchedWorktree>>;
           try {
@@ -1455,6 +1457,7 @@ async function runPatches(args: {
                 patchNodeId,
                 baseBranch: parentBranch,
                 baseCommit: parentCommit,
+                ancestorBranches: stackAncestorBranches,
               });
               const attemptRecord: PatchAttemptRecord = {
                 attempt,
@@ -1478,8 +1481,6 @@ async function runPatches(args: {
                 requirementIds: output.requirementIds,
               });
               for (const requirementId of output.requirementIds) addressedRequirementIds.add(requirementId);
-              for (const changedPath of guarded.changedPaths) sectionChangedPaths.add(changedPath);
-
               const previousParentWorktree = activeParentWorktree;
               activeParentWorktree = worktree;
               retainAsParent = true;
@@ -1487,6 +1488,7 @@ async function runPatches(args: {
               parentPatchNodeId = patchNodeId;
               parentBranch = pull.branch;
               parentCommit = pull.commit;
+              stackAncestorBranches.add(pull.branch);
               currentInputs = await patchedInputs({
                 originalConfig: { ...args.config, baseCommit: pull.commit },
                 worktreePath: worktree.path,
@@ -1505,11 +1507,11 @@ async function runPatches(args: {
               break;
             } catch (error) {
               const reason = errorMessage(error);
-              const waitingForWriteLock = reason.startsWith("BLOCKED_CONFLICT:");
+              const nonAncestorPublicationConflict = reason.startsWith("BLOCKED_CONFLICT:");
               const attemptRecord: PatchAttemptRecord = {
                 attempt,
                 patchNodeId,
-                status: waitingForWriteLock ? "BLOCKED_CONFLICT" : "FAILED_PUBLISH",
+                status: nonAncestorPublicationConflict ? "BLOCKED_CONFLICT" : "FAILED_PUBLISH",
                 reason,
                 patchHash: guarded.patchHash,
                 changedPaths: guarded.changedPaths,
@@ -1530,7 +1532,6 @@ async function runPatches(args: {
       if (activeParentWorktree) await activeParentWorktree.cleanup();
     }
 
-    for (const changedPath of sectionChangedPaths) claimedPaths.add(changedPath);
     if (!finalRecord && addressedRequirementIds.size === allPatchableFindings.length) {
       const lastPull = childPullRequests.at(-1);
       const allReused = childPullRequests.length > 0 && attempts
@@ -1566,32 +1567,10 @@ async function runPatches(args: {
       };
     }
 
-    if (
-      finalRecord?.status === "BLOCKED_AUDIT_CONFLICT" &&
-      allPatchCandidatesConfirmExistingImplementation(
-        attempts,
-        args.config.patchGenerationAttempts,
-      )
-    ) {
-      resolved.output.status = "PASS";
-      resolved.output.findings = [];
-      resolved.output.publicOutput = {
-        ...resolved.output.publicOutput,
-        conflictResolution: "ALL_PATCH_CANDIDATES_CONFIRMED_EXISTING_IMPLEMENTATION",
-      };
-      await writeJson(path.join(args.runDirectory, "nodes", sectionId, "audit-conflict-resolution.json"), {
-        schemaVersion: "design-validation/audit-conflict-resolution/v1",
-        sectionId,
-        status: "PASS",
-        candidateCount: attempts.length,
-        reason: "Every independent patch candidate confirmed that the supplied implementation already satisfies the audit finding.",
-      });
-      finalRecord = {
-        sectionId,
-        status: "NOT_REQUIRED",
-        reason: `All ${attempts.length} independent patch candidates confirmed the existing implementation already satisfies the finding.`,
-        attempts,
-      };
+    if (childPullRequests.length > 0) {
+      stackParentBranch = parentBranch;
+      stackParentCommit = parentCommit;
+      stackParentPatchNodeId = parentPatchNodeId;
     }
 
     records.push(finalRecord ?? {
@@ -2064,6 +2043,13 @@ async function runTrigger(args: {
   });
   await writeJson(path.join(runDirectory, "patch-matrix.json"), patchResult.records);
   await writeGapReport(path.join(runDirectory, "GAP_REPORT.md"), orderedOutputs, patchResult.records);
+  const incompletePatchSections = incompletePatchSectionIds({
+    requiredSectionIds: SECTION_IDS.filter(
+      (sectionId) => resolved.get(sectionId)?.output.status === "PATCH_REQUIRED",
+    ),
+    records: patchResult.records,
+    createPrs: effectiveConfig.createPrs,
+  });
 
   const summary: WorkRunSummary = {
     runId,
@@ -2118,6 +2104,9 @@ async function runTrigger(args: {
           "FAILED_PUBLISH",
         ].includes(record.status))
         .map((record) => `${record.sectionId}: ${record.status} - ${record.reason}`),
+      ...incompletePatchSections.map((sectionId) => (
+        `${sectionId}: PATCH_REQUIRED did not produce a complete ${effectiveConfig.createPrs ? "stacked draft PR chain" : "verified patch chain"} in this run.`
+      )),
     ],
   };
   await writeJson(path.join(runDirectory, "summary.json"), summary);
@@ -2180,6 +2169,19 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
     createPrs: config.createPrs,
     summaries,
   });
+  const documentGapIssues = await publishDocumentGapIssues({ config, summaries });
+  const expectedDocumentGapIssues = summaries.reduce(
+    (count, summary) => count + summary.nodes.filter(
+      (node) => node.documentAuditStatus === "DOCUMENT_GAP",
+    ).length,
+    0,
+  );
+  if (!config.dryRun && config.github.token && documentGapIssues.length !== expectedDocumentGapIssues) {
+    throw new Error(
+      `Stage 1 publication invariant failed: expected ${expectedDocumentGapIssues} document-gap Issues, published ${documentGapIssues.length}.`,
+    );
+  }
+  await writeJson(path.join(config.outputRoot, "document-gap-issues.json"), documentGapIssues);
   const stateRunId = `${config.runId ?? `local-${Date.now()}`}.${config.runAttempt ?? "1"}`;
   for (const summary of summaries) {
     await writeJson(

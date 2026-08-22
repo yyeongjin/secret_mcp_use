@@ -52,8 +52,9 @@ async function detachedWorktree(
 export async function createAuditWorktree(
   config: PipelineConfig,
   sectionId: string,
+  baseCommit = config.baseCommit,
 ): Promise<PatchWorktree> {
-  return detachedWorktree(config, `audit-${sectionId}`);
+  return detachedWorktree(config, `audit-${sectionId}`, baseCommit);
 }
 
 export async function createPatchedWorktree(

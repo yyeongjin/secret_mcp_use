@@ -38,6 +38,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
   checks: write
 
 concurrency:
@@ -47,7 +48,7 @@ concurrency:
 jobs:
   validate:
     if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
-    name: Run 19 document and 19 implementation audits, then verify grounded patches
+    name: Run 19 document Issues and 19 implementation PR audits
     runs-on: ubuntu-latest
     timeout-minutes: 180
     concurrency:

@@ -111,12 +111,12 @@ test("PR keys are deterministic and embedded manifests are recoverable", () => {
   );
 });
 
-test("per-Section checks distinguish final PASS, waiting, blocked, and failed states", () => {
+test("per-Section checks distinguish final PASS, active correction, blocked, and failed states", () => {
   assert.equal(nodeCheckConclusion({ auditStatus: "PASS", executionState: "PASS", patch: null }), "success");
   assert.equal(nodeCheckConclusion({
     auditStatus: "PATCH_REQUIRED",
-    executionState: "PATCH_WAITING_DEPENDENCY",
-    patch: { status: "WAITING_DEPENDENCY", reason: "S02 is blocked." },
+    executionState: "PATCH_REQUIRED",
+    patch: null,
   }), "neutral");
   assert.equal(nodeCheckConclusion({
     auditStatus: "BLOCKED_MISSING_EVIDENCE",

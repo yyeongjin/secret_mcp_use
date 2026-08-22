@@ -28,6 +28,15 @@ interface IssueCommentResponse {
   body?: string | null;
 }
 
+interface IssueResponse {
+  number: number;
+  html_url: string;
+  state: string;
+  title: string;
+  body?: string | null;
+  pull_request?: unknown;
+}
+
 interface GitReferenceResponse {
   object: { sha: string };
 }
@@ -85,13 +94,14 @@ function buildDocumentNodeCheckOutput(args: {
       `- Independent request: \`${args.summary.runId}:document-audit:${args.node.sectionId}\``,
       "- Source code included: `false`",
       "- Writes and PR publication: `forbidden`",
+      `- Document-gap Issue: \`${args.node.documentAuditStatus === "DOCUMENT_GAP" ? "created or updated" : "not required"}\``,
     ].join("\n"),
     text: [
       "## Document completeness findings",
       "",
       renderFindings(args.node.documentFindings ?? []),
       "",
-      "This Stage 1 result can only report gaps in the immutable DESIGN_INDEX. It cannot create a code patch, Issue, or PR.",
+      "Stage 1 reports immutable DESIGN_INDEX gaps as Section-specific GitHub Issues. It cannot create a code patch or PR.",
     ].join("\n"),
   };
 }
@@ -109,7 +119,7 @@ async function githubRequest<T>(
   route: string,
   body?: unknown,
 ): Promise<T> {
-  if (!config.github.token) throw new Error("GITHUB_TOKEN is required for PR creation.");
+  if (!config.github.token) throw new Error("GITHUB_TOKEN is required for GitHub publication.");
   const response = await fetch(`${config.github.apiUrl}${route}`, {
     method,
     headers: {
@@ -196,6 +206,90 @@ export function renderFindings(findings: AuditFinding[]): string {
   ].join("\n")).join("\n\n");
 }
 
+function documentGapIssueMarker(targetId: string, sectionId: string): string {
+  return `<!-- design-validation-document-gap: ${targetId}:${sectionId} -->`;
+}
+
+export function buildDocumentGapIssueBody(args: {
+  summary: TargetCheckSummary;
+  node: NodeCheckSummary;
+}): string {
+  return [
+    "## Missing DESIGN_INDEX instructions",
+    "",
+    renderFindings(args.node.documentFindings ?? []),
+    "",
+    "## Isolated Stage 1 request",
+    "",
+    `- Target: \`${args.summary.targetId}\``,
+    `- Section: \`${args.node.sectionId}\``,
+    `- Trigger: \`${args.summary.triggerPath}\``,
+    `- Status: \`${args.node.documentAuditStatus}\``,
+    `- Fingerprint: \`${args.node.documentFingerprint ?? "unavailable"}\``,
+    `- Request: \`${args.summary.runId}:document-audit:${args.node.sectionId}\``,
+    "- Comparison: `Specification instructions -> DESIGN_INDEX`",
+    "- Frontend source included: `false`",
+    "",
+    "This Issue reports a document-contract omission only. Stage 1 never edits the immutable DESIGN_INDEX and never creates a frontend PR. Stage 2 runs independently and is not blocked by this Issue.",
+    "",
+    documentGapIssueMarker(args.summary.targetId, args.node.sectionId),
+  ].join("\n");
+}
+
+export async function publishDocumentGapIssues(args: {
+  config: PipelineConfig;
+  summaries: TargetCheckSummary[];
+}): Promise<Array<{ targetId: string; sectionId: string; number: number; url: string; reused: boolean }>> {
+  if (!args.config.github.token || args.config.dryRun) return [];
+  const existingIssues = (await githubRequest<IssueResponse[]>(
+    args.config,
+    "GET",
+    `/repos/${args.config.repository}/issues?state=open&per_page=100`,
+  )).filter((issue) => !issue.pull_request);
+  const published: Array<{ targetId: string; sectionId: string; number: number; url: string; reused: boolean }> = [];
+
+  for (const summary of args.summaries) {
+    for (const node of summary.nodes) {
+      if (node.documentAuditStatus !== "DOCUMENT_GAP") continue;
+      const marker = documentGapIssueMarker(summary.targetId, node.sectionId);
+      const title = `[${node.sectionId}] Complete missing DESIGN_INDEX instructions for ${summary.targetId}`.slice(0, 256);
+      const body = buildDocumentGapIssueBody({ summary, node });
+      const existing = existingIssues.find((issue) => issue.body?.includes(marker));
+      if (existing) {
+        const updated = await githubRequest<IssueResponse>(
+          args.config,
+          "PATCH",
+          `/repos/${args.config.repository}/issues/${existing.number}`,
+          { title, body },
+        );
+        published.push({
+          targetId: summary.targetId,
+          sectionId: node.sectionId,
+          number: updated.number,
+          url: updated.html_url,
+          reused: true,
+        });
+        continue;
+      }
+      const created = await githubRequest<IssueResponse>(
+        args.config,
+        "POST",
+        `/repos/${args.config.repository}/issues`,
+        { title, body },
+      );
+      existingIssues.push(created);
+      published.push({
+        targetId: summary.targetId,
+        sectionId: node.sectionId,
+        number: created.number,
+        url: created.html_url,
+        reused: false,
+      });
+    }
+  }
+  return published;
+}
+
 export function buildNodeCheckOutput(args: {
   summary: TargetCheckSummary;
   node: NodeCheckSummary;
@@ -221,7 +315,7 @@ export function buildNodeCheckOutput(args: {
     ? `Verified code diff: [draft PR #${pullRequest.number}](${pullRequest.url}) on \`${pullRequest.branch}\`.`
     : node.executionState === "PASS" || node.executionState === "CACHED_PASS"
       ? "No correction PR is required."
-      : "No safe code PR was published. The result remains in this Check and the run artifact; the pipeline never creates a GitHub Issue.";
+      : "No safe Stage 2 code PR was published. The implementation result remains in this Check and the run artifact; Stage 2 never creates a GitHub Issue.";
   return {
     title: `${node.sectionId} ${status}`.slice(0, 255),
     summary: [
@@ -389,9 +483,11 @@ async function conflictingPullRequest(
   changedPaths: string[],
   targetId: string,
   sectionId: string,
+  ancestorBranches: ReadonlySet<string>,
 ): Promise<{ number: number; url: string; paths: string[] } | null> {
   for (const pull of await allAutomationPullRequestsAnyBase(config, "open")) {
     if (pull.head?.ref === branch) continue;
+    if (pull.head?.ref && ancestorBranches.has(pull.head.ref)) continue;
     const manifest = manifestFromBody(pull.body);
     if (manifest?.targetId === targetId && manifest.sectionId === sectionId) continue;
     const files = await githubRequest<PullRequestFileResponse[]>(
@@ -566,6 +662,7 @@ export async function publishPatchPullRequest(args: {
   patchNodeId: string;
   baseBranch: string;
   baseCommit: string;
+  ancestorBranches?: ReadonlySet<string>;
 }): Promise<{
   branch: string;
   commit: string;
@@ -608,6 +705,7 @@ export async function publishPatchPullRequest(args: {
     args.patch.changedPaths,
     args.input.run.targetId,
     args.input.node.sectionId,
+    args.ancestorBranches ?? new Set<string>(),
   );
   if (conflict) {
     throw new Error(`BLOCKED_CONFLICT: open automation PR #${conflict.number} owns ${conflict.paths.join(", ")}: ${conflict.url}`);

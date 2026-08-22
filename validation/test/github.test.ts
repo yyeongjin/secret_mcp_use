@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildDocumentGapIssueBody,
   buildNodeCheckOutput,
   buildPullRequestBody,
   isAutomationPullRequestForBase,
@@ -137,33 +138,31 @@ test("a partial Section correction becomes a child PR with explicit descendant s
   assert.match(body, /run-123:patch:S05-1:attempt:1/);
 });
 
-test("a dependency-waiting omission stays in the DAG queue and Check output", () => {
+test("a Stage 1 document gap produces Section-specific Issue content", () => {
   const node = {
     sectionId: "S05",
     name: "Navigation and Header",
     fingerprint: hash,
-    auditStatus: "PATCH_REQUIRED",
-    executionState: "PATCH_WAITING_DEPENDENCY",
+    documentFingerprint: hash,
+    documentAuditStatus: "DOCUMENT_GAP",
+    documentAuditAttempts: 1,
+    documentFindings: [{ ...auditOutput.findings[0], implementationRefs: [] }],
+    auditStatus: "PASS",
+    executionState: "PASS",
     auditAttempts: 1,
-    requirementIds: ["S05-NAV-ACTIVE-001"],
-    findings: auditOutput.findings,
-    patch: {
-      status: "WAITING_DEPENDENCY",
-      reason: "S04 has not passed.",
-    },
+    requirementIds: [],
+    findings: [],
+    patch: { status: "NOT_REQUIRED", reason: "PASS" },
   };
-  const output = buildNodeCheckOutput({
-    summary: {
-      runId: "run-123",
-      targetId: "target",
-      triggerPath: "trigger/DESIGN_INDEX_gdweb-26357.md",
-      nodes: [node],
-    },
+  const body = buildDocumentGapIssueBody({
+    summary: { runId: "run-123", targetId: "target", triggerPath: "trigger/input.md", nodes: [node] },
     node,
   });
-  assert.match(output.text, /The current navigation item does not expose the documented active state/);
-  assert.match(output.text, /S04 has not passed/);
-  assert.doesNotMatch(output.summary, /issue #7/);
+  assert.match(body, /Missing DESIGN_INDEX instructions/);
+  assert.match(body, /run-123:document-audit:S05/);
+  assert.match(body, /Frontend source included: `false`/);
+  assert.match(body, /design-validation-document-gap: target:S05/);
+  assert.match(body, /Stage 2 runs independently and is not blocked/);
 });
 
 test("PASS nodes do not request a correction PR", () => {
