@@ -105,13 +105,13 @@ test("a code PR leads with exact feedback and the verified unified diff", () => 
   assert.equal(pullRequestTitle("S05", auditOutput), "fix(s05): address S05-NAV-ACTIVE-001 omission");
 });
 
-test("a partial Section correction is rejected before PR publication", () => {
+test("a partial Section correction becomes a child PR with explicit descendant scope", () => {
   const secondFinding = {
     ...auditOutput.findings[0],
     requirementId: "S05-NAV-FOCUS-002",
     finding: "The navigation focus ring is missing.",
   };
-  assert.throws(() => buildPullRequestBody({
+  const body = buildPullRequestBody({
     input,
     auditOutput: { ...auditOutput, findings: [...auditOutput.findings, secondFinding] },
     patch: {
@@ -122,9 +122,19 @@ test("a partial Section correction is rejected before PR publication", () => {
       deletions: 1,
       patchHash: hash,
     },
-    manifest,
+    manifest: {
+      ...manifest,
+      patchNodeId: "S05-1",
+      parentPatchNodeId: null,
+    },
     patchAttempt: 1,
-  }), /INCOMPLETE_SECTION_PR: S05-NAV-FOCUS-002/);
+    patchNodeId: "S05-1",
+  });
+
+  assert.match(body, /Patch node: `S05-1`/);
+  assert.match(body, /## Deferred to descendant child PRs/);
+  assert.match(body, /S05-NAV-FOCUS-002/);
+  assert.match(body, /run-123:patch:S05-1:attempt:1/);
 });
 
 test("a dependency-waiting omission stays in the DAG queue and Check output", () => {

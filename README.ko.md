@@ -72,7 +72,7 @@ unset NVIDIA_API_KEY
 | `PIPELINE_TRIGGER_GLOB` | `trigger/DESIGN_INDEX_gdweb-*.md` | 작품별 run을 시작하는 불변 입력 문서 경로 |
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | 일반 코드 검증에서 유효한 PASS cache를 유지 |
 | `PIPELINE_DRY_RUN` | `false` | 임시 worktree 검증을 통과한 patch 게시 허용 |
-| `PIPELINE_CREATE_PRS` | `true` | Section 누락 전체를 구현한 검증 diff만 멱등적인 draft PR로 게시하고 PR이 아닌 모든 결과는 GitHub Issue 없이 Check와 실행 artifact에만 기록 |
+| `PIPELINE_CREATE_PRS` | `true` | 검증된 Section 하위 diff를 멱등적인 stacked draft PR로 게시하고 PR이 아닌 모든 결과는 GitHub Issue 없이 Check와 실행 artifact에만 기록 |
 | `PIPELINE_AUDIT_ATTEMPTS` | `3` | transport/schema 결함과 애매하거나 차단된 판정을 위한 동일 Section 독립 audit 최대 시도 횟수 |
 | `PIPELINE_PATCH_ATTEMPTS` | `8` | `PATCH_REQUIRED` Section 하나에 허용하는 전체 검증 재시도를 포함한 독립 seed patch 후보 최대 횟수 |
 
@@ -131,15 +131,15 @@ Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마
 
 ### 4. 최초 실행 안전 설정
 
-커밋된 push workflow는 `PIPELINE_DRY_RUN=false`, `PIPELINE_CREATE_PRS=true`로 실행합니다. 그렇더라도 모델 출력을 바로 게시할 수는 없습니다. 요청 격리, 응답 schema 검증, 불변 경로 거부, base hash 검증, write 소유권, diff 크기 제한, `git apply --check`, typecheck, 단위 테스트, 데스크톱·모바일 브라우저 테스트, 접근성 회귀 검사, 수정 Section 재감사, 영향받은 기존 PASS 회귀 감사, 열린 PR 충돌 검사와 멱등성 검사를 모두 통과해야 병합되지 않은 draft PR 하나를 생성합니다. `git apply` 전에는 결정적 코드가 변경 없는 hunk 또는 완전히 동일한 no-op hunk 제거, 저장소 기준 경로 접두사 복원, 신뢰하지 않는 index metadata 제거와 hunk 개수 재계산만 수행할 수 있으며 의미 있는 추가·삭제 소스 줄은 바꾸지 않습니다. Requirement ID, Evidence ref, base hash와 read/write set은 모델이 중복 작성한 metadata를 신뢰하지 않고 격리 audit 입력과 검사한 diff에서 계산합니다.
+커밋된 push workflow는 `PIPELINE_DRY_RUN=false`, `PIPELINE_CREATE_PRS=true`로 실행합니다. 그렇더라도 모델 출력을 바로 게시할 수는 없습니다. 요청 격리, 응답 schema 검증, 불변 경로 거부, base hash 검증, write 소유권, diff 크기 제한, `git apply --check`, typecheck, 단위 테스트, 데스크톱·모바일 브라우저 테스트, 접근성 회귀 검사, 수정 Section 재감사, 영향받은 기존 PASS 회귀 감사, 열린 PR 충돌 검사와 멱등성 검사를 모두 통과한 하위 diff만 병합되지 않은 draft PR로 생성합니다. `git apply` 전에는 결정적 코드가 변경 없는 hunk 또는 완전히 동일한 no-op hunk 제거, 저장소 기준 경로 접두사 복원, 신뢰하지 않는 index metadata 제거와 hunk 개수 재계산만 수행할 수 있으며 의미 있는 추가·삭제 소스 줄은 바꾸지 않습니다. Requirement ID, Evidence ref, base hash와 read/write set은 모델이 중복 작성한 metadata를 신뢰하지 않고 격리 audit 입력과 검사한 diff에서 계산합니다.
 
-검증된 코드 PR은 해당 Section correction에 공급된 모든 Requirement ID를 본문 최상단에 표시하고, 변경 줄 수, 실제 request ID, guard 결과와 실행 artifact를 이어서 표시합니다. patch 모델은 supplied finding 전체를 구현해야 하며 부분 Section PR은 폐기하고 새 독립 후보로 교체합니다. 별도의 stateless before/after 재감사가 모든 수정 주장을 다시 검증합니다. 근거 있는 `PATCH_REQUIRED`가 PASS가 아닌 선행 노드를 기다리면 영구 DAG queue에 남습니다. 선행 PR 병합은 새 fingerprint 계산을 자동으로 시작하고 변경되지 않은 PASS 증명서를 재사용해 새로 준비된 Section만 실행합니다. 파이프라인은 어떤 상태에서도 GitHub Issue를 생성하지 않습니다. supplied finding 전체를 구현하고 검증한 코드 diff가 없는 결과는 Section Check와 불변 실행 artifact에만 기록합니다.
+검증된 코드 PR은 해당 하위 correction에 배정된 Requirement ID를 본문 최상단에 표시하고, 변경 줄 수, 실제 request ID, guard 결과와 실행 artifact를 이어서 표시합니다. `S01-S19`는 상위 audit Section으로 그대로 유지합니다. 한 Section이 한 번의 제한된 patch 응답으로 처리하기 크면 patch 단계에서 `S09-1`, `S09-2`, `S09-3` 같은 하위 노드를 동적으로 만듭니다. 각 하위 노드는 그 시점에 아직 해결되지 않은 Requirement ID만 받고, 별도 NVIDIA 요청·guard·재감사를 수행합니다. 첫 하위 PR은 workflow base를 대상으로 하고(`S09-1 -> main`), 다음 하위 PR부터 직전 하위 branch를 대상으로 합니다(`S09-2 -> S09-1`, `S09-3 -> S09-2`). 따라서 서로 다른 하위 diff를 하나의 거대한 PR로 합치지 않고 가장 깊은 하위 PR부터 상위 방향으로 병합할 수 있습니다. 파이프라인은 어떤 상태에서도 GitHub Issue를 생성하지 않습니다.
 
 열린 자동화 PR은 `main`이 바뀌었다는 이유만으로 자동 종료하거나 branch를 삭제하지 않습니다. pipeline은 해당 PR을 stale로 표시하고 현재 base를 기준으로 새로운 독립 audit를 실행하며 PR 번호와 review 이력을 보존합니다. 대체 diff가 모든 guard를 통과한 경우에만 봇 소유 자동화 branch를 `--force-with-lease`로 갱신하고, 같은 PR의 제목, 본문, manifest와 diff를 최신 결과로 바꿉니다. 새 결과가 PASS이거나 차단되었거나 안전하게 patch할 수 없는 경우에도 PR은 사람의 판단을 위해 열린 상태로 남고 현재 피드백을 게시하며, 자동화가 사용자를 대신해 PR을 닫지 않습니다.
 
 독립 patch 후보 하나가 현재 base 코드가 audit finding을 이미 충족한다고 주장하거나 값 부족·과도한 범위를 반환해도 그 한 응답이 근거 있는 누락을 취소할 수 없습니다. 오케스트레이터는 동일 Section과 변경되지 않은 base에서 새 seed를 사용하는 독립 후보를 `PIPELINE_PATCH_ATTEMPTS`까지 요청합니다. 잘못된 응답 형식, 유효하지 않은 diff, 일부 Requirement ID만 구현한 후보, 검사 실패와 재감사 실패도 같은 제한된 replacement candidate 예산을 사용합니다. 모든 독립 후보가 만장일치로 `BLOCKED_AUDIT_CONFLICT`를 반환하면 원래 audit을 현재 실행의 기존 구현 충족 PASS로 결정적으로 해소하고 consensus artifact를 남기며 후행 DAG를 계속 진행합니다. 판정이 섞이거나 다른 실패를 모두 소진한 경우에는 terminal 결과를 Check와 실행 artifact에만 기록합니다.
 
-하나의 `PATCH_REQUIRED` Section에는 최대 `PIPELINE_PATCH_ATTEMPTS`개의 완전한 patch 후보를 허용합니다. 후보마다 서로 다른 결정적 seed를 쓰는 별도 NVIDIA 요청이며, 같은 격리 Section 계약과 변경되지 않은 원본 파일에서 시작합니다. 요청에는 해당 Section finding이 지목한 구현 파일만 넣고, 한 줄짜리 원본 규칙을 정확한 diff 한 줄로 유지할 수 있도록 번호가 붙은 물리 소스 줄도 함께 제공합니다. 후보는 supplied Requirement ID 전체를 구현해야 합니다. 부분 coverage, JSON·schema 오류, 차단 후보 판정, 보정 가능한 diff 형식 오류, 테스트 실패, 수정 Section 재감사 실패, 영향받은 기존 PASS 회귀 감사 실패가 발생하면 해당 후보만 폐기하고 다음 후보를 시작합니다. 재시도에는 자기 거부 출력의 제한된 요약과 실패 진단만 전달하며 다른 Section의 계약, 응답 또는 diff는 전달하지 않습니다. 불변 경로 쓰기, 소유권 밖 쓰기, 위험한 경로·파일 작업에서 guard를 완화하지 않습니다. dependency와 write-lock 충돌은 다음 main revision까지 queue에 남기고, 다른 실패는 독립 후보를 모두 소진한 뒤 명확히 보고합니다. 모든 시도는 `patches/SXX/attempt-N/` 아래에 기록합니다. PASS에는 patch 요청과 PR을 만들지 않으며, 실제 근거 부족은 독립 audit 재시도를 모두 소진한 뒤에만 피드백으로 게시합니다.
+하나의 `PATCH_REQUIRED` Section은 유한한 Requirement ID 집합을 모두 처리할 때까지 필요한 수만큼 하위 노드를 만들 수 있으며 `19`는 patch 호출 상한이 아닙니다. 각 하위 노드는 최대 `PIPELINE_PATCH_ATTEMPTS`개의 교체 후보를 받을 수 있고 후보마다 고유 request ID를 쓰는 별도 NVIDIA 요청입니다. 요청에는 아직 해결되지 않은 finding과 그 finding이 지목한 구현 파일만 넣습니다. 후보는 공급된 Requirement ID 중 최소 하나를 완전히 구현해 실제 진전을 만들어야 합니다. JSON·schema 오류, 진전 없음, 차단 후보 판정, 테스트 실패, 하위 노드 재감사 실패 또는 영향받은 기존 PASS 회귀 감사 실패가 발생하면 같은 하위 노드만 재시도합니다. 검증된 부분 후보는 독립 stacked 하위 PR이 되며, 다음 하위 노드는 게시된 부모 commit에서 입력을 다시 만들고 남은 ID만 받습니다. 재시도에는 자기 거부 출력의 제한된 요약만 전달하며 다른 Section의 계약, 응답 또는 diff는 전달하지 않습니다. 불변 경로 쓰기, 소유권 밖 쓰기, 위험한 경로·파일 작업, 과도한 범위, Section 간 write-set 충돌과 게시 충돌에서는 guard를 완화하지 않습니다. 모든 시도는 `patches/SXX/SXX-N/attempt-M/` 아래에 기록합니다. PASS에는 patch 요청과 PR을 만들지 않습니다.
 
 audit의 `implementationRefs`는 schema에서 저장소 상대 경로만 허용합니다. selector, 소스 조각, `path:line`, 컴포넌트 이름 또는 설명문은 patch scheduling 전에 거부합니다. 모든 `PATCH_REQUIRED` finding은 supplied writable path 또는 허용된 안전한 새 text file 경로를 정확히 지목해야 합니다. S18이 필수 페이지별 acceptance test 파일 부재를 증명하고 `frontend/tests/**`를 소유하지만 audit가 새 파일 경로를 생략하면, 결정적 오케스트레이터가 코드 누락을 근거 부족으로 강등하지 않고 `frontend/tests/design-index-s18.spec.ts`를 배정합니다. 실제 테스트 diff의 작성과 검증은 계속 NVIDIA 독립 patch 요청이 담당합니다.
 
@@ -182,7 +182,7 @@ end-to-end 순서는 다음으로 고정합니다.
   -> 후보마다 typecheck, 단위 테스트, 데스크톱·모바일 렌더링, 접근성 검사
   -> 별도 stateless 요청으로 수정 Section과 영향받은 기존 PASS Section 재감사
   -> 실패 후보를 폐기하고 제한된 Section 내부 반복 계속
-  -> 검증된 노드에만 멱등적인 draft PR 하나를 선택적으로 생성
+  -> 검증된 하위 노드마다 멱등적인 stacked draft PR을 선택적으로 생성
 ```
 
 PASS 증명서는 orphan `validation-state` branch에 기록합니다. 격리된 원본 입력, 검증된 출력, gap report, patch guard, 테스트 결과와 재감사 결과는 30일 동안 보존되는 GitHub Actions artifact로 올립니다. workflow는 PR을 자동 승인하거나 자동 병합하지 않습니다.

@@ -346,6 +346,8 @@ export interface PullRequestManifest {
   prKey: Sha256;
   targetId: string;
   sectionId: SectionId;
+  patchNodeId?: string;
+  parentPatchNodeId?: string | null;
   fingerprint: Sha256;
   triggerSource: {
     path: string;

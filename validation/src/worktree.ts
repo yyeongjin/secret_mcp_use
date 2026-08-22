@@ -24,12 +24,16 @@ async function serializeWorktreeMutation<T>(operation: () => Promise<T>): Promis
   }
 }
 
-async function detachedWorktree(config: PipelineConfig, label: string): Promise<PatchWorktree> {
+async function detachedWorktree(
+  config: PipelineConfig,
+  label: string,
+  baseCommit = config.baseCommit,
+): Promise<PatchWorktree> {
   const worktreePath = await mkdtemp(path.join(os.tmpdir(), `secret-mcp-${label}-`));
   await rm(worktreePath, { recursive: true, force: true });
   await serializeWorktreeMutation(() => runCommand(
     "git",
-    ["worktree", "add", "--detach", worktreePath, config.baseCommit],
+    ["worktree", "add", "--detach", worktreePath, baseCommit],
     { cwd: config.repositoryRoot },
   ));
   return {
@@ -55,8 +59,9 @@ export async function createAuditWorktree(
 export async function createPatchedWorktree(
   config: PipelineConfig,
   patch: GuardedPatch,
+  baseCommit = config.baseCommit,
 ): Promise<PatchWorktree> {
-  const worktree = await detachedWorktree(config, `patch-${patch.sectionId}`);
+  const worktree = await detachedWorktree(config, `patch-${patch.sectionId}`, baseCommit);
   const worktreePath = worktree.path;
   const patchPath = path.join(worktreePath, ".section.patch");
   await writeFile(patchPath, patch.diff, "utf8");

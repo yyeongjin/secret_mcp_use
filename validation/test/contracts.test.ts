@@ -96,6 +96,10 @@ test("unknown source fallback marks all 19 Sections dirty", () => {
 test("PR keys are deterministic and embedded manifests are recoverable", () => {
   const prKey = pullRequestKey({ targetId: "target", sectionId: "S09", fingerprint: hash, patchHash: hash });
   assert.equal(prKey, pullRequestKey({ targetId: "target", sectionId: "S09", fingerprint: hash, patchHash: hash }));
+  assert.notEqual(
+    pullRequestKey({ targetId: "target", sectionId: "S09", patchNodeId: "S09-1", fingerprint: hash, patchHash: hash }),
+    pullRequestKey({ targetId: "target", sectionId: "S09", patchNodeId: "S09-2", fingerprint: hash, patchHash: hash }),
+  );
   const manifest = {
     schemaVersion: "design-validation/pr-manifest/v2",
     prKey,

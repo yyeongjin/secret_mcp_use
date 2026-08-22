@@ -9,6 +9,11 @@
     "prKey": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
     "targetId": { "type": "string" },
     "sectionId": { "type": "string", "pattern": "^S(?:0[1-9]|1[0-9])$" },
+    "patchNodeId": { "type": "string", "pattern": "^S(?:0[1-9]|1[0-9])-[1-9][0-9]*$" },
+    "parentPatchNodeId": {
+      "type": ["string", "null"],
+      "pattern": "^S(?:0[1-9]|1[0-9])-[1-9][0-9]*$"
+    },
     "fingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
     "triggerSource": { "type": "object" },
     "baseCommit": { "type": "string" },

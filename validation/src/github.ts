@@ -53,6 +53,13 @@ interface NodeCheckSummary {
     addressedRequirementIds?: string[];
     unresolvedRequirementIds?: string[];
     pullRequest?: { number: number; url: string; branch: string };
+    childPullRequests?: Array<{
+      patchNodeId: string;
+      number: number;
+      url: string;
+      branch: string;
+      baseBranch: string;
+    }>;
   } | null;
 }
 
@@ -123,16 +130,17 @@ async function githubRequest<T>(
 export function pullRequestKey(args: {
   targetId: string;
   sectionId: string;
+  patchNodeId?: string;
   fingerprint: Sha256;
   patchHash: Sha256;
 }): Sha256 {
-  return sha256(`${args.targetId}${args.sectionId}${args.fingerprint}${args.patchHash}`);
+  return sha256(`${args.targetId}${args.sectionId}${args.patchNodeId ?? args.sectionId}${args.fingerprint}${args.patchHash}`);
 }
 
-export function branchName(input: NodeAuditInput): string {
+export function branchName(input: NodeAuditInput, patchNodeId: string = input.node.sectionId): string {
   const target = input.run.targetId.toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 100);
   const fingerprint = input.node.fingerprint.slice("sha256:".length, "sha256:".length + 12);
-  return `auto/${target}/${input.node.sectionId}/${fingerprint}`;
+  return `auto/${target}/${patchNodeId}/${fingerprint}`;
 }
 
 export function nodeCheckConclusion(node: Pick<NodeCheckSummary, "auditStatus" | "executionState" | "patch">): CheckConclusion {
@@ -203,6 +211,12 @@ export function buildNodeCheckOutput(args: {
   const unresolvedIds = new Set(unresolved);
   const addressedFindings = node.findings.filter((finding) => addressedIds.has(finding.requirementId));
   const unresolvedFindings = node.findings.filter((finding) => unresolvedIds.has(finding.requirementId));
+  const childPullRequests = node.patch?.childPullRequests ?? [];
+  const childPublication = childPullRequests.length > 0
+    ? childPullRequests.map((pull) => (
+      `- [${pull.patchNodeId} PR #${pull.number}](${pull.url}): \`${pull.branch}\` -> \`${pull.baseBranch}\``
+    )).join("\n")
+    : null;
   const disposition = pullRequest
     ? `Verified code diff: [draft PR #${pullRequest.number}](${pullRequest.url}) on \`${pullRequest.branch}\`.`
     : node.executionState === "PASS" || node.executionState === "CACHED_PASS"
@@ -245,6 +259,7 @@ export function buildNodeCheckOutput(args: {
       "## Next action",
       "",
       disposition,
+      ...(childPublication ? ["", "## Stacked child PRs", "", childPublication] : []),
       "",
       patchReason,
     ].join("\n"),
@@ -323,9 +338,21 @@ async function allAutomationPullRequests(config: PipelineConfig, state: "open" |
   return pulls.filter((pull) => isAutomationPullRequestForBase(pull, config.github.baseBranch));
 }
 
+async function allAutomationPullRequestsAnyBase(
+  config: PipelineConfig,
+  state: "open" | "all",
+): Promise<PullRequestResponse[]> {
+  const pulls = await githubRequest<PullRequestResponse[]>(
+    config,
+    "GET",
+    `/repos/${config.repository}/pulls?state=${state}&per_page=100&sort=updated&direction=desc`,
+  );
+  return pulls.filter((pull) => Boolean(pull.head?.ref.startsWith("auto/")));
+}
+
 async function pullRequestByKey(config: PipelineConfig, key: Sha256): Promise<PullRequestResponse | null> {
   const marker = keyMarker(key);
-  const pulls = await allAutomationPullRequests(config, "all");
+  const pulls = await allAutomationPullRequestsAnyBase(config, "all");
   return pulls.find((pull) => (
     pull.body?.includes(marker) && (pull.state === "open" || Boolean(pull.merged_at))
   )) ?? null;
@@ -336,16 +363,21 @@ function automationBranchPrefix(targetId: string, sectionId: string): string {
   return `auto/${target}/${sectionId}/`;
 }
 
-async function openPullRequestForSection(
+async function openPullRequestForPatchNode(
   config: PipelineConfig,
   targetId: string,
   sectionId: string,
+  patchNodeId: string,
 ): Promise<PullRequestResponse | null> {
-  const prefix = automationBranchPrefix(targetId, sectionId);
-  return (await allAutomationPullRequests(config, "open")).find((pull) => {
+  const prefix = automationBranchPrefix(targetId, patchNodeId);
+  return (await allAutomationPullRequestsAnyBase(config, "open")).find((pull) => {
     const manifest = manifestFromBody(pull.body);
     return (
-      (manifest?.targetId === targetId && manifest.sectionId === sectionId) ||
+      (
+        manifest?.targetId === targetId &&
+        manifest.sectionId === sectionId &&
+        manifest.patchNodeId === patchNodeId
+      ) ||
       pull.head?.ref.startsWith(prefix)
     );
   }) ?? null;
@@ -355,9 +387,13 @@ async function conflictingPullRequest(
   config: PipelineConfig,
   branch: string,
   changedPaths: string[],
+  targetId: string,
+  sectionId: string,
 ): Promise<{ number: number; url: string; paths: string[] } | null> {
-  for (const pull of await allAutomationPullRequests(config, "open")) {
+  for (const pull of await allAutomationPullRequestsAnyBase(config, "open")) {
     if (pull.head?.ref === branch) continue;
+    const manifest = manifestFromBody(pull.body);
+    if (manifest?.targetId === targetId && manifest.sectionId === sectionId) continue;
     const files = await githubRequest<PullRequestFileResponse[]>(
       config,
       "GET",
@@ -369,14 +405,18 @@ async function conflictingPullRequest(
   return null;
 }
 
-async function assertCurrentBase(config: PipelineConfig): Promise<void> {
+async function assertBranchAtCommit(
+  config: PipelineConfig,
+  baseBranch: string,
+  baseCommit: string,
+): Promise<void> {
   const reference = await githubRequest<GitReferenceResponse>(
     config,
     "GET",
-    `/repos/${config.repository}/git/ref/heads/${encodeURIComponent(config.github.baseBranch)}`,
+    `/repos/${config.repository}/git/ref/heads/${encodeURIComponent(baseBranch)}`,
   );
-  if (reference.object.sha !== config.baseCommit) {
-    throw new Error(`STALE_BASE: expected ${config.baseCommit}, current ${config.github.baseBranch} is ${reference.object.sha}. Re-audit latest main before publishing or refreshing this PR.`);
+  if (reference.object.sha !== baseCommit) {
+    throw new Error(`STALE_BASE: expected ${baseCommit}, current ${baseBranch} is ${reference.object.sha}. Re-audit the current parent before publishing or refreshing this PR.`);
   }
 }
 
@@ -453,13 +493,12 @@ export function buildPullRequestBody(args: {
   patch: GuardedPatch;
   manifest: PullRequestManifest;
   patchAttempt: number;
+  patchNodeId?: string;
 }): string {
   const addressedIds = new Set(args.manifest.requirementIds);
   const addressedFindings = args.auditOutput.findings.filter((finding) => addressedIds.has(finding.requirementId));
   const remainingFindings = args.auditOutput.findings.filter((finding) => !addressedIds.has(finding.requirementId));
-  if (remainingFindings.length > 0) {
-    throw new Error(`INCOMPLETE_SECTION_PR: ${remainingFindings.map((finding) => finding.requirementId).join(", ")}`);
-  }
+  const patchNodeId = args.patchNodeId ?? args.manifest.patchNodeId ?? args.input.node.sectionId;
   const fullDiff = fencedCode("diff", args.patch.diff);
   return [
     "## Corrected by this diff",
@@ -472,12 +511,21 @@ export function buildPullRequestBody(args: {
     `- Changed lines: \`+${args.patch.additions} / -${args.patch.deletions}\``,
     "",
     fullDiff,
+    ...(remainingFindings.length > 0 ? [
+      "",
+      "## Deferred to descendant child PRs",
+      "",
+      renderFindings(remainingFindings),
+    ] : []),
     "",
     "## Scope",
     "",
     `- Target: \`${args.manifest.targetId}\``,
     `- Section: \`${args.manifest.sectionId}\``,
+    `- Patch node: \`${patchNodeId}\``,
+    `- Parent patch node: \`${args.manifest.parentPatchNodeId ?? "main"}\``,
     `- Base: \`${args.manifest.baseCommit}\``,
+    `- Base branch: \`${args.manifest.baseBranch}\``,
     `- Trigger: \`${args.manifest.triggerSource.path}\``,
     `- Fingerprint: \`${args.manifest.fingerprint}\``,
     `- Patch hash: \`${args.manifest.patchHash}\``,
@@ -487,8 +535,8 @@ export function buildPullRequestBody(args: {
     "",
     `- Document audit: \`${args.manifest.runId}:document-audit:${args.input.node.sectionId}\``,
     `- Implementation audit: \`${args.manifest.runId}:implementation-audit:${args.input.node.sectionId}\``,
-    `- Patch: \`${args.manifest.runId}:patch:${args.input.node.sectionId}:attempt:${args.patchAttempt}\``,
-    `- Patched-code audit: \`${args.manifest.runId}:reaudit:${args.input.node.sectionId}:attempt:${args.patchAttempt}\``,
+    `- Patch: \`${args.manifest.runId}:patch:${patchNodeId}:attempt:${args.patchAttempt}\``,
+    `- Patched-code audit: \`${args.manifest.runId}:reaudit:${patchNodeId}:attempt:${args.patchAttempt}\``,
     "",
     "The audit, patch generation, patched-code audit, and affected PASS regressions were separate stateless requests. No prior Section response was included in another Section audit.",
     "",
@@ -515,17 +563,28 @@ export async function publishPatchPullRequest(args: {
   patch: GuardedPatch;
   manifest: PullRequestManifest;
   patchAttempt: number;
-}): Promise<{ branch: string; number: number; url: string; reused: boolean; merged: boolean }> {
-  await assertCurrentBase(args.config);
-  const generatedBranch = branchName(args.input);
+  patchNodeId: string;
+  baseBranch: string;
+  baseCommit: string;
+}): Promise<{
+  branch: string;
+  commit: string;
+  number: number;
+  url: string;
+  reused: boolean;
+  merged: boolean;
+}> {
+  await assertBranchAtCommit(args.config, args.baseBranch, args.baseCommit);
+  const generatedBranch = branchName(args.input, args.patchNodeId);
   const keyedPull = await pullRequestByKey(args.config, args.manifest.prKey);
   if (keyedPull) {
     const keyedManifest = manifestFromBody(keyedPull.body);
-    if (!keyedPull.merged_at && keyedManifest?.baseCommit !== args.config.baseCommit) {
-      // Continue below and refresh the same Section PR against current main.
+    if (!keyedPull.merged_at && keyedManifest?.baseCommit !== args.baseCommit) {
+      // Continue below and refresh the same child PR against its current parent.
     } else {
       return {
         branch: keyedPull.head?.ref ?? generatedBranch,
+        commit: keyedPull.head?.sha ?? args.baseCommit,
         number: keyedPull.number,
         url: keyedPull.html_url,
         reused: true,
@@ -533,28 +592,36 @@ export async function publishPatchPullRequest(args: {
       };
     }
   }
-  const existingSectionPull = await openPullRequestForSection(
+  const existingSectionPull = await openPullRequestForPatchNode(
     args.config,
     args.input.run.targetId,
     args.input.node.sectionId,
+    args.patchNodeId,
   );
   const branch = existingSectionPull?.head?.ref ?? generatedBranch;
   if (existingSectionPull && !existingSectionPull.head?.sha) {
     throw new Error(`Cannot refresh PR #${existingSectionPull.number}: the automation branch SHA is unavailable.`);
   }
-  const conflict = await conflictingPullRequest(args.config, branch, args.patch.changedPaths);
+  const conflict = await conflictingPullRequest(
+    args.config,
+    branch,
+    args.patch.changedPaths,
+    args.input.run.targetId,
+    args.input.node.sectionId,
+  );
   if (conflict) {
     throw new Error(`BLOCKED_CONFLICT: open automation PR #${conflict.number} owns ${conflict.paths.join(", ")}: ${conflict.url}`);
   }
 
-  await runCommand("git", ["switch", "-c", branch], { cwd: args.worktreePath });
+  await runCommand("git", ["switch", "-C", branch, args.baseCommit], { cwd: args.worktreePath });
   await runCommand("git", ["config", "user.name", "secret-mcp-validation[bot]"], { cwd: args.worktreePath });
   await runCommand("git", ["config", "user.email", "secret-mcp-validation[bot]@users.noreply.github.com"], { cwd: args.worktreePath });
   await runCommand("git", ["add", "--", ...args.patch.changedPaths], { cwd: args.worktreePath });
-  await runCommand("git", ["commit", "-m", `fix(${args.input.node.sectionId.toLowerCase()}): satisfy DESIGN_INDEX requirements`], { cwd: args.worktreePath });
+  await runCommand("git", ["commit", "-m", `fix(${args.patchNodeId.toLowerCase()}): satisfy DESIGN_INDEX requirements`], { cwd: args.worktreePath });
+  const commit = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: args.worktreePath })).stdout.trim();
 
-  const title = pullRequestTitle(args.input.node.sectionId, args.auditOutput, args.manifest.requirementIds);
-  const body = buildPullRequestBody(args);
+  const title = pullRequestTitle(args.patchNodeId, args.auditOutput, args.manifest.requirementIds);
+  const body = buildPullRequestBody({ ...args, patchNodeId: args.patchNodeId });
   if (existingSectionPull?.head?.sha) {
     await runCommand("git", [
       "push",
@@ -566,10 +633,11 @@ export async function publishPatchPullRequest(args: {
       args.config,
       "PATCH",
       `/repos/${args.config.repository}/pulls/${existingSectionPull.number}`,
-      { title, body, base: args.config.github.baseBranch },
+      { title, body, base: args.baseBranch },
     );
     return {
       branch,
+      commit,
       number: refreshed.number,
       url: refreshed.html_url,
       reused: true,
@@ -584,12 +652,12 @@ export async function publishPatchPullRequest(args: {
   if (remote.exitCode === 0) {
     const remoteSha = remote.stdout.trim().split(/\s+/)[0];
     await runCommand("git", ["fetch", "origin", remoteSha], { cwd: args.worktreePath });
-    const mergeBase = await runCommand("git", ["merge-base", remoteSha, args.config.baseCommit], {
+    const mergeBase = await runCommand("git", ["merge-base", remoteSha, args.baseCommit], {
       cwd: args.worktreePath,
       allowFailure: true,
     });
-    if (mergeBase.exitCode !== 0 || mergeBase.stdout.trim() !== args.config.baseCommit) {
-      throw new Error(`STALE_BASE: orphan branch ${branch} is not based on current main and will not be reused.`);
+    if (mergeBase.exitCode !== 0 || mergeBase.stdout.trim() !== args.baseCommit) {
+      throw new Error(`STALE_BASE: orphan branch ${branch} is not based on current parent and will not be reused.`);
     }
     const comparison = await runCommand("git", ["diff", "--quiet", remoteSha, "HEAD"], {
       cwd: args.worktreePath,
@@ -609,10 +677,10 @@ export async function publishPatchPullRequest(args: {
     {
       title,
       head: branch,
-      base: args.config.github.baseBranch,
+      base: args.baseBranch,
       body,
       draft: true,
     },
   );
-  return { branch, number: pull.number, url: pull.html_url, reused: false, merged: false };
+  return { branch, commit, number: pull.number, url: pull.html_url, reused: false, merged: false };
 }

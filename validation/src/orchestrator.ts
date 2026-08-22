@@ -76,7 +76,11 @@ import type {
   SectionId,
 } from "./types.ts";
 import { SECTION_IDS } from "./types.ts";
-import { createAuditWorktree, createPatchedWorktree, verifyPatchedWorktree } from "./worktree.ts";
+import {
+  createAuditWorktree,
+  createPatchedWorktree,
+  verifyPatchedWorktree,
+} from "./worktree.ts";
 
 interface AuditCallSuccess {
   ok: true;
@@ -132,6 +136,7 @@ interface AuditCallAttempt {
 
 interface PatchAttemptRecord {
   attempt: number;
+  patchNodeId?: string;
   status:
     | "BLOCKED_MODEL"
     | "BLOCKED_MISSING_VALUE"
@@ -175,6 +180,15 @@ export interface PatchRecord {
   addressedRequirementIds?: string[];
   unresolvedRequirementIds?: string[];
   pullRequest?: { number: number; url: string; branch: string };
+  childPullRequests?: Array<{
+    patchNodeId: string;
+    parentPatchNodeId: string | null;
+    number: number;
+    url: string;
+    branch: string;
+    baseBranch: string;
+    requirementIds: string[];
+  }>;
   attempts?: PatchAttemptRecord[];
 }
 
@@ -982,483 +996,574 @@ async function runPatches(args: {
       });
       continue;
     }
-    let retryContext: {
-      output: NodePatchOutput;
-      failure: { stage: "guard" | "test" | "reaudit" | "regression"; reason: string };
-    } | undefined;
+    const allPatchableFindings = patchScope.auditOutput.findings;
+    const addressedRequirementIds = new Set<string>();
+    const sectionChangedPaths = new Set<string>();
+    const childPullRequests: NonNullable<PatchRecord["childPullRequests"]> = [];
+    let currentInput = input;
+    let currentInputs = args.inputs;
+    let parentBranch = args.config.github.baseBranch;
+    let parentCommit = args.config.baseCommit;
+    let parentPatchNodeId: string | null = null;
+    let activeParentWorktree: Awaited<ReturnType<typeof createPatchedWorktree>> | null = null;
+    let childIndex = 1;
     let finalRecord: PatchRecord | undefined;
 
-    for (let attempt = 1; attempt <= args.config.patchGenerationAttempts; attempt += 1) {
-      const attemptId = `${args.runId}:patch:${sectionId}:attempt:${attempt}`;
-      const attemptDirectory = path.join(scratchDirectory, sectionId, `attempt-${attempt}`);
-      patchCalls += 1;
-      let completion: CompletionResult | undefined;
-      let output: NodePatchOutput;
-      try {
-        const findingPaths = new Set(patchScope.auditOutput.findings.flatMap((finding) => finding.implementationRefs));
-        const patchInputArtifact = {
-          schemaVersion: "design-validation/patch-input/v2",
-          runId: args.runId,
-          targetId: input.run.targetId,
-          sectionId,
-          fingerprint: input.node.fingerprint,
-          baseCommit: input.run.baseCommit,
-          findings: patchScope.auditOutput.findings,
-          designIndexSource: input.contract.designIndexSource,
-          designIndexFragment: input.contract.designIndexFragment,
-          documentAudit: input.contract.documentAudit,
-          evidence: input.evidence,
-          files: input.implementation.files.filter((file) => findingPaths.has(file.path)),
-          allowedWriteGlobs: input.policy.allowedWriteGlobs,
-          payload: input.payload,
-        };
-        await writeJson(path.join(attemptDirectory, "patch-input.json"), patchInputArtifact);
-        await writeJson(
-          path.join(args.runDirectory, "nodes", sectionId, "patch-input.json"),
-          patchInputArtifact,
+    try {
+      while (addressedRequirementIds.size < allPatchableFindings.length) {
+        const remainingFindings = allPatchableFindings.filter(
+          (finding) => !addressedRequirementIds.has(finding.requirementId),
         );
-        completion = await args.client.completeJson({
-          kind: "patch",
-          sectionId,
-          fingerprint: input.node.fingerprint,
-          requestId: attemptId,
-          systemPrompt: retryContext ? PATCH_RETRY_SYSTEM_PROMPT : PATCH_SYSTEM_PROMPT,
-          userPrompt: retryContext
-            ? patchRetryUserPrompt({
-              auditInput: input,
-              auditOutput: patchScope.auditOutput,
-              rejectedOutput: retryContext.output,
-              failure: retryContext.failure,
-            })
-            : patchUserPrompt({ auditInput: input, auditOutput: patchScope.auditOutput }),
-          outputSchema: args.patchCandidateOutputSchema,
-        });
-        await writeJson(path.join(attemptDirectory, "api-response.json"), completion.raw);
-        output = canonicalizePatchOutput({
-          value: completion.parsed,
-          auditInput: input,
-          auditOutput: patchScope.auditOutput,
-        });
-        assertPatchOutput(
-          args.validatePatch,
-          output,
-          sectionId,
-          input.node.fingerprint,
-        );
-        await writeJson(path.join(attemptDirectory, "output.json"), output);
-        await writeJson(path.join(args.runDirectory, "nodes", sectionId, "patch-output.json"), output);
-      } catch (error) {
-        if (completion) {
-          await writeJson(path.join(attemptDirectory, "output-invalid.json"), completion.parsed);
-        }
-        const attemptRecord: PatchAttemptRecord = {
-          attempt,
-          status: "BLOCKED_MODEL",
-          reason: `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} failed: ${errorMessage(error)}`,
+        const remainingAuditOutput: NodeAuditOutput = {
+          ...patchScope.auditOutput,
+          fingerprint: currentInput.node.fingerprint,
+          findings: remainingFindings,
         };
-        attempts.push(attemptRecord);
-        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-        const rejectedOutput = completion
-          ? rejectedPatchSummaryForRetry({
-            value: completion.parsed,
-            input,
-            auditOutput: patchScope.auditOutput,
-          })
-          : null;
-        retryContext = rejectedOutput
-          ? { output: rejectedOutput, failure: { stage: "guard", reason: errorMessage(error) } }
-          : undefined;
-        if (attempt < args.config.patchGenerationAttempts) continue;
-        finalRecord = { sectionId, ...attemptRecord, attempts };
-        break;
-      }
+        const patchNodeId = `${sectionId}-${childIndex}`;
+        let retryContext: {
+          output: NodePatchOutput;
+          failure: { stage: "guard" | "test" | "reaudit" | "regression"; reason: string };
+        } | undefined;
+        let childPublished = false;
 
-      if (blockedConflictContradictsExactFinding(patchScope.auditOutput, output)) {
-        const reason = `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} contradicted a structurally verified exact-contract omission.`;
-        const attemptRecord: PatchAttemptRecord = { attempt, status: "BLOCKED_MODEL", reason };
-        attempts.push(attemptRecord);
-        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-        if (attempt < args.config.patchGenerationAttempts) {
-          retryContext = { output, failure: { stage: "guard", reason } };
-          continue;
-        }
-        finalRecord = { sectionId, ...attemptRecord, attempts };
-        break;
-      }
+        for (let attempt = 1; attempt <= args.config.patchGenerationAttempts; attempt += 1) {
+          const attemptId = `${args.runId}:patch:${patchNodeId}:attempt:${attempt}`;
+          const attemptDirectory = path.join(scratchDirectory, sectionId, patchNodeId, `attempt-${attempt}`);
+          patchCalls += 1;
+          let completion: CompletionResult | undefined;
+          let output: NodePatchOutput;
 
-      if (output.status !== "PATCH") {
-        const reason = `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} returned ${output.status}: ${output.reason}`;
-        const attemptRecord: PatchAttemptRecord = {
-          attempt,
-          status: output.status,
-          reason,
-        };
-        attempts.push(attemptRecord);
-        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-        if (attempt < args.config.patchGenerationAttempts && patchOutputNeedsIndependentRetry(output)) {
-          retryContext = { output, failure: { stage: "guard", reason } };
-          continue;
-        }
-        finalRecord = { sectionId, ...attemptRecord, attempts };
-        break;
-      }
-
-      const requiredRequirementIds = new Set(
-        patchScope.auditOutput.findings.map((finding) => finding.requirementId),
-      );
-      const omittedRequirementIds = [...requiredRequirementIds]
-        .filter((requirementId) => !output.requirementIds.includes(requirementId));
-      if (omittedRequirementIds.length > 0) {
-        const reason = `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} omitted required findings: ${omittedRequirementIds.join(", ")}.`;
-        const attemptRecord: PatchAttemptRecord = { attempt, status: "BLOCKED_MODEL", reason };
-        attempts.push(attemptRecord);
-        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-        if (attempt < args.config.patchGenerationAttempts) {
-          retryContext = { output, failure: { stage: "guard", reason } };
-          continue;
-        }
-        finalRecord = { sectionId, ...attemptRecord, attempts };
-        break;
-      }
-
-      let guarded: GuardedPatch;
-      try {
-        guarded = await guardPatch({
-          config: args.config,
-          manifest: args.manifest,
-          auditInput: input,
-          patchOutput: output,
-          scratchDirectory: attemptDirectory,
-        });
-      } catch (error) {
-        const reason = `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} was rejected: ${errorMessage(error)}`;
-        const attemptRecord: PatchAttemptRecord = { attempt, status: "BLOCKED_GUARD", reason };
-        attempts.push(attemptRecord);
-        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-        if (attempt < args.config.patchGenerationAttempts && isRetryablePatchCandidateError(error)) {
-          retryContext = { output, failure: { stage: "guard", reason: errorMessage(error) } };
-          continue;
-        }
-        finalRecord = { sectionId, ...attemptRecord, attempts };
-        break;
-      }
-
-      const conflicts = guarded.changedPaths.filter((changedPath) => claimedPaths.has(changedPath));
-      await writeJson(path.join(args.runDirectory, "locks", `${sectionId}-attempt-${attempt}.json`), {
-        schemaVersion: "design-validation/write-lock/v2",
-        sectionId,
-        attempt,
-        writeSet: guarded.changedPaths,
-        status: conflicts.length > 0 ? "BLOCKED_CONFLICT" : "ACQUIRED",
-        conflicts,
-      });
-      if (conflicts.length > 0) {
-        const attemptRecord: PatchAttemptRecord = {
-          attempt,
-          status: "BLOCKED_CONFLICT",
-          reason: `Another verified patch in this run owns: ${conflicts.join(", ")}.`,
-          patchHash: guarded.patchHash,
-          changedPaths: guarded.changedPaths,
-        };
-        attempts.push(attemptRecord);
-        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-        finalRecord = { sectionId, ...attemptRecord, attempts };
-        break;
-      }
-
-      let worktree: Awaited<ReturnType<typeof createPatchedWorktree>>;
-      try {
-        worktree = await createPatchedWorktree(args.config, guarded);
-      } catch (error) {
-        const attemptRecord: PatchAttemptRecord = {
-          attempt,
-          status: "BLOCKED_GUARD",
-          reason: `Unable to create an isolated patched worktree: ${errorMessage(error)}`,
-          patchHash: guarded.patchHash,
-          changedPaths: guarded.changedPaths,
-        };
-        attempts.push(attemptRecord);
-        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-        finalRecord = { sectionId, ...attemptRecord, attempts };
-        break;
-      }
-
-      try {
-        try {
-          const checks = await verifyPatchedWorktree(args.config, worktree.path);
-          await writeJson(
-            path.join(attemptDirectory, "verification.json"),
-            checks.map((check) => ({
-              ...check,
-              output: sanitizeArtifactText(check.output, args.config, worktree.path),
-            })),
-          );
-          await writeJson(path.join(args.runDirectory, "nodes", sectionId, "verification.json"), {
-            checks: checks.map((check) => check.id),
-            status: "PASS",
-          });
-        } catch (error) {
-          const reason = errorMessage(error);
-          const attemptRecord: PatchAttemptRecord = {
-            attempt,
-            status: "FAILED_TEST",
-            reason,
-            patchHash: guarded.patchHash,
-            changedPaths: guarded.changedPaths,
-          };
-          attempts.push(attemptRecord);
-          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-          if (attempt < args.config.patchGenerationAttempts) {
-            retryContext = { output, failure: { stage: "test", reason } };
-            continue;
+          try {
+            const findingPaths = new Set(remainingFindings.flatMap((finding) => finding.implementationRefs));
+            const patchInputArtifact = {
+              schemaVersion: "design-validation/patch-input/v2",
+              runId: args.runId,
+              targetId: currentInput.run.targetId,
+              sectionId,
+              patchNodeId,
+              parentPatchNodeId,
+              fingerprint: currentInput.node.fingerprint,
+              baseCommit: parentCommit,
+              baseBranch: parentBranch,
+              findings: remainingFindings,
+              designIndexSource: currentInput.contract.designIndexSource,
+              designIndexFragment: currentInput.contract.designIndexFragment,
+              documentAudit: currentInput.contract.documentAudit,
+              evidence: currentInput.evidence,
+              files: currentInput.implementation.files.filter((file) => findingPaths.has(file.path)),
+              allowedWriteGlobs: currentInput.policy.allowedWriteGlobs,
+              payload: currentInput.payload,
+            };
+            await writeJson(path.join(attemptDirectory, "patch-input.json"), patchInputArtifact);
+            await writeJson(path.join(args.runDirectory, "nodes", sectionId, "patch-input.json"), patchInputArtifact);
+            completion = await args.client.completeJson({
+              kind: "patch",
+              sectionId,
+              fingerprint: currentInput.node.fingerprint,
+              requestId: attemptId,
+              systemPrompt: retryContext ? PATCH_RETRY_SYSTEM_PROMPT : PATCH_SYSTEM_PROMPT,
+              userPrompt: retryContext
+                ? patchRetryUserPrompt({
+                  auditInput: currentInput,
+                  auditOutput: remainingAuditOutput,
+                  rejectedOutput: retryContext.output,
+                  failure: retryContext.failure,
+                })
+                : patchUserPrompt({ auditInput: currentInput, auditOutput: remainingAuditOutput }),
+              outputSchema: args.patchCandidateOutputSchema,
+            });
+            await writeJson(path.join(attemptDirectory, "api-response.json"), completion.raw);
+            output = canonicalizePatchOutput({
+              value: completion.parsed,
+              auditInput: currentInput,
+              auditOutput: remainingAuditOutput,
+            });
+            assertPatchOutput(args.validatePatch, output, sectionId, currentInput.node.fingerprint);
+            await writeJson(path.join(attemptDirectory, "output.json"), output);
+            await writeJson(path.join(args.runDirectory, "nodes", sectionId, "patch-output.json"), output);
+          } catch (error) {
+            if (completion) await writeJson(path.join(attemptDirectory, "output-invalid.json"), completion.parsed);
+            const attemptRecord: PatchAttemptRecord = {
+              attempt,
+              patchNodeId,
+              status: "BLOCKED_MODEL",
+              reason: `${patchNodeId} candidate ${attempt}/${args.config.patchGenerationAttempts} failed: ${errorMessage(error)}`,
+            };
+            attempts.push(attemptRecord);
+            await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+            const rejectedOutput = completion
+              ? rejectedPatchSummaryForRetry({
+                value: completion.parsed,
+                input: currentInput,
+                auditOutput: remainingAuditOutput,
+              })
+              : null;
+            retryContext = rejectedOutput
+              ? { output: rejectedOutput, failure: { stage: "guard", reason: errorMessage(error) } }
+              : undefined;
+            if (attempt < args.config.patchGenerationAttempts) continue;
+            finalRecord = { sectionId, ...attemptRecord, attempts };
+            break;
           }
-          finalRecord = { sectionId, ...attemptRecord, attempts };
-          break;
-        }
 
-        const nextInputs = await patchedInputs({
-          originalConfig: args.config,
-          worktreePath: worktree.path,
-          triggerPath: args.triggerPath,
-          runId: args.runId,
-          manifest: args.manifest,
-          contractSchemaHash: args.contractSchemaHash,
-          changeEvent: args.changeEvent,
-          documentOutputs: args.documentOutputs,
-        });
-        const nextInput = nextInputs.get(sectionId);
-        if (!nextInput) throw new Error(`Patched input is missing ${sectionId}.`);
-        const reaudit = await callAudit({
-          client: args.client,
-          input: nextInput,
-          kind: "reaudit",
-          requestId: `${args.runId}:reaudit:${sectionId}:attempt:${attempt}`,
-          maxAttempts: args.config.auditAttempts,
-          validate: args.validateAudit,
-          outputSchema: args.auditOutputSchema,
-          systemPrompt: PATCH_REAUDIT_SYSTEM_PROMPT,
-          userPrompt: patchReauditUserPrompt({
-            before: input,
-            after: nextInput,
-            auditOutput: resolved.output,
-            patchOutput: output,
-            diff: guarded.diff,
-          }),
-        });
-        reauditCalls += reaudit.attempts.length;
-        await saveAuditCall(path.join(attemptDirectory, "reaudit"), nextInput, reaudit);
-        if (!reaudit.ok || reaudit.output.status !== "PASS") {
-          const reason = reaudit.ok ? `Patched code remained ${reaudit.output.status}.` : reaudit.error;
-          const attemptRecord: PatchAttemptRecord = {
-            attempt,
-            status: "FAILED_REAUDIT",
-            reason,
-            patchHash: guarded.patchHash,
-            changedPaths: guarded.changedPaths,
-          };
-          attempts.push(attemptRecord);
-          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-          if (attempt < args.config.patchGenerationAttempts) {
-            retryContext = { output, failure: { stage: "reaudit", reason } };
-            continue;
-          }
-          finalRecord = { sectionId, ...attemptRecord, attempts };
-          break;
-        }
-
-        const regressionSectionIds = SECTION_IDS.filter((candidateId) => {
-          if (candidateId === sectionId) return false;
-          const before = args.inputs.get(candidateId);
-          const after = nextInputs.get(candidateId);
-          const previousResult = args.resolved.get(candidateId);
-          return (
-            before !== undefined &&
-            after !== undefined &&
-            previousResult?.output.status === "PASS" &&
-            before.node.fingerprint !== after.node.fingerprint
-          );
-        });
-        const regressionResults = await runWithConcurrency(
-          regressionSectionIds,
-          args.config.nvidia.concurrency,
-          async (regressionSectionId): Promise<AuditCallResult> => {
-            const regressionInput = nextInputs.get(regressionSectionId);
-            if (!regressionInput) {
-              return {
-                ok: false,
-                sectionId: regressionSectionId,
-                error: `Patched regression input is missing ${regressionSectionId}.`,
-                attempts: [],
-              };
+          if (blockedConflictContradictsExactFinding(remainingAuditOutput, output)) {
+            const reason = `${patchNodeId} contradicted a structurally verified exact-contract omission.`;
+            const attemptRecord: PatchAttemptRecord = { attempt, patchNodeId, status: "BLOCKED_MODEL", reason };
+            attempts.push(attemptRecord);
+            await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+            if (attempt < args.config.patchGenerationAttempts) {
+              retryContext = { output, failure: { stage: "guard", reason } };
+              continue;
             }
-            const result = await callAudit({
+            finalRecord = { sectionId, ...attemptRecord, attempts };
+            break;
+          }
+
+          if (output.status !== "PATCH") {
+            const reason = `${patchNodeId} returned ${output.status}: ${output.reason}`;
+            const attemptRecord: PatchAttemptRecord = { attempt, patchNodeId, status: output.status, reason };
+            attempts.push(attemptRecord);
+            await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+            if (attempt < args.config.patchGenerationAttempts && patchOutputNeedsIndependentRetry(output)) {
+              retryContext = { output, failure: { stage: "guard", reason } };
+              continue;
+            }
+            finalRecord = { sectionId, ...attemptRecord, attempts };
+            break;
+          }
+
+          const parentConfig: PipelineConfig = {
+            ...args.config,
+            repositoryRoot: activeParentWorktree?.path ?? args.config.repositoryRoot,
+            baseCommit: parentCommit,
+          };
+          let guarded: GuardedPatch;
+          try {
+            guarded = await guardPatch({
+              config: parentConfig,
+              manifest: args.manifest,
+              auditInput: currentInput,
+              patchOutput: output,
+              scratchDirectory: attemptDirectory,
+            });
+          } catch (error) {
+            const reason = `${patchNodeId} was rejected: ${errorMessage(error)}`;
+            const attemptRecord: PatchAttemptRecord = { attempt, patchNodeId, status: "BLOCKED_GUARD", reason };
+            attempts.push(attemptRecord);
+            await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+            if (attempt < args.config.patchGenerationAttempts && isRetryablePatchCandidateError(error)) {
+              retryContext = { output, failure: { stage: "guard", reason: errorMessage(error) } };
+              continue;
+            }
+            finalRecord = { sectionId, ...attemptRecord, attempts };
+            break;
+          }
+
+          const conflicts = guarded.changedPaths.filter((changedPath) => claimedPaths.has(changedPath));
+          await writeJson(path.join(args.runDirectory, "locks", `${patchNodeId}-attempt-${attempt}.json`), {
+            schemaVersion: "design-validation/write-lock/v2",
+            sectionId,
+            patchNodeId,
+            attempt,
+            writeSet: guarded.changedPaths,
+            status: conflicts.length > 0 ? "BLOCKED_CONFLICT" : "ACQUIRED",
+            conflicts,
+          });
+          if (conflicts.length > 0) {
+            const attemptRecord: PatchAttemptRecord = {
+              attempt,
+              patchNodeId,
+              status: "BLOCKED_CONFLICT",
+              reason: `Another verified Section patch owns: ${conflicts.join(", ")}.`,
+              patchHash: guarded.patchHash,
+              changedPaths: guarded.changedPaths,
+            };
+            attempts.push(attemptRecord);
+            await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+            finalRecord = { sectionId, ...attemptRecord, attempts };
+            break;
+          }
+
+          let worktree: Awaited<ReturnType<typeof createPatchedWorktree>>;
+          try {
+            worktree = await createPatchedWorktree(args.config, guarded, parentCommit);
+          } catch (error) {
+            const attemptRecord: PatchAttemptRecord = {
+              attempt,
+              patchNodeId,
+              status: "BLOCKED_GUARD",
+              reason: `Unable to create ${patchNodeId} worktree: ${errorMessage(error)}`,
+              patchHash: guarded.patchHash,
+              changedPaths: guarded.changedPaths,
+            };
+            attempts.push(attemptRecord);
+            await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+            finalRecord = { sectionId, ...attemptRecord, attempts };
+            break;
+          }
+
+          let retainAsParent = false;
+          try {
+            try {
+              const checks = await verifyPatchedWorktree(args.config, worktree.path);
+              await writeJson(
+                path.join(attemptDirectory, "verification.json"),
+                checks.map((check) => ({
+                  ...check,
+                  output: sanitizeArtifactText(check.output, args.config, worktree.path),
+                })),
+              );
+            } catch (error) {
+              const reason = errorMessage(error);
+              const attemptRecord: PatchAttemptRecord = {
+                attempt,
+                patchNodeId,
+                status: "FAILED_TEST",
+                reason,
+                patchHash: guarded.patchHash,
+                changedPaths: guarded.changedPaths,
+              };
+              attempts.push(attemptRecord);
+              await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+              if (attempt < args.config.patchGenerationAttempts) {
+                retryContext = { output, failure: { stage: "test", reason } };
+                continue;
+              }
+              finalRecord = { sectionId, ...attemptRecord, attempts };
+              break;
+            }
+
+            const nextInputs = await patchedInputs({
+              originalConfig: parentConfig,
+              worktreePath: worktree.path,
+              triggerPath: args.triggerPath,
+              runId: `${args.runId}:${patchNodeId}`,
+              manifest: args.manifest,
+              contractSchemaHash: args.contractSchemaHash,
+              changeEvent: args.changeEvent,
+              documentOutputs: args.documentOutputs,
+            });
+            const nextInput = nextInputs.get(sectionId);
+            if (!nextInput) throw new Error(`Patched input is missing ${sectionId}.`);
+            const addressedFindings = remainingFindings.filter(
+              (finding) => output.requirementIds.includes(finding.requirementId),
+            );
+            const childAuditOutput: NodeAuditOutput = {
+              ...remainingAuditOutput,
+              findings: addressedFindings,
+            };
+            const reaudit = await callAudit({
               client: args.client,
-              input: regressionInput,
+              input: nextInput,
               kind: "reaudit",
-              requestId: `${args.runId}:regression:${sectionId}:attempt:${attempt}:${regressionSectionId}`,
+              requestId: `${args.runId}:reaudit:${patchNodeId}:attempt:${attempt}`,
               maxAttempts: args.config.auditAttempts,
               validate: args.validateAudit,
               outputSchema: args.auditOutputSchema,
-              systemPrompt: REGRESSION_AUDIT_SYSTEM_PROMPT,
-              userPrompt: regressionAuditUserPrompt({
-                before: args.inputs.get(regressionSectionId)!,
-                after: regressionInput,
-                changedPaths: guarded.changedPaths,
+              systemPrompt: PATCH_REAUDIT_SYSTEM_PROMPT,
+              userPrompt: patchReauditUserPrompt({
+                before: currentInput,
+                after: nextInput,
+                auditOutput: childAuditOutput,
+                patchOutput: output,
+                diff: guarded.diff,
               }),
             });
-            await writeJson(
-              path.join(attemptDirectory, "regressions", regressionSectionId, "before-input.json"),
-              args.inputs.get(regressionSectionId),
+            reauditCalls += reaudit.attempts.length;
+            await saveAuditCall(path.join(attemptDirectory, "reaudit"), nextInput, reaudit);
+            if (!reaudit.ok || reaudit.output.status !== "PASS") {
+              const reason = reaudit.ok ? `Patched code remained ${reaudit.output.status}.` : reaudit.error;
+              const attemptRecord: PatchAttemptRecord = {
+                attempt,
+                patchNodeId,
+                status: "FAILED_REAUDIT",
+                reason,
+                patchHash: guarded.patchHash,
+                changedPaths: guarded.changedPaths,
+              };
+              attempts.push(attemptRecord);
+              await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+              if (attempt < args.config.patchGenerationAttempts) {
+                retryContext = { output, failure: { stage: "reaudit", reason } };
+                continue;
+              }
+              finalRecord = { sectionId, ...attemptRecord, attempts };
+              break;
+            }
+
+            const regressionSectionIds = SECTION_IDS.filter((candidateId) => {
+              if (candidateId === sectionId) return false;
+              const before = currentInputs.get(candidateId);
+              const after = nextInputs.get(candidateId);
+              const previousResult = args.resolved.get(candidateId);
+              return Boolean(
+                before &&
+                after &&
+                previousResult?.output.status === "PASS" &&
+                before.node.fingerprint !== after.node.fingerprint
+              );
+            });
+            const regressionResults = await runWithConcurrency(
+              regressionSectionIds,
+              args.config.nvidia.concurrency,
+              async (regressionSectionId): Promise<AuditCallResult> => {
+                const before = currentInputs.get(regressionSectionId);
+                const after = nextInputs.get(regressionSectionId);
+                if (!before || !after) {
+                  return {
+                    ok: false,
+                    sectionId: regressionSectionId,
+                    error: `Patched regression input is missing ${regressionSectionId}.`,
+                    attempts: [],
+                  };
+                }
+                const result = await callAudit({
+                  client: args.client,
+                  input: after,
+                  kind: "reaudit",
+                  requestId: `${args.runId}:regression:${patchNodeId}:attempt:${attempt}:${regressionSectionId}`,
+                  maxAttempts: args.config.auditAttempts,
+                  validate: args.validateAudit,
+                  outputSchema: args.auditOutputSchema,
+                  systemPrompt: REGRESSION_AUDIT_SYSTEM_PROMPT,
+                  userPrompt: regressionAuditUserPrompt({ before, after, changedPaths: guarded.changedPaths }),
+                });
+                await writeJson(
+                  path.join(attemptDirectory, "regressions", regressionSectionId, "before-input.json"),
+                  before,
+                );
+                await saveAuditCall(path.join(attemptDirectory, "regressions"), after, result);
+                return result;
+              },
             );
-            await saveAuditCall(
-              path.join(attemptDirectory, "regressions"),
-              regressionInput,
-              result,
+            reauditCalls += regressionResults.reduce((count, result) => count + result.attempts.length, 0);
+            const regressionFailures = regressionResults.filter(
+              (result) => !result.ok || result.output.status !== "PASS",
             );
-            return result;
-          },
-        );
-        reauditCalls += regressionResults.reduce((count, result) => count + result.attempts.length, 0);
-        const regressionFailures = regressionResults.filter(
-          (result) => !result.ok || result.output.status !== "PASS",
-        );
-        if (regressionFailures.length > 0) {
-          const reason = `Patch regressed previously PASS Sections: ${regressionFailures
-            .map((result) => result.ok ? `${result.sectionId}:${result.output.status}` : `${result.sectionId}:ERROR`)
-            .join(", ")}.`;
-          const attemptRecord: PatchAttemptRecord = {
-            attempt,
-            status: "FAILED_REAUDIT",
-            reason,
-            patchHash: guarded.patchHash,
-            changedPaths: guarded.changedPaths,
-          };
-          attempts.push(attemptRecord);
-          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-          if (attempt < args.config.patchGenerationAttempts) {
-            retryContext = { output, failure: { stage: "regression", reason } };
-            continue;
+            if (regressionFailures.length > 0) {
+              const reason = `Patch regressed previously PASS Sections: ${regressionFailures
+                .map((result) => result.ok ? `${result.sectionId}:${result.output.status}` : `${result.sectionId}:ERROR`)
+                .join(", ")}.`;
+              const attemptRecord: PatchAttemptRecord = {
+                attempt,
+                patchNodeId,
+                status: "FAILED_REAUDIT",
+                reason,
+                patchHash: guarded.patchHash,
+                changedPaths: guarded.changedPaths,
+              };
+              attempts.push(attemptRecord);
+              await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+              if (attempt < args.config.patchGenerationAttempts) {
+                retryContext = { output, failure: { stage: "regression", reason } };
+                continue;
+              }
+              finalRecord = { sectionId, ...attemptRecord, attempts };
+              break;
+            }
+
+            if (!args.config.createPrs) {
+              const unresolvedAfter = remainingFindings.filter(
+                (finding) => !output.requirementIds.includes(finding.requirementId),
+              );
+              const attemptRecord: PatchAttemptRecord = {
+                attempt,
+                patchNodeId,
+                status: "PATCH_VERIFIED",
+                reason: unresolvedAfter.length === 0
+                  ? "Patch passed all guards and re-audits; PR creation is disabled."
+                  : "A partial child patch passed, but stacked continuation requires PR publication.",
+                patchHash: guarded.patchHash,
+                changedPaths: guarded.changedPaths,
+              };
+              attempts.push(attemptRecord);
+              await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+              finalRecord = {
+                sectionId,
+                ...attemptRecord,
+                attempts,
+                addressedRequirementIds: output.requirementIds,
+                unresolvedRequirementIds: unresolvedAfter.map((finding) => finding.requirementId),
+              };
+              break;
+            }
+
+            try {
+              const prKey = pullRequestKey({
+                targetId: currentInput.run.targetId,
+                sectionId,
+                patchNodeId,
+                fingerprint: currentInput.node.fingerprint,
+                patchHash: guarded.patchHash,
+              });
+              const affectedPassAttestations = SECTION_IDS
+                .filter((candidateId) => candidateId !== sectionId)
+                .filter((candidateId) => {
+                  const candidateInput = currentInputs.get(candidateId);
+                  return candidateInput?.implementation.files.some((file) => guarded.changedPaths.includes(file.path));
+                })
+                .map((candidateId) => args.attestations.get(candidateId)?.attestationHash)
+                .filter((value): value is NonNullable<typeof value> => value !== undefined);
+              const runUrl = args.config.runId
+                ? `${args.config.github.serverUrl}/${args.config.repository}/actions/runs/${args.config.runId}`
+                : null;
+              const prManifest: PullRequestManifest = {
+                schemaVersion: "design-validation/pr-manifest/v2",
+                prKey,
+                targetId: currentInput.run.targetId,
+                sectionId,
+                patchNodeId,
+                parentPatchNodeId,
+                fingerprint: currentInput.node.fingerprint,
+                triggerSource: {
+                  path: currentInput.contract.designIndexSource.path,
+                  documentHash: currentInput.contract.designIndexSource.documentHash,
+                  sectionHeading: currentInput.contract.designIndexSource.sectionHeading,
+                },
+                baseCommit: parentCommit,
+                baseBranch: parentBranch,
+                requirementIds: output.requirementIds,
+                evidenceRefs: output.evidenceRefs,
+                patchHash: guarded.patchHash,
+                readSet: output.readSet,
+                writeSet: output.writeSet,
+                affectedPassAttestations,
+                checks: {
+                  schema: "PASS",
+                  scope: "PASS",
+                  immutableInputs: "PASS",
+                  build: "PASS",
+                  test: "PASS",
+                  visual: "PASS",
+                  accessibility: "PASS",
+                  regression: "PASS",
+                  base: "PASS",
+                },
+                runId: args.runId,
+                runUrl,
+              };
+              assertContract(args.validatePrManifest, prManifest, `${patchNodeId} PR manifest`);
+              await writeJson(path.join(attemptDirectory, "pr-manifest.json"), prManifest);
+              const pull = await publishPatchPullRequest({
+                config: args.config,
+                worktreePath: worktree.path,
+                input: currentInput,
+                auditOutput: remainingAuditOutput,
+                patch: guarded,
+                manifest: prManifest,
+                patchAttempt: attempt,
+                patchNodeId,
+                baseBranch: parentBranch,
+                baseCommit: parentCommit,
+              });
+              const attemptRecord: PatchAttemptRecord = {
+                attempt,
+                patchNodeId,
+                status: pull.reused ? "PR_REUSED" : "PR_CREATED",
+                reason: pull.reused
+                  ? `Reused ${patchNodeId} and preserved its stacked parent.`
+                  : `Created ${patchNodeId} as a verified stacked draft PR.`,
+                patchHash: guarded.patchHash,
+                changedPaths: guarded.changedPaths,
+              };
+              attempts.push(attemptRecord);
+              await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+              childPullRequests.push({
+                patchNodeId,
+                parentPatchNodeId,
+                number: pull.number,
+                url: pull.url,
+                branch: pull.branch,
+                baseBranch: parentBranch,
+                requirementIds: output.requirementIds,
+              });
+              for (const requirementId of output.requirementIds) addressedRequirementIds.add(requirementId);
+              for (const changedPath of guarded.changedPaths) sectionChangedPaths.add(changedPath);
+
+              const previousParentWorktree = activeParentWorktree;
+              activeParentWorktree = worktree;
+              retainAsParent = true;
+              if (previousParentWorktree) await previousParentWorktree.cleanup();
+              parentPatchNodeId = patchNodeId;
+              parentBranch = pull.branch;
+              parentCommit = pull.commit;
+              currentInputs = await patchedInputs({
+                originalConfig: { ...args.config, baseCommit: pull.commit },
+                worktreePath: worktree.path,
+                triggerPath: args.triggerPath,
+                runId: `${args.runId}:${patchNodeId}:parent`,
+                manifest: args.manifest,
+                contractSchemaHash: args.contractSchemaHash,
+                changeEvent: args.changeEvent,
+                documentOutputs: args.documentOutputs,
+              });
+              const publishedInput = currentInputs.get(sectionId);
+              if (!publishedInput) throw new Error(`Published parent input is missing ${sectionId}.`);
+              currentInput = publishedInput;
+              childIndex += 1;
+              childPublished = true;
+              break;
+            } catch (error) {
+              const reason = errorMessage(error);
+              const waitingForWriteLock = reason.startsWith("BLOCKED_CONFLICT:");
+              const attemptRecord: PatchAttemptRecord = {
+                attempt,
+                patchNodeId,
+                status: waitingForWriteLock ? "BLOCKED_CONFLICT" : "FAILED_PUBLISH",
+                reason,
+                patchHash: guarded.patchHash,
+                changedPaths: guarded.changedPaths,
+              };
+              attempts.push(attemptRecord);
+              await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+              finalRecord = { sectionId, ...attemptRecord, attempts };
+              break;
+            }
+          } finally {
+            if (!retainAsParent) await worktree.cleanup();
           }
-          finalRecord = { sectionId, ...attemptRecord, attempts };
-          break;
         }
 
-        for (const changedPath of guarded.changedPaths) claimedPaths.add(changedPath);
-        if (!args.config.createPrs) {
-          const attemptRecord: PatchAttemptRecord = {
-            attempt,
-            status: "PATCH_VERIFIED",
-            reason: args.config.dryRun
-              ? "Patch passed all guards and re-audits; dry-run prevented publication."
-              : "Patch passed all guards and re-audits; PR creation is disabled.",
-            patchHash: guarded.patchHash,
-            changedPaths: guarded.changedPaths,
-          };
-          attempts.push(attemptRecord);
-          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-          finalRecord = { sectionId, ...attemptRecord, attempts };
-          break;
-        }
-
-        try {
-          const prKey = pullRequestKey({
-            targetId: input.run.targetId,
-            sectionId,
-            fingerprint: input.node.fingerprint,
-            patchHash: guarded.patchHash,
-          });
-          const affectedPassAttestations = SECTION_IDS
-            .filter((candidateId) => candidateId !== sectionId)
-            .filter((candidateId) => {
-              const candidateInput = args.inputs.get(candidateId);
-              return candidateInput?.implementation.files.some((file) => guarded.changedPaths.includes(file.path));
-            })
-            .map((candidateId) => args.attestations.get(candidateId)?.attestationHash)
-            .filter((value): value is NonNullable<typeof value> => value !== undefined);
-          const runUrl = args.config.runId
-            ? `${args.config.github.serverUrl}/${args.config.repository}/actions/runs/${args.config.runId}`
-            : null;
-          const prManifest: PullRequestManifest = {
-            schemaVersion: "design-validation/pr-manifest/v2",
-            prKey,
-            targetId: input.run.targetId,
-            sectionId,
-            fingerprint: input.node.fingerprint,
-            triggerSource: {
-              path: input.contract.designIndexSource.path,
-              documentHash: input.contract.designIndexSource.documentHash,
-              sectionHeading: input.contract.designIndexSource.sectionHeading,
-            },
-            baseCommit: args.config.baseCommit,
-            baseBranch: args.config.github.baseBranch,
-            requirementIds: output.requirementIds,
-            evidenceRefs: output.evidenceRefs,
-            patchHash: guarded.patchHash,
-            readSet: output.readSet,
-            writeSet: output.writeSet,
-            affectedPassAttestations,
-            checks: {
-              schema: "PASS",
-              scope: "PASS",
-              immutableInputs: "PASS",
-              build: "PASS",
-              test: "PASS",
-              visual: "PASS",
-              accessibility: "PASS",
-              regression: "PASS",
-              base: "PASS",
-            },
-            runId: args.runId,
-            runUrl,
-          };
-          assertContract(args.validatePrManifest, prManifest, `${sectionId} PR manifest`);
-          await writeJson(path.join(attemptDirectory, "pr-manifest.json"), prManifest);
-          await writeJson(path.join(args.runDirectory, "nodes", sectionId, "pr-manifest.json"), prManifest);
-          const pull = await publishPatchPullRequest({
-            config: args.config,
-            worktreePath: worktree.path,
-            input,
-            auditOutput: patchScope.feedbackOutput,
-            patch: guarded,
-            manifest: prManifest,
-            patchAttempt: attempt,
-          });
-          const attemptRecord: PatchAttemptRecord = {
-            attempt,
-            status: pull.reused ? "PR_REUSED" : "PR_CREATED",
-            reason: pull.reused ? "Reused the existing idempotent draft PR." : "Created a verified draft PR.",
-            patchHash: guarded.patchHash,
-            changedPaths: guarded.changedPaths,
-          };
-          attempts.push(attemptRecord);
-          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-          finalRecord = {
-            sectionId,
-            ...attemptRecord,
-            attempts,
-            addressedRequirementIds: output.requirementIds,
-            unresolvedRequirementIds: [],
-            pullRequest: { number: pull.number, url: pull.url, branch: pull.branch },
-          };
-          break;
-        } catch (error) {
-          const reason = errorMessage(error);
-          const waitingForWriteLock = reason.startsWith("BLOCKED_CONFLICT:");
-          const attemptRecord: PatchAttemptRecord = {
-            attempt,
-            status: waitingForWriteLock ? "BLOCKED_CONFLICT" : "FAILED_PUBLISH",
-            reason,
-            patchHash: guarded.patchHash,
-            changedPaths: guarded.changedPaths,
-          };
-          attempts.push(attemptRecord);
-          await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-          finalRecord = { sectionId, ...attemptRecord, attempts };
-          break;
-        }
-      } finally {
-        await worktree.cleanup();
+        if (finalRecord || !childPublished) break;
       }
+    } finally {
+      if (activeParentWorktree) await activeParentWorktree.cleanup();
+    }
+
+    for (const changedPath of sectionChangedPaths) claimedPaths.add(changedPath);
+    if (!finalRecord && addressedRequirementIds.size === allPatchableFindings.length) {
+      const lastPull = childPullRequests.at(-1);
+      const allReused = childPullRequests.length > 0 && attempts
+        .filter((attempt) => attempt.status === "PR_CREATED" || attempt.status === "PR_REUSED")
+        .every((attempt) => attempt.status === "PR_REUSED");
+      finalRecord = {
+        sectionId,
+        status: allReused ? "PR_REUSED" : "PR_CREATED",
+        reason: `Published ${childPullRequests.length} stacked child PR(s) for ${sectionId}.`,
+        addressedRequirementIds: [...addressedRequirementIds],
+        unresolvedRequirementIds: [],
+        ...(lastPull ? { pullRequest: { number: lastPull.number, url: lastPull.url, branch: lastPull.branch } } : {}),
+        childPullRequests,
+        attempts,
+      };
+    } else if (finalRecord) {
+      finalRecord = {
+        ...finalRecord,
+        addressedRequirementIds: [...addressedRequirementIds],
+        unresolvedRequirementIds: allPatchableFindings
+          .filter((finding) => !addressedRequirementIds.has(finding.requirementId))
+          .map((finding) => finding.requirementId),
+        childPullRequests,
+        ...(childPullRequests.at(-1)
+          ? {
+            pullRequest: {
+              number: childPullRequests.at(-1)!.number,
+              url: childPullRequests.at(-1)!.url,
+              branch: childPullRequests.at(-1)!.branch,
+            },
+          }
+          : {}),
+      };
     }
 
     if (
