@@ -51,6 +51,11 @@
     letter-spacing: 0;
   }
 
+  .page {
+    min-width: 0;
+    overflow-x: clip;
+    background: #fff;
+  }
   :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
   .skip-link { position: fixed; top: 10px; left: 10px; z-index: 300; padding: 10px 14px; background: #fff; color: #111; transform: translateY(-160%); }
   .skip-link:focus { transform: translateY(0); }
