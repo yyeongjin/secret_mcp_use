@@ -20,10 +20,6 @@ interface PullRequestResponse {
   base?: { ref: string; sha: string };
 }
 
-interface PullRequestFileResponse {
-  filename: string;
-}
-
 interface IssueCommentResponse {
   body?: string | null;
 }
@@ -477,30 +473,6 @@ async function openPullRequestForPatchNode(
   }) ?? null;
 }
 
-async function conflictingPullRequest(
-  config: PipelineConfig,
-  branch: string,
-  changedPaths: string[],
-  targetId: string,
-  sectionId: string,
-  ancestorBranches: ReadonlySet<string>,
-): Promise<{ number: number; url: string; paths: string[] } | null> {
-  for (const pull of await allAutomationPullRequestsAnyBase(config, "open")) {
-    if (pull.head?.ref === branch) continue;
-    if (pull.head?.ref && ancestorBranches.has(pull.head.ref)) continue;
-    const manifest = manifestFromBody(pull.body);
-    if (manifest?.targetId === targetId && manifest.sectionId === sectionId) continue;
-    const files = await githubRequest<PullRequestFileResponse[]>(
-      config,
-      "GET",
-      `/repos/${config.repository}/pulls/${pull.number}/files?per_page=100`,
-    );
-    const overlap = files.map((file) => file.filename).filter((filename) => changedPaths.includes(filename));
-    if (overlap.length > 0) return { number: pull.number, url: pull.html_url, paths: overlap };
-  }
-  return null;
-}
-
 async function assertBranchAtCommit(
   config: PipelineConfig,
   baseBranch: string,
@@ -662,7 +634,6 @@ export async function publishPatchPullRequest(args: {
   patchNodeId: string;
   baseBranch: string;
   baseCommit: string;
-  ancestorBranches?: ReadonlySet<string>;
 }): Promise<{
   branch: string;
   commit: string;
@@ -699,18 +670,6 @@ export async function publishPatchPullRequest(args: {
   if (existingSectionPull && !existingSectionPull.head?.sha) {
     throw new Error(`Cannot refresh PR #${existingSectionPull.number}: the automation branch SHA is unavailable.`);
   }
-  const conflict = await conflictingPullRequest(
-    args.config,
-    branch,
-    args.patch.changedPaths,
-    args.input.run.targetId,
-    args.input.node.sectionId,
-    args.ancestorBranches ?? new Set<string>(),
-  );
-  if (conflict) {
-    throw new Error(`BLOCKED_CONFLICT: open automation PR #${conflict.number} owns ${conflict.paths.join(", ")}: ${conflict.url}`);
-  }
-
   await runCommand("git", ["switch", "-C", branch, args.baseCommit], { cwd: args.worktreePath });
   await runCommand("git", ["config", "user.name", "secret-mcp-validation[bot]"], { cwd: args.worktreePath });
   await runCommand("git", ["config", "user.email", "secret-mcp-validation[bot]@users.noreply.github.com"], { cwd: args.worktreePath });

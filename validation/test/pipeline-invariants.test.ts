@@ -13,6 +13,7 @@ test("PATCH_REQUIRED scheduling cannot regain dependency or write-set wait gates
   assert.doesNotMatch(runPatches, /unresolvedPatchDependencies/);
   assert.doesNotMatch(runPatches, /WAITING_DEPENDENCY/);
   assert.doesNotMatch(runPatches, /claimedPaths/);
+  assert.doesNotMatch(runPatches, /BLOCKED_CONFLICT/);
   assert.match(runPatches, /stackParentBranch/);
   assert.match(runPatches, /stackParentCommit/);
   assert.match(runPatches, /ACQUIRED_STACKED/);

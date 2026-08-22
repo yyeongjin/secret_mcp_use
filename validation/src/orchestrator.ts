@@ -144,7 +144,6 @@ interface PatchAttemptRecord {
     | "BLOCKED_PATCH_TOO_LARGE"
     | "BLOCKED_AUDIT_CONFLICT"
     | "BLOCKED_GUARD"
-    | "BLOCKED_CONFLICT"
     | "FAILED_TEST"
     | "FAILED_REAUDIT"
     | "FAILED_PUBLISH"
@@ -167,7 +166,6 @@ export interface PatchRecord {
     | "BLOCKED_PATCH_TOO_LARGE"
     | "BLOCKED_AUDIT_CONFLICT"
     | "BLOCKED_GUARD"
-    | "BLOCKED_CONFLICT"
     | "FAILED_TEST"
     | "FAILED_REAUDIT"
     | "FAILED_PUBLISH"
@@ -934,7 +932,6 @@ async function runPatches(args: {
   let stackParentBranch = args.config.github.baseBranch;
   let stackParentCommit = args.config.baseCommit;
   let stackParentPatchNodeId: string | null = null;
-  const stackAncestorBranches = new Set<string>();
   const scratchDirectory = path.join(args.runDirectory, "patches");
   await mkdir(scratchDirectory, { recursive: true });
 
@@ -1457,7 +1454,6 @@ async function runPatches(args: {
                 patchNodeId,
                 baseBranch: parentBranch,
                 baseCommit: parentCommit,
-                ancestorBranches: stackAncestorBranches,
               });
               const attemptRecord: PatchAttemptRecord = {
                 attempt,
@@ -1488,7 +1484,6 @@ async function runPatches(args: {
               parentPatchNodeId = patchNodeId;
               parentBranch = pull.branch;
               parentCommit = pull.commit;
-              stackAncestorBranches.add(pull.branch);
               currentInputs = await patchedInputs({
                 originalConfig: { ...args.config, baseCommit: pull.commit },
                 worktreePath: worktree.path,
@@ -1507,11 +1502,10 @@ async function runPatches(args: {
               break;
             } catch (error) {
               const reason = errorMessage(error);
-              const nonAncestorPublicationConflict = reason.startsWith("BLOCKED_CONFLICT:");
               const attemptRecord: PatchAttemptRecord = {
                 attempt,
                 patchNodeId,
-                status: nonAncestorPublicationConflict ? "BLOCKED_CONFLICT" : "FAILED_PUBLISH",
+                status: "FAILED_PUBLISH",
                 reason,
                 patchHash: guarded.patchHash,
                 changedPaths: guarded.changedPaths,
@@ -2098,7 +2092,6 @@ async function runTrigger(args: {
         .filter((record) => [
           "BLOCKED_MODEL",
           "BLOCKED_GUARD",
-          "BLOCKED_CONFLICT",
           "FAILED_TEST",
           "FAILED_REAUDIT",
           "FAILED_PUBLISH",

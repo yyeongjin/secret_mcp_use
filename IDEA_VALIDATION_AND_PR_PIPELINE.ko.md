@@ -256,7 +256,6 @@ trigger 문서에서 실제로 바뀐 줄이 S05뿐이어도 새 trigger content
 - `BLOCKED_CONTRACT_CONFLICT`
 - `BLOCKED_DEPENDENCY`
 - `BLOCKED_PATCH_TOO_LARGE`
-- `BLOCKED_CONFLICT`
 - `BLOCKED_IMMUTABLE_INPUT_WRITE`
 - `FAILED_TRIGGER_STRUCTURE`
 - `STALE_TRIGGER`
@@ -1789,7 +1788,6 @@ DISCOVERED
 - `BLOCKED_MISSING_VALUE`
 - `BLOCKED_CONTRACT_CONFLICT`
 - `BLOCKED_DEPENDENCY`
-- `BLOCKED_CONFLICT`
 - `BLOCKED_CROSS_OWNER_CHANGE`
 - `BLOCKED_IMMUTABLE_INPUT_WRITE`
 - `BLOCKED_PATCH_TOO_LARGE`
@@ -1915,7 +1913,7 @@ NVIDIA 호출은 token bucket으로 RPM을 제한한다. Stage별 19개 요청�
 
 - 결정적 branch와 idempotency key
 - 중복 PR 검색
-- stacked parent chain과 비-선조 publication conflict 검사
+- stacked parent chain과 중복 PR key 검사
 - 검증된 patch만 PR 생성
 - merge queue와 stale base 재검증
 - 병합 후 PASS attestation 기록
