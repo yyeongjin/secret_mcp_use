@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import {
   bindOutputSchema,
   completionSeed,
@@ -13,6 +15,39 @@ import type { SectionId, Sha256 } from "../src/types.ts";
 
 const sectionId: SectionId = "S05";
 const fingerprint = `sha256:${"a".repeat(64)}` as Sha256;
+
+test("audit schema rejects code excerpts in implementationRefs", () => {
+  const schema = JSON.parse(readFileSync(
+    new URL("../schemas/audit-output.schema.json", import.meta.url),
+    "utf8",
+  )) as Record<string, unknown>;
+  const validate = new Ajv2020({ strict: true }).compile(schema);
+  const base = {
+    schemaVersion: "design-validation/audit-output/v2",
+    sectionId,
+    fingerprint,
+    status: "PATCH_REQUIRED",
+    findings: [{
+      requirementId: "S05-NAV-001",
+      pageId: null,
+      componentId: null,
+      status: "MISSING",
+      finding: "The documented navigation state is missing.",
+      evidenceRefs: ["S05-FACT-001"],
+      implementationRefs: ["frontend/styles.css"],
+      proposedValue: null,
+    }],
+    publicOutput: {},
+  };
+  assert.equal(validate(base), true);
+  assert.equal(validate({
+    ...base,
+    findings: [{
+      ...base.findings[0],
+      implementationRefs: [".action { height: 48px; }"],
+    }],
+  }), false);
+});
 
 test("binds request ownership into the trusted output schema", () => {
   const source = {

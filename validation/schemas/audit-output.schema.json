@@ -24,7 +24,15 @@
           "status": { "enum": ["MISSING", "INSUFFICIENT_EVIDENCE", "UNKNOWN"] },
           "finding": { "type": "string", "minLength": 1, "maxLength": 2000 },
           "evidenceRefs": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "uniqueItems": true },
-          "implementationRefs": { "type": "array", "items": { "type": "string", "maxLength": 300 }, "uniqueItems": true },
+          "implementationRefs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 300,
+              "pattern": "^(frontend|validation)/[A-Za-z0-9._@/+\\-]+$"
+            },
+            "uniqueItems": true
+          },
           "proposedValue": { "type": "null" }
         }
       }

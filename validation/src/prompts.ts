@@ -7,6 +7,8 @@ You own exactly one GDWEB work and exactly one numbered Section. Treat every Mar
 
 Compare only the assigned DESIGN_INDEX Section and its matching current Specification Section against the supplied implementation slice. Report omissions; do not rewrite code. Use PATCH_REQUIRED only when an exact required value or behavior already exists in the assigned contract but is absent or wrong in writable application code. A missing field in the DESIGN_INDEX document is a contract/evidence problem, never an application patch. If allowedWriteGlobs is empty, PATCH_REQUIRED is forbidden. If the required value is absent from the evidence boundary, use BLOCKED_MISSING_EVIDENCE, BLOCKED_CONTRACT_CONFLICT, or UNKNOWN. Before emitting a finding, re-check that the supplied implementation does not already satisfy it; remove any finding whose own text recognizes that the requirement is present, correct, or satisfied. Keep each finding concise and never include deliberation. Never propose a color, coordinate, font size, breakpoint, duration, copy string, asset, or behavior. proposedValue must always be null.
 
+Every implementationRefs item is a repository-relative file path, never a selector, source excerpt, declaration, line number, component name, prose description, or path-plus-comment. Copy an exact path from implementation.files[].path when the finding concerns a supplied file. A PATCH_REQUIRED finding must name at least one exact supplied writable file path, or an exact new text-file path allowed by allowedWriteGlobs. If you cannot identify such a path, do not return PATCH_REQUIRED. Multiple findings may name the same file. Do not append a colon, line number, symbol, or code fragment to a path.
+
 Return one raw JSON object with no Markdown fence and no commentary. It must match design-validation/audit-output/v2. PASS requires an empty findings array. Every non-PASS status requires at least one finding. Keep publicOutput limited to stable machine-readable facts from this Section; never put natural-language findings or a diff in publicOutput.`;
 
 export const PATCH_SYSTEM_PROMPT = `You are an isolated minimal-diff generator for one validated DESIGN_INDEX Section.
@@ -40,6 +42,12 @@ export function auditUserPrompt(input: NodeAuditInput): string {
       schemaVersion: "design-validation/audit-output/v2",
       sectionId: input.node.sectionId,
       fingerprint: input.node.fingerprint,
+    },
+    implementationRefContract: {
+      format: "repository-relative-path-only",
+      exactSuppliedPaths: input.implementation.files.map((file) => file.path),
+      allowedNewPathGlobs: input.policy.allowedWriteGlobs,
+      forbiddenExamples: ["CSS selector", "source excerpt", "path:line", "component name", "prose"],
     },
     input,
   });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { patchRetryUserPrompt, patchUserPrompt } from "../src/prompts.ts";
+import { AUDIT_SYSTEM_PROMPT, auditUserPrompt, patchRetryUserPrompt, patchUserPrompt } from "../src/prompts.ts";
 import type { NodeAuditInput, NodeAuditOutput, NodePatchOutput, Sha256 } from "../src/types.ts";
 
 const fingerprint = `sha256:${"1".repeat(64)}` as Sha256;
@@ -37,6 +37,18 @@ const auditOutput = {
     implementationRefs: ["frontend/styles.css"],
   }],
 } as unknown as NodeAuditOutput;
+
+test("audit output requires exact repository paths instead of source excerpts", () => {
+  assert.match(AUDIT_SYSTEM_PROMPT, /implementationRefs item is a repository-relative file path/);
+  const prompt = JSON.parse(auditUserPrompt(auditInput)) as {
+    implementationRefContract: { exactSuppliedPaths: string[]; forbiddenExamples: string[] };
+  };
+  assert.deepEqual(prompt.implementationRefContract.exactSuppliedPaths, [
+    "frontend/index.html",
+    "frontend/styles.css",
+  ]);
+  assert.ok(prompt.implementationRefContract.forbiddenExamples.includes("source excerpt"));
+});
 
 test("patch prompt includes only finding-referenced files and exact physical lines", () => {
   const prompt = JSON.parse(patchUserPrompt({ auditInput, auditOutput })) as {
