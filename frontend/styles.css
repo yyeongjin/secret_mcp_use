@@ -69,6 +69,7 @@
     --ease-standard: cubic-bezier(.2, .8, .2, 1);
    --space-9: 48px;
    --space-14: 160px;
+   --motion-normal: 160ms;
   --icon-sm: 12px;
   --z-skip: 300;
   --z-content: 1;
