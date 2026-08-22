@@ -63,6 +63,7 @@
     --shadow-focus: 0 0 0 3px rgb(65 105 245 / 30%);
     --ease-standard: cubic-bezier(.2, .8, .2, 1);
    --space-9: 48px;
+   --space-14: 160px;
   --icon-sm: 12px;
   --z-skip: 300;
   --z-content: 1;
