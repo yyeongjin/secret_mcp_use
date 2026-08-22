@@ -41,7 +41,7 @@ interface GitReferenceResponse {
   object: { sha: string };
 }
 
-type CheckConclusion = "success" | "neutral" | "failure" | "action_required";
+type CheckConclusion = "success" | "neutral" | "failure";
 
 interface NodeCheckSummary {
   sectionId: string;
@@ -123,7 +123,7 @@ export function nodeCheckConclusion(node: Pick<NodeCheckSummary, "auditStatus" |
     node.auditStatus === "BLOCKED_CONTRACT_CONFLICT" ||
     node.auditStatus === "UNKNOWN" ||
     node.patch?.status.startsWith("BLOCKED_")
-  ) return "action_required";
+  ) return "neutral";
   if (
     node.executionState === "PASS" ||
     node.executionState === "CACHED_PASS"

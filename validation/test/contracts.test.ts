@@ -118,7 +118,7 @@ test("per-Section checks distinguish final PASS, waiting, blocked, and failed st
     auditStatus: "BLOCKED_MISSING_EVIDENCE",
     executionState: "BLOCKED_MISSING_EVIDENCE",
     patch: null,
-  }), "action_required");
+  }), "neutral");
   assert.equal(nodeCheckConclusion({
     auditStatus: "PASS",
     executionState: "PASS",
