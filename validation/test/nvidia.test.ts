@@ -253,8 +253,20 @@ test("quarantines an incomplete audit response as UNKNOWN instead of creating a 
       implementationRefs: [],
       proposedValue: null,
     }],
-    publicOutput: {},
+    publicOutput: { transportStatus: "QUARANTINED" },
   });
+});
+
+test("quarantines a non-PASS response that has no requirement-level finding", () => {
+  const normalized = normalizeCompletionOutput("audit", {
+    status: "BLOCKED_MISSING_EVIDENCE",
+    findings: [],
+    publicOutput: {},
+  }, sectionId, fingerprint) as NodeAuditOutput;
+
+  assert.equal(normalized.status, "UNKNOWN");
+  assert.equal(normalized.findings.length, 1);
+  assert.equal(normalized.publicOutput.transportStatus, "QUARANTINED");
 });
 
 test("repairs JSON syntax defects before the unchanged schema validation boundary", () => {

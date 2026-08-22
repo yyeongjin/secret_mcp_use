@@ -486,7 +486,9 @@ export async function callAudit(args: {
       completion: validatedCompletion,
       output,
     });
-    const retryableQuarantine = output.status === "UNKNOWN" && Boolean(validatedCompletion.warning);
+    const retryableQuarantine = output.status === "UNKNOWN" && (
+      Boolean(validatedCompletion.warning) || output.publicOutput.transportStatus === "QUARANTINED"
+    );
     if (retryableQuarantine && attempt < args.maxAttempts) continue;
     return {
       ok: true,

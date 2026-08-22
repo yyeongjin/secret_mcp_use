@@ -238,18 +238,24 @@ export function normalizeCompletionOutput(
         typeof finding.finding === "string" &&
         !finding.finding.startsWith("The isolated audit returned"),
     );
+    const emptyNonPass = status !== "PASS" && findings.length === 0;
     const normalizedStatus = status === "PASS" && findings.length > 0
       ? "UNKNOWN"
       : status === "PATCH_REQUIRED" && !patchFindingsAreGrounded
         ? "UNKNOWN"
+        : emptyNonPass
+          ? "UNKNOWN"
         : status;
+    const publicOutput = normalizePublicOutput(source.publicOutput);
     return {
       schemaVersion: "design-validation/audit-output/v2",
       sectionId,
       fingerprint,
       status: normalizedStatus,
       findings: normalizedStatus === "PASS" || findings.length > 0 ? findings : [unknownFinding(sectionId)],
-      publicOutput: normalizePublicOutput(source.publicOutput),
+      publicOutput: emptyNonPass
+        ? { ...publicOutput, transportStatus: "QUARANTINED" }
+        : publicOutput,
     };
   }
   return {

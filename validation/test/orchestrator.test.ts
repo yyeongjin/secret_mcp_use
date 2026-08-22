@@ -165,7 +165,7 @@ test("an invalid PATCH response becomes bounded same-Section retry context", () 
   assert.deepEqual(result?.writeSet, []);
 });
 
-test("a quarantined provider audit retries only the same isolated Section", async () => {
+test("a transport-quarantined provider audit retries only the same isolated Section", async () => {
   const input = groundingInput([]);
   const requests: string[] = [];
   const pass = {
@@ -186,7 +186,6 @@ test("a quarantined provider audit retries only the same isolated Section", asyn
         rawHash: fingerprint,
         requestId: args.requestId,
         usage: {},
-        ...(first ? { warning: "truncated JSON was quarantined" } : {}),
       };
     },
   } as unknown as NvidiaClient;
@@ -217,7 +216,10 @@ test("a schema-valid model-owned UNKNOWN is not retried", async () => {
     async completeJson(args: { requestId: string }) {
       calls += 1;
       return {
-        parsed: quarantineAuditOutput("S18", fingerprint),
+        parsed: {
+          ...quarantineAuditOutput("S18", fingerprint) as NodeAuditOutput,
+          publicOutput: {},
+        },
         raw: {},
         rawHash: fingerprint,
         requestId: args.requestId,
