@@ -288,6 +288,16 @@ export function enforcePatchGrounding(
   output: NodeAuditOutput,
 ): { output: NodeAuditOutput; warning?: string } {
   if (output.status !== "PATCH_REQUIRED") return { output };
+  const missingValue = output.findings.find((finding) => (
+    /\b(?:UNKNOWN|TBD|TO BE DETERMINED)\b/i.test(finding.finding) ||
+    /(?:value|font family|font|measurement|asset|coordinate|breakpoint|duration).{0,80}(?:not provided|not specified|unavailable|has no value|no value)/i.test(finding.finding)
+  ));
+  if (missingValue) {
+    return {
+      output: { ...output, status: "BLOCKED_MISSING_EVIDENCE" },
+      warning: `${input.node.sectionId} returned PATCH_REQUIRED for an unknown or absent source value: ${missingValue.requirementId}.`,
+    };
+  }
   const contractGap = output.findings.find((finding) => (
     /(?:design[_ ]index|specification|contract|source document|design document).{0,100}(?:section|table|field|heading|entry|evidence).{0,60}(?:lacks?|missing|absent|not (?:provided|specified|present)|does not (?:contain|include))/i.test(finding.finding)
   ));

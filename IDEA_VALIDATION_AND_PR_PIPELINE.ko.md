@@ -560,6 +560,7 @@ interface NodeAuditOutput {
 - `implementationRefs`의 각 값은 `frontend/...` 또는 `validation/...` 형식의 정확한 저장소 상대 파일 경로다. selector, CSS 선언, 소스 조각, `path:line`, 컴포넌트 이름과 설명문은 허용하지 않는다.
 - `PATCH_REQUIRED`의 모든 finding은 supplied writable file 경로 또는 `allowedWriteGlobs`가 허용하는 안전한 새 text file 경로를 하나 이상 가져야 한다. 경로를 특정할 수 없으면 patch 단계로 보내지 않는다.
 - finding이 `DESIGN_INDEX`, Specification, contract 또는 source document 자체의 section·table·field·heading 누락을 설명하면 애플리케이션 patch로 바꾸지 않고 `BLOCKED_CONTRACT_CONFLICT`로 기록한다.
+- source value가 `UNKNOWN`, `TBD`, `N/A`, unspecified, unavailable, 빈 값이거나 finding 스스로 `no value`라고 밝히면 `PATCH_REQUIRED`를 허용하지 않고 `BLOCKED_MISSING_EVIDENCE`로 기록한다. 이 상태에서 patch API를 반복 호출하지 않는다.
 - 주석, marker, TODO, 문서 문자열, hidden metadata 또는 report file만 추가하는 diff는 실제 프론트엔드 구현이 아니므로 `COMMENT_ONLY_PATCH`로 전체 폐기한다. 유효한 애플리케이션 finding이면 같은 Section의 다음 독립 patch 후보를 요청하고, 계약 문서 누락이면 코드 후보 요청 자체를 하지 않는다.
 
 ## 공통 patch 입력과 출력 계약

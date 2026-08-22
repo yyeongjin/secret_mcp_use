@@ -134,6 +134,14 @@ test("a DESIGN_INDEX documentation gap cannot become an application patch", () =
   assert.match(result.warning ?? "", /DESIGN_INDEX or Specification gap/);
 });
 
+test("an UNKNOWN contract value cannot enter repeated patch generation", () => {
+  const output = patchRequired(["frontend/styles.css"]);
+  output.findings[0].finding = "The required font family is UNKNOWN and no value is provided.";
+  const result = enforcePatchGrounding(groundingInput(["frontend/**"]), output);
+  assert.equal(result.output.status, "BLOCKED_MISSING_EVIDENCE");
+  assert.match(result.warning ?? "", /unknown or absent source value/);
+});
+
 test("an invalid PATCH response becomes bounded same-Section retry context", () => {
   const input = groundingInput(["frontend/styles.css"]);
   const auditOutput = patchRequired(["frontend/styles.css"]);

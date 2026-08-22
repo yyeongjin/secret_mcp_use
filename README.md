@@ -140,6 +140,8 @@ Audit `implementationRefs` are schema-constrained repository-relative paths. A s
 
 A DESIGN_INDEX/Specification/documentation gap cannot be converted into an application patch. Comment-only, marker-only, TODO-only, hidden-metadata, documentation-string, and report-file candidates are rejected as `COMMENT_ONLY_PATCH`; they can never satisfy a user-visible or behavioral frontend requirement.
 
+Literal `UNKNOWN`, `TBD`, `N/A`, unspecified, unavailable, empty, or explicitly absent source values are classified as `BLOCKED_MISSING_EVIDENCE` before patch generation. The pipeline does not spend repeated patch calls asking a model to implement a value that the contract does not contain.
+
 An affected prior-PASS regression request is a before/after delta audit, not another fresh completeness audit. It receives only that prior-PASS Section's unchanged contract, its own implementation slice before and after the candidate, the changed path list, and a PASS fingerprint proof. A pre-existing omission or a requirement unchanged by the candidate cannot block the PR as a new regression. The patching Section's findings and response are never included.
 
 ### 5. Run and inspect the pipeline

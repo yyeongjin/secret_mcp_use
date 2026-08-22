@@ -140,6 +140,8 @@ audit의 `implementationRefs`는 schema에서 저장소 상대 경로만 허용�
 
 DESIGN_INDEX, Specification 또는 문서 자체의 누락은 애플리케이션 patch로 바꾸지 않습니다. 주석, marker, TODO, hidden metadata, 문서 문자열 또는 report file만 추가하는 후보는 `COMMENT_ONLY_PATCH`로 거부하며 사용자에게 보이거나 동작하는 프론트엔드 요구사항을 통과시킬 수 없습니다.
 
+source value가 `UNKNOWN`, `TBD`, `N/A`, unspecified, unavailable, 빈 값 또는 명시적인 값 없음이면 patch 생성 전에 `BLOCKED_MISSING_EVIDENCE`로 분류합니다. 계약에 존재하지 않는 값을 구현하라고 반복 patch API를 호출하지 않습니다.
+
 영향받은 기존 PASS 회귀 요청은 새 전체 감사가 아니라 수정 전후 delta 감사입니다. 해당 기존 PASS Section의 동일한 계약, 후보 적용 전후 자기 구현 slice, 변경 경로 목록과 PASS fingerprint 증명만 받습니다. 후보가 만들지 않은 기존 누락이나 수정 전후 그대로인 Requirement는 새 회귀로 PR을 막을 수 없습니다. patch 담당 Section의 finding과 응답은 전달하지 않습니다.
 
 ### 5. 파이프라인 실행과 결과 확인

@@ -40,6 +40,7 @@ const auditOutput = {
 
 test("audit output requires exact repository paths instead of source excerpts", () => {
   assert.match(AUDIT_SYSTEM_PROMPT, /implementationRefs item is a repository-relative file path/);
+  assert.match(AUDIT_SYSTEM_PROMPT, /Literal UNKNOWN, TBD, N\/A/);
   const prompt = JSON.parse(auditUserPrompt(auditInput)) as {
     implementationRefContract: { exactSuppliedPaths: string[]; forbiddenExamples: string[] };
   };
