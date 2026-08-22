@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "design-validation/attestation/v2",
+  "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
+  "sectionId": "S02",
+  "fingerprint": "sha256:4edea62473dea2ee9f2a2722b6b3cce87e906cb344b18f64e592eedf49cd2748",
+  "triggerSource": {
+    "path": "trigger/DESIGN_INDEX_gdweb-26357.md",
+    "documentHash": "sha256:f79f163969cbb3520f2741dde3250533a4ff3071dcb772e53dd5802b918e6336",
+    "fragmentHash": "sha256:bbbe4b4c1fb6defd84284d2c4d5fdc617cc499a5695b4f941e73e71f367064f7"
+  },
+  "specificationSource": {
+    "path": "DESIGN_INDEX_SPECIFICATION.md",
+    "documentHash": "sha256:65233a5428ae3411c094ab72691793e2998232e55ea5ca4e299993f7c4cf251a",
+    "globalRulesHash": "sha256:397b59d360af5b81cb8816ecdf12ad45bbd3c55990df199c67adf9b399fb2987",
+    "fragmentHash": "sha256:0784d0b208481d5ddf7a4a680c34f77453b13281a988cab6eb55c8058380514f"
+  },
+  "status": "PASS",
+  "baseCommit": "bd71559c7af62c1638df2abdafd83ba89981debb",
+  "source": "fresh-audit",
+  "requirementIds": [
+    "S02-REQ-74A7888CC065",
+    "S02-REQ-62BFB7F7869A",
+    "S02-REQ-E2042B333C55",
+    "S02-REQ-BAE42C32D133",
+    "S02-REQ-709F115B8DF0",
+    "S02-REQ-51D97302068C",
+    "S02-REQ-71B1FD7B0462",
+    "S02-REQ-BC2E1821B1DC",
+    "S02-REQ-5AB362777F36",
+    "S02-REQ-8D70223D7D08",
+    "S02-REQ-5D0B47EA2762",
+    "S02-REQ-0D8C4DF8F50E",
+    "S02-REQ-F65770A47A11",
+    "S02-REQ-2F8A68B48491",
+    "S02-REQ-59E8BA6FF7CE",
+    "S02-REQ-8B39946E4107",
+    "S02-REQ-010E0E5D5133"
+  ],
+  "dependencyAttestations": {
+    "S01": "sha256:e7d53bbd5406882c42f4b6067afd0cd43208bbba48824303454cc05c414ab30f"
+  },
+  "dependencyPublicDigests": {
+    "S01": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  "publicOutput": {},
+  "publicDigest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+  "validator": {
+    "id": "nvidia:nvidia/nemotron-3-super-120b-a12b",
+    "contractHash": "sha256:1182123051e7addb7fc848c98963164af015d96d0e89d258e22afc86002e7391"
+  },
+  "tests": [
+    {
+      "id": "audit-schema",
+      "status": "PASS",
+      "artifactHash": "sha256:3f83e721cf14ad8a0e633ff8a193032148b031ae93a1026d2f4f120689a86074"
+    }
+  ],
+  "createdAt": "2026-08-22T11:52:51.160Z",
+  "attestationHash": "sha256:e7f7eb1f5426673e79545b5c964d58139dd06101b6a680e6814d09763b14c3d9"
+}
