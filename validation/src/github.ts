@@ -24,15 +24,6 @@ interface PullRequestFileResponse {
   filename: string;
 }
 
-interface IssueResponse {
-  number: number;
-  html_url: string;
-  state: string;
-  title: string;
-  body?: string | null;
-  pull_request?: unknown;
-}
-
 interface IssueCommentResponse {
   body?: string | null;
 }
@@ -66,11 +57,6 @@ interface TargetCheckSummary {
   targetId: string;
   triggerPath: string;
   nodes: NodeCheckSummary[];
-}
-
-export interface FeedbackIssueLink {
-  number: number;
-  url: string;
 }
 
 async function githubRequest<T>(
@@ -165,14 +151,9 @@ export function renderFindings(findings: AuditFinding[]): string {
   ].join("\n")).join("\n\n");
 }
 
-function checkKey(targetId: string, sectionId: string): string {
-  return `${targetId}:${sectionId}`;
-}
-
 export function buildNodeCheckOutput(args: {
   summary: TargetCheckSummary;
   node: NodeCheckSummary;
-  feedbackIssue?: FeedbackIssueLink;
 }): { title: string; summary: string; text: string } {
   const { summary, node } = args;
   const status = nodeDisplayStatus(node);
@@ -185,15 +166,11 @@ export function buildNodeCheckOutput(args: {
   const unresolvedIds = new Set(unresolved);
   const addressedFindings = node.findings.filter((finding) => addressedIds.has(finding.requirementId));
   const unresolvedFindings = node.findings.filter((finding) => unresolvedIds.has(finding.requirementId));
-  const disposition = pullRequest && args.feedbackIssue
-    ? `Verified code diff: [draft PR #${pullRequest.number}](${pullRequest.url}) on \`${pullRequest.branch}\`. Remaining findings: [issue #${args.feedbackIssue.number}](${args.feedbackIssue.url}).`
-    : pullRequest
-      ? `Verified code diff: [draft PR #${pullRequest.number}](${pullRequest.url}) on \`${pullRequest.branch}\`.`
-    : args.feedbackIssue
-      ? `Actionable verbal feedback: [issue #${args.feedbackIssue.number}](${args.feedbackIssue.url}).`
-      : node.executionState === "PASS" || node.executionState === "CACHED_PASS"
-        ? "No correction PR or feedback issue is required."
-        : "No safe code PR was published. Review the findings and patch disposition below.";
+  const disposition = pullRequest
+    ? `Verified code diff: [draft PR #${pullRequest.number}](${pullRequest.url}) on \`${pullRequest.branch}\`.`
+    : node.executionState === "PASS" || node.executionState === "CACHED_PASS"
+      ? "No correction PR is required."
+      : "No safe code PR was published. The result remains in this Check and the run artifact; the pipeline never creates a GitHub Issue.";
   return {
     title: `${node.sectionId} ${status}`.slice(0, 255),
     summary: [
@@ -239,7 +216,6 @@ export function buildNodeCheckOutput(args: {
 export async function publishNodeCheckRuns(args: {
   config: PipelineConfig;
   summaries: TargetCheckSummary[];
-  feedbackIssues?: Map<string, FeedbackIssueLink>;
 }): Promise<void> {
   if (!args.config.github.token) return;
   const detailsUrl = args.config.runId
@@ -250,7 +226,6 @@ export async function publishNodeCheckRuns(args: {
       const output = buildNodeCheckOutput({
         summary,
         node,
-        feedbackIssue: args.feedbackIssues?.get(checkKey(summary.targetId, node.sectionId)),
       });
       await githubRequest(args.config, "POST", `/repos/${args.config.repository}/check-runs`, {
         name: `Design Validation / ${node.sectionId} ${node.name}`.slice(0, 100),
@@ -263,131 +238,6 @@ export async function publishNodeCheckRuns(args: {
       });
     }
   }
-}
-
-function feedbackKey(targetId: string, sectionId: string): Sha256 {
-  return sha256(`design-validation-feedback:${targetId}:${sectionId}`);
-}
-
-function feedbackMarker(targetId: string, sectionId: string): string {
-  return `<!-- design-validation-feedback-key: ${feedbackKey(targetId, sectionId)} -->`;
-}
-
-export function isReusableFeedbackIssue(
-  issue: { state: string; body?: string | null; pull_request?: unknown },
-  targetId: string,
-  sectionId: string,
-): boolean {
-  return issue.state === "open" &&
-    !issue.pull_request &&
-    Boolean(issue.body?.includes(feedbackMarker(targetId, sectionId)));
-}
-
-export function needsFeedbackIssue(node: NodeCheckSummary): boolean {
-  if (node.patch?.pullRequest) return (node.patch.unresolvedRequirementIds?.length ?? 0) > 0;
-  if (node.executionState === "PASS" || node.executionState === "CACHED_PASS") return false;
-  if (
-    node.executionState === "PATCH_WAITING_DEPENDENCY" ||
-    node.patch?.status === "WAITING_DEPENDENCY" ||
-    node.patch?.status === "BLOCKED_CONFLICT"
-  ) {
-    return false;
-  }
-  return node.findings.length > 0 || (
-    node.patch !== null && !["NOT_REQUIRED", "PATCH_VERIFIED"].includes(node.patch.status)
-  );
-}
-
-function feedbackIssueBody(summary: TargetCheckSummary, node: NodeCheckSummary): string {
-  const patchReason = markdownText(node.patch?.reason ?? "No safe patch was produced.");
-  const unresolvedIds = new Set(node.patch?.unresolvedRequirementIds ?? node.requirementIds);
-  const findings = node.findings.filter((finding) => unresolvedIds.has(finding.requirementId));
-  const pullRequest = node.patch?.pullRequest;
-  return [
-    "## Validation feedback",
-    "",
-    pullRequest
-      ? `The isolated \`${node.sectionId}\` audit produced a verified partial code correction in draft PR #${pullRequest.number}. This issue tracks only the findings that are not implemented by that diff.`
-      : `The isolated \`${node.sectionId}\` audit found an item that cannot yet be published as a verified code PR. This issue contains the actionable feedback instead of creating an empty or report-only PR.`,
-    "",
-    "## Findings",
-    "",
-    renderFindings(findings),
-    "",
-    pullRequest ? "## Why these findings remain open" : "## Why no code PR was opened",
-    "",
-    `- Audit status: \`${node.auditStatus}\``,
-    `- Execution state: \`${node.executionState}\``,
-    `- Patch status: \`${node.patch?.status ?? "NOT_RUN"}\``,
-    `- Reason: ${patchReason}`,
-    ...(pullRequest ? [`- Partial correction PR: ${pullRequest.url}`] : []),
-    "",
-    "## Scope and provenance",
-    "",
-    `- Target: \`${summary.targetId}\``,
-    `- Trigger: \`${summary.triggerPath}\``,
-    `- Fingerprint: \`${node.fingerprint ?? "unavailable"}\``,
-    `- Independent request: \`${summary.runId}:audit:${node.sectionId}\``,
-    "",
-    pullRequest
-      ? "The partial PR does not claim these findings. This issue remains open until a later verified diff covers them or the Section reaches PASS."
-      : "The pipeline must not invent a value or open a code PR until the missing evidence, contract conflict, provider result, dependency, or patch guard is resolved. A later PASS or fully covering verified code PR closes this feedback issue automatically.",
-    "",
-    feedbackMarker(summary.targetId, node.sectionId),
-  ].join("\n");
-}
-
-export async function publishActionableFeedbackIssues(args: {
-  config: PipelineConfig;
-  summaries: TargetCheckSummary[];
-}): Promise<Map<string, FeedbackIssueLink>> {
-  const links = new Map<string, FeedbackIssueLink>();
-  if (!args.config.createPrs || !args.config.github.token) return links;
-  const issues = await githubRequest<IssueResponse[]>(
-    args.config,
-    "GET",
-    `/repos/${args.config.repository}/issues?state=open&per_page=100&sort=updated&direction=desc`,
-  );
-  const feedbackIssues = issues.filter((issue) => (
-    issue.state === "open" && !issue.pull_request && issue.body?.includes("design-validation-feedback-key")
-  ));
-
-  for (const summary of args.summaries) {
-    for (const node of summary.nodes) {
-      const existing = feedbackIssues.find((issue) => (
-        isReusableFeedbackIssue(issue, summary.targetId, node.sectionId)
-      ));
-      if (needsFeedbackIssue(node)) {
-        const title = `Design validation ${node.sectionId}: ${nodeDisplayStatus(node)}`.slice(0, 256);
-        const body = feedbackIssueBody(summary, node);
-        const issue = existing
-          ? await githubRequest<IssueResponse>(
-            args.config,
-            "PATCH",
-            `/repos/${args.config.repository}/issues/${existing.number}`,
-            { title, body, state: "open" },
-          )
-          : await githubRequest<IssueResponse>(args.config, "POST", `/repos/${args.config.repository}/issues`, {
-            title,
-            body,
-          });
-        links.set(checkKey(summary.targetId, node.sectionId), { number: issue.number, url: issue.html_url });
-        continue;
-      }
-      if (!existing || existing.state !== "open") continue;
-      const pullRequest = node.patch?.pullRequest;
-      await githubRequest(args.config, "POST", `/repos/${args.config.repository}/issues/${existing.number}/comments`, {
-        body: pullRequest
-          ? `Resolved by verified draft PR #${pullRequest.number}: ${pullRequest.url}`
-          : `Resolved by \`${node.executionState}\` for fingerprint \`${node.fingerprint ?? "unavailable"}\`.`,
-      });
-      await githubRequest(args.config, "PATCH", `/repos/${args.config.repository}/issues/${existing.number}`, {
-        state: "closed",
-        state_reason: "completed",
-      });
-    }
-  }
-  return links;
 }
 
 function keyMarker(key: Sha256): string {
@@ -559,6 +409,9 @@ export function buildPullRequestBody(args: {
   const addressedIds = new Set(args.manifest.requirementIds);
   const addressedFindings = args.auditOutput.findings.filter((finding) => addressedIds.has(finding.requirementId));
   const remainingFindings = args.auditOutput.findings.filter((finding) => !addressedIds.has(finding.requirementId));
+  if (remainingFindings.length > 0) {
+    throw new Error(`INCOMPLETE_SECTION_PR: ${remainingFindings.map((finding) => finding.requirementId).join(", ")}`);
+  }
   const fullDiff = fencedCode("diff", args.patch.diff);
   return [
     "## Corrected by this diff",
@@ -572,14 +425,6 @@ export function buildPullRequestBody(args: {
     "",
     fullDiff,
     "",
-    ...(remainingFindings.length > 0 ? [
-      "## Remaining audit feedback (not changed by this PR)",
-      "",
-      "These findings are intentionally excluded from this PR because the verified diff does not implement them. The pipeline publishes them as actionable feedback instead of claiming they were fixed.",
-      "",
-      renderFindings(remainingFindings),
-      "",
-    ] : []),
     "## Scope",
     "",
     `- Target: \`${args.manifest.targetId}\``,

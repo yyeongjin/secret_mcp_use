@@ -27,7 +27,7 @@
 12. 서로 의존하지 않고 쓰기 파일도 겹치지 않는 노드는 병렬 실행할 수 있다.
 13. 같은 파일을 수정하거나 의존 관계가 있는 노드는 자동으로 직렬화한다.
 14. merge 전에는 최신 `main`을 기준으로 patch를 다시 검증하며, 오래된 patch는 자동 병합하지 않는다.
-15. 모든 비-PASS 결과는 사라지지 않는다. 검증된 코드 diff가 있으면 그 diff가 실제로 해결한 finding만 PR의 수정 대상으로 싣는다. 같은 Section의 나머지 finding은 해결된 것으로 표시하지 않고 Check와 자동 피드백 Issue에 계속 기록한다.
+15. 모든 비-PASS 결과는 사라지지 않는다. supplied finding 전체를 구현하고 검증한 코드 diff만 PR로 만들며, PR을 만들 수 없는 결과는 Section Check와 불변 실행 artifact에만 기록한다. 이 파이프라인은 GitHub Issue를 생성하지 않는다.
 
 `19개 항목`은 검증 격리 단위이지 `19개 PR을 반드시 생성한다`는 뜻이 아니다. 한 실행에서 17개가 이미 PASS이고 2개만 누락됐다면 PR은 최대 2개만 생성되어야 한다.
 
@@ -229,7 +229,7 @@ trigger 문서에서 실제로 바뀐 줄이 S05뿐이어도 새 trigger content
 
 PASS 기록을 남기기 위해 빈 PR이나 report-only PR을 만드는 방식은 사용하지 않는다.
 
-단, `PR 없음`은 `피드백 없음`을 뜻하지 않는다. `PATCH_WAITING_DEPENDENCY`와 write-set 대기는 실패나 사람의 작업 항목이 아니라 정적 DAG queue이므로 Issue를 만들지 않는다. 선행 자동 PR이 병합되면 main 변경 이벤트가 fingerprint와 PASS 증명서를 다시 계산하고, 새로 준비된 Section만 독립 NVIDIA audit와 patch 단계로 자동 진행한다. `UNKNOWN`, `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`는 첫 응답으로 확정하지 않고 동일 Section만 `PIPELINE_AUDIT_ATTEMPTS`까지 독립 재호출한다. 근거가 있는 `PATCH_REQUIRED`의 patch 거부, 충돌 판단, 불완전 diff도 `PIPELINE_PATCH_ATTEMPTS`까지 독립 후보를 다시 호출한다. 모든 재시도가 끝난 뒤에도 문서 값 자체가 없거나 검증 가능한 diff를 만들 수 없는 경우에만 Section Check와 idempotent 피드백 Issue를 생성한다.
+단, `PR 없음`은 `검증 결과 없음`을 뜻하지 않는다. `PATCH_WAITING_DEPENDENCY`와 write-set 대기는 실패나 사람의 작업 항목이 아니라 정적 DAG queue로 보관한다. 선행 자동 PR이 병합되면 main 변경 이벤트가 fingerprint와 PASS 증명서를 다시 계산하고, 새로 준비된 Section만 독립 NVIDIA audit와 patch 단계로 자동 진행한다. `UNKNOWN`, `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`는 첫 응답으로 확정하지 않고 동일 Section만 `PIPELINE_AUDIT_ATTEMPTS`까지 독립 재호출한다. 근거가 있는 `PATCH_REQUIRED`의 patch 거부, 충돌 판단, 불완전 diff도 `PIPELINE_PATCH_ATTEMPTS`까지 독립 후보를 다시 호출한다. 모든 재시도가 끝난 뒤에도 검증 가능한 전체 diff를 만들 수 없으면 Section Check와 불변 실행 artifact에 결과를 남기며 GitHub Issue는 생성하지 않는다.
 
 ## 전체 아키텍처
 
@@ -247,7 +247,7 @@ flowchart TD
     Results --> Merge["코드가 schema 검증, 정렬, 중복 제거 후 병합"]
     Merge --> Verdict{"노드별 검사 결과"}
     Verdict -->|PASS| Attest["validation-state에 PASS 증명서 기록"]
-    Verdict -->|BLOCKED| Check["Check 또는 Issue에 중단 사유 기록"]
+    Verdict -->|BLOCKED| Check["Check와 artifact에 중단 사유 기록"]
     Verdict -->|PATCH_REQUIRED| DependencyGate["DAG 선행 PASS 또는 병합 대기"]
     DependencyGate --> Patch["독립 NVIDIA 최소 diff 요청"]
     Patch --> Guard["해시, 소유권, write-set, git apply 검사"]
@@ -603,7 +603,7 @@ interface NodePatchOutput {
 
 patch 응답은 추가 중심의 최소 unified diff여야 한다. 파일 삭제, 이동, 이름 변경, 전체 포맷, 무관한 리팩터링은 허용하지 않는다. 한 Section에 finding이 여러 개 있으면 그 후보는 모든 finding을 구현해야 한다. 일부만 구현한 후보는 PR로 게시하지 않고 폐기하며, 동일한 격리 입력에서 다음 독립 후보를 요청한다.
 
-patch 모델 하나가 supplied base code가 audit finding을 이미 충족한다고 판단해 `BLOCKED_AUDIT_CONFLICT`를 반환해도 audit의 근거 있는 누락을 취소할 수 없다. `BLOCKED_AUDIT_CONFLICT`, `BLOCKED_MISSING_VALUE`, `BLOCKED_PATCH_TOO_LARGE`는 해당 후보의 결과일 뿐 Section의 최종 결과가 아니며, 오케스트레이터는 같은 격리 입력과 변경되지 않은 base에서 새 seed와 request ID를 가진 독립 patch 후보를 `PIPELINE_PATCH_ATTEMPTS`까지 호출한다. 모든 독립 후보가 만장일치로 `BLOCKED_AUDIT_CONFLICT`를 반환하면 원래 audit이 false positive였다는 consensus artifact를 기록하고 해당 Section을 현재 실행의 PASS로 해소해 후행 DAG를 계속 진행하며 Issue를 만들지 않는다. 판정이 섞이거나 다른 실패를 모두 소진한 경우에만 최종 차단 상태와 전체 시도 기록을 Check 또는 Issue로 게시한다.
+patch 모델 하나가 supplied base code가 audit finding을 이미 충족한다고 판단해 `BLOCKED_AUDIT_CONFLICT`를 반환해도 audit의 근거 있는 누락을 취소할 수 없다. `BLOCKED_AUDIT_CONFLICT`, `BLOCKED_MISSING_VALUE`, `BLOCKED_PATCH_TOO_LARGE`는 해당 후보의 결과일 뿐 Section의 최종 결과가 아니며, 오케스트레이터는 같은 격리 입력과 변경되지 않은 base에서 새 seed와 request ID를 가진 독립 patch 후보를 `PIPELINE_PATCH_ATTEMPTS`까지 호출한다. 모든 독립 후보가 만장일치로 `BLOCKED_AUDIT_CONFLICT`를 반환하면 원래 audit이 false positive였다는 consensus artifact를 기록하고 해당 Section을 현재 실행의 PASS로 해소해 후행 DAG를 계속 진행한다. 판정이 섞이거나 다른 실패를 모두 소진한 경우에는 최종 차단 상태와 전체 시도 기록을 Section Check와 불변 실행 artifact에만 기록한다.
 
 patch 적용 뒤에는 일반 완전성 audit를 다시 실행하지 않는다. 별도의 stateless 재검증 요청이 `addressedRequirementIds`, 원래 finding, 실제 diff, before/after 구현만 받아 각 주장 항목을 독립적으로 확인한다. supplied finding 전체가 선언됐고 after 코드에서 모두 충족될 때만 해당 후보를 게시할 수 있다.
 
@@ -1159,7 +1159,7 @@ S12 patch writeSet = [frontend/styles.css]
 3. 기존 diff를 최신 base에 그대로 rebase하지 않고, 최신 main에서 해당 Section audit를 새 요청으로 다시 호출한다.
 4. 사람이 이미 누락을 고쳤다면 PASS 증명서와 설명 comment를 남기되 기존 자동 PR은 사람의 판단을 위해 열린 상태로 보존한다. 자동화가 PR을 닫거나 branch를 삭제하지 않는다.
 5. 여전히 누락이면 새 fingerprint와 patch hash로 만든 diff를 처음부터 검증한다. 모든 guard를 통과한 경우에만 봇 소유 branch를 `--force-with-lease`로 갱신하고 같은 PR 번호, review 대화, 제목과 본문을 최신 결과로 바꾼다.
-6. 새 결과가 차단되거나 안전한 diff를 만들 수 없으면 기존 PR은 열린 상태로 두고 Section Check와 피드백 Issue에 현재 결과를 게시한다.
+6. 새 결과가 차단되거나 안전한 diff를 만들 수 없으면 기존 PR은 열린 상태로 두고 Section Check와 실행 artifact에 현재 결과를 기록한다.
 
 ### 사례 J: 같은 push event가 중복 전달된 경우
 
@@ -1205,7 +1205,7 @@ NVIDIA diff           = src/components/navigation/Nav.tsx + src/pages/Home.tsx
 1. 담당 Section은 범위 위반을 finding으로 기록한다.
 2. 기본 정책이 누락 추가 중심이므로 대량 삭제 patch를 만들지 않는다.
 3. 안전한 한 줄 교체나 직접 위반 줄 제거로 한정할 수 없으면 `BLOCKED_UNSAFE_REMOVAL`로 둔다.
-4. PR 대신 사람이 검토할 Check 또는 Issue를 만든다.
+4. PR 대신 사람이 검토할 Section Check와 실행 artifact를 남긴다.
 
 ### 사례 O: package dependency가 추가된 경우
 
@@ -1268,7 +1268,7 @@ audit queue와 patch queue의 준비 조건을 분리한다.
 
 - `AUDIT_READY`: node가 dirty이고 같은 target·Section audit가 실행 중이 아니며 NVIDIA rate limit token이 있다. DAG 선행 PASS는 요구하지 않는다.
 - `PATCH_READY`: audit가 PATCH_REQUIRED이고 직접 선행 노드가 모두 최종 PASS 또는 CACHED_PASS이며 write-set lock과 중복 PR 검사를 통과했다.
-- `PATCH_WAITING_DEPENDENCY`: 근거 있는 코드 누락은 유지하되 선행 PR 병합을 기다리는 정적 queue 상태다. Issue를 생성하지 않으며 다음 main merge 이벤트에서 자동으로 다시 준비 조건을 계산한다.
+- `PATCH_WAITING_DEPENDENCY`: 근거 있는 코드 누락은 유지하되 선행 PR 병합을 기다리는 정적 queue 상태다. 다음 main merge 이벤트에서 자동으로 다시 준비 조건을 계산한다.
 
 ```ts
 function auditReady(node: Node, state: State): boolean {
@@ -1411,14 +1411,14 @@ fix(s05): address S05-NAV-ACTIVE-001 omission
 
 `[S05] Apply grounded DESIGN_INDEX omissions`처럼 실제 누락을 알 수 없는 일반 제목과, Requirement ID만 나열하고 finding 문장을 생략한 본문은 허용하지 않는다. PR 본문에 `<n>` 같은 자리표시자도 남기지 않고 실제 patch attempt 번호를 기록한다. GitHub의 `Files changed` 탭만 유일한 diff 전달 수단으로 삼지 않으며 본문에도 검증된 diff를 싣는다.
 
-### diff가 없는 결과의 피드백 계약
+### diff가 없는 결과의 기록 계약
 
-GitHub PR은 branch 간 실제 변경이 있어야 하므로, 안전한 code diff가 없는 상태를 억지로 report 파일 commit이나 빈 PR로 만들지 않는다. 대신 다음 두 출력을 모두 만든다.
+GitHub PR은 branch 간 실제 변경이 있어야 하므로, 안전한 code diff가 없는 상태를 억지로 report 파일 commit이나 빈 PR로 만들지 않는다. 대신 다음 두 출력에만 기록한다.
 
 - Section Check: 현재 commit에 붙는 실행 단위 결과. finding 원문, 근거, 구현 위치, patch 중단 사유와 다음 동작을 표시한다.
-- 피드백 Issue: live 실행에서 생성하는 지속 가능한 작업 항목. `targetId + sectionId` 고정 key로 중복 생성을 막고, 새 fingerprint가 들어오면 같은 Issue 본문을 갱신한다.
+- 실행 artifact: Section 입력, 모든 독립 응답, finding, 중단 사유, fingerprint와 재실행 조건을 불변 파일로 보존한다.
 
-피드백 Issue 대상은 독립 audit 재시도를 모두 소진한 `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`, `UNKNOWN`, 그리고 독립 patch 후보를 모두 소진한 guard·test·re-audit·publish 실패다. `PATCH_WAITING_DEPENDENCY`, write-set lock 대기, PASS, CACHED_PASS에는 Issue를 만들지 않는다. patch 후보는 supplied finding 전체를 구현해야 하며 부분 수정 PR은 허용하지 않는다. 모든 finding을 구현하고 검증한 diff만 PR이 된다.
+GitHub Issue는 어떤 결과에서도 생성하지 않는다. 독립 audit 재시도를 모두 소진한 `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`, `UNKNOWN`, 독립 patch 후보를 모두 소진한 guard·test·re-audit·publish 실패, `PATCH_WAITING_DEPENDENCY`와 write-set lock 대기는 모두 Check와 artifact에만 남는다. patch 후보는 supplied finding 전체를 구현해야 하며 부분 수정 PR은 허용하지 않는다. 모든 finding을 구현하고 검증한 diff만 PR이 된다.
 
 S18이 명세에 있는 페이지별 acceptance test의 부재를 찾았는데 새 파일의 `implementationRefs`만 생략한 경우는 근거 부족이 아니다. S18의 소유 경로 `frontend/tests/**`에서 결정적 기본 경로 `frontend/tests/design-index-s18.spec.ts`를 배정하고 독립 patch 요청으로 보낸다. 경로만 오케스트레이터가 결정하며 테스트 내용과 diff는 NVIDIA가 명세 근거로 생성하고 전체 guard를 통과해야 한다.
 
@@ -1494,7 +1494,7 @@ diff --git a/frontend/styles/tokens.css b/frontend/styles/tokens.css
 
 ## Remaining audit feedback (not changed by this PR)
 
-이 예시에서는 없음. finding이 더 있었다면 diff가 구현하지 않은 항목만 여기에 표시하고 동일 항목을 피드백 Issue에도 남긴다.
+이 예시에서는 없음. finding이 더 있었다면 일부만 구현한 후보 자체를 폐기하고 새 독립 후보를 요청하므로 부분 PR을 게시하지 않는다.
 
 ## Scope
 
@@ -1587,7 +1587,7 @@ reason: current fingerprint matches immutable PASS attestation
 
 GitHub Check에는 어떤 증명서를 재사용했는지와 현재 fingerprint만 표시한다.
 
-### Example 5: Evidence 부족으로 차단되어 Check와 Issue를 만드는 결과
+### Example 5: Evidence 부족으로 차단되어 Check와 artifact에 기록하는 결과
 
 GitHub Check 제목:
 
@@ -1603,7 +1603,8 @@ Check summary:
 - Proposed value: none
 - Patch generated: no
 - PR created: no
-- Feedback issue: created or updated with the same full finding
+- GitHub issue created: no
+- Run artifact: stores the full finding and all independent attempts
 - Required Evidence: desktop hero title crop with unscaled text bounds
 ```
 
@@ -1707,9 +1708,9 @@ S06과 S12는 각각 별도의 NVIDIA audit 요청으로 실행된다. S05 PR �
 | PATCH_REQUIRED | 없음 | 없음 | 독립 patch 요청 |
 | PATCH_PROPOSED | 임시 worktree만 | 없음 | guard와 test |
 | PATCH_VERIFIED | 생성 가능 | 생성 가능 | lock과 중복 검사 |
-| PATCH_WAITING_DEPENDENCY | 없음 | 없음 | 정적 DAG queue에 보관, 선행 PR 병합 이벤트에서 자동 재예약, Issue 없음 |
-| WAITING_WRITE_LOCK | 없음 | 없음 | 충돌 PR 병합 이벤트에서 자동 재예약, Issue 없음 |
-| BLOCKED_* | 없음 | 없음 | Check 또는 Issue |
+| PATCH_WAITING_DEPENDENCY | 없음 | 없음 | 정적 DAG queue에 보관, 선행 PR 병합 이벤트에서 자동 재예약 |
+| WAITING_WRITE_LOCK | 없음 | 없음 | 충돌 PR 병합 이벤트에서 자동 재예약 |
+| BLOCKED_* | 없음 | 없음 | Check와 artifact |
 | PR_OPEN | 있음 | 하나 | review와 merge queue |
 | STALE_BASE | 기존 branch 보존 | merge 금지 | 새 audit 후 같은 PR 갱신 또는 피드백, 자동 종료 금지 |
 | MERGED | 삭제 가능 | merged | post-merge audit와 증명서 |
@@ -1897,7 +1898,7 @@ S19 audit BLOCKED_MISSING_EVIDENCE
 전체 audit 호출 수 = 19
 ```
 
-S05가 실패했어도 full audit의 S06-S19 호출을 생략하지 않는다. 최초·강제 full audit의 논리 audit 요청 수는 정확히 19개이며, 애매하거나 차단된 응답의 같은-Section 재시도 횟수는 별도 `auditCalls`로 기록한다. S05에 의존하는 PASS 결과는 `PASS_PENDING_DEPENDENCY`, patch 결과는 `PATCH_WAITING_DEPENDENCY`로 보관해 현재 base의 PR 생성을 막되 Issue로 바꾸지 않는다.
+S05가 실패했어도 full audit의 S06-S19 호출을 생략하지 않는다. 최초·강제 full audit의 논리 audit 요청 수는 정확히 19개이며, 애매하거나 차단된 응답의 같은-Section 재시도 횟수는 별도 `auditCalls`로 기록한다. S05에 의존하는 PASS 결과는 `PASS_PENDING_DEPENDENCY`, patch 결과는 `PATCH_WAITING_DEPENDENCY`로 보관해 현재 base의 PR 생성을 막고 Check와 artifact에 상태를 기록한다.
 
 `PR #41`이 병합되면 S05의 새 PASS 증명서를 만든다. S05의 `publicDigest`가 이전과 달라졌으므로 S06, S12와 그 후행 노드만 각각 다시 호출한다. S01-S04, S07-S11 중 입력과 dependency digest가 그대로인 노드는 다시 호출하지 않는다. S12가 최신 `main`에서 여전히 실패하고 안전한 diff를 만들 수 있을 때만 두 번째 PR을 생성한다.
 
@@ -1910,7 +1911,7 @@ S05가 실패했어도 full audit의 S06-S19 호출을 생략하지 않는다. �
 - 증분 audit 호출 수는 dirty Section 수만큼이며, 언제나 Section별 별도 요청이다.
 - PATCH_REQUIRED가 있으면 audit 19개와 별도로 해당 Section의 patch 요청이 추가되므로 전체 API 호출 수는 19개를 넘을 수 있다.
 - PR 수는 실제 누락이 있고 해당 Section의 supplied finding 전체를 구현한 안전한 코드 diff가 검증된 노드 수만큼 생긴다.
-- 선행 PASS가 필요한 근거 있는 누락은 Issue가 아니라 정적 DAG queue에 남고, 선행 자동 PR 병합 후 새 main 실행에서 자동 PR 생성 단계로 진행한다.
+- 선행 PASS가 필요한 근거 있는 누락은 정적 DAG queue에 남고, 선행 자동 PR 병합 후 새 main 실행에서 자동 PR 생성 단계로 진행한다.
 - 이미 통과한 노드는 fingerprint가 바뀌지 않는 한 정적으로 PASS 상태를 재사용한다.
 - 독립성은 별도 요청과 작업공간으로 보장하고, 일관성은 DAG 증명서와 `publicDigest`로 보장한다.
 - 충돌 방지는 file ownership, base hash, write-set lock, merge queue와 영향받은 PASS 회귀 검사로 보장한다.

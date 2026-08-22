@@ -4,7 +4,6 @@ import { createFreshAttestations, resolveCachedPassForNode } from "./cache.ts";
 import { buildChangeEvent, directDirtySections } from "./change.ts";
 import { sha256 } from "./hash.ts";
 import {
-  publishActionableFeedbackIssues,
   publishNodeCheckRuns,
   publishPatchPullRequest,
   pullRequestKey,
@@ -764,6 +763,18 @@ async function runPatches(args: {
       });
       continue;
     }
+    const includedRequirementIds = new Set(patchScope.includedRequirementIds);
+    const unresolvedSectionFindings = patchScope.feedbackOutput.findings.filter(
+      (finding) => !includedRequirementIds.has(finding.requirementId),
+    );
+    if (unresolvedSectionFindings.length > 0) {
+      records.push({
+        sectionId,
+        status: "BLOCKED_MISSING_VALUE",
+        reason: `A complete Section PR cannot be generated because these supplied findings lack a patchable contract value: ${unresolvedSectionFindings.map((finding) => finding.requirementId).join(", ")}.`,
+      });
+      continue;
+    }
     let retryContext: {
       output: NodePatchOutput;
       failure: { stage: "guard" | "test" | "reaudit" | "regression"; reason: string };
@@ -1218,9 +1229,7 @@ async function runPatches(args: {
             ...attemptRecord,
             attempts,
             addressedRequirementIds: output.requirementIds,
-            unresolvedRequirementIds: patchScope.feedbackOutput.findings
-              .map((finding) => finding.requirementId)
-              .filter((requirementId) => !output.requirementIds.includes(requirementId)),
+            unresolvedRequirementIds: [],
             pullRequest: { number: pull.number, url: pull.url, branch: pull.branch },
           };
           break;
@@ -1726,14 +1735,9 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
     );
   }
 
-  const feedbackIssues = await publishActionableFeedbackIssues({
-    config,
-    summaries,
-  });
   await publishNodeCheckRuns({
     config,
     summaries,
-    feedbackIssues,
   });
 
   if (process.env.GITHUB_STEP_SUMMARY) {

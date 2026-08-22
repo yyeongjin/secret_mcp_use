@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { sha256 } from "../src/hash.ts";
 import {
   buildNodeCheckOutput,
   buildPullRequestBody,
-  isReusableFeedbackIssue,
   isAutomationPullRequestForBase,
-  needsFeedbackIssue,
   pullRequestTitle,
   stalePullRequestNotice,
 } from "../src/github.ts";
@@ -75,23 +72,6 @@ const manifest: PullRequestManifest = {
   runUrl: "https://example.test/run-123",
 };
 
-test("a new run never reopens a closed feedback issue", () => {
-  const targetId = "target";
-  const sectionId = "S05";
-  const body = `<!-- design-validation-feedback-key: ${sha256(`design-validation-feedback:${targetId}:${sectionId}`)} -->`;
-  const openIssue = {
-    state: "open",
-    body,
-  };
-  const closedIssue = {
-    state: "closed",
-    body,
-  };
-
-  assert.equal(isReusableFeedbackIssue(openIssue, targetId, sectionId), true);
-  assert.equal(isReusableFeedbackIssue(closedIssue, targetId, sectionId), false);
-});
-
 test("a code PR leads with exact feedback and the verified unified diff", () => {
   const body = buildPullRequestBody({
     input,
@@ -125,13 +105,13 @@ test("a code PR leads with exact feedback and the verified unified diff", () => 
   assert.equal(pullRequestTitle("S05", auditOutput), "fix(s05): address S05-NAV-ACTIVE-001 omission");
 });
 
-test("a partial correction separates the verified diff from unresolved feedback", () => {
+test("a partial Section correction is rejected before PR publication", () => {
   const secondFinding = {
     ...auditOutput.findings[0],
     requirementId: "S05-NAV-FOCUS-002",
     finding: "The navigation focus ring is missing.",
   };
-  const body = buildPullRequestBody({
+  assert.throws(() => buildPullRequestBody({
     input,
     auditOutput: { ...auditOutput, findings: [...auditOutput.findings, secondFinding] },
     patch: {
@@ -144,12 +124,10 @@ test("a partial correction separates the verified diff from unresolved feedback"
     },
     manifest,
     patchAttempt: 1,
-  });
-  assert.match(body, /## Corrected by this diff[\s\S]*S05-NAV-ACTIVE-001/);
-  assert.match(body, /## Remaining audit feedback \(not changed by this PR\)[\s\S]*S05-NAV-FOCUS-002/);
+  }), /INCOMPLETE_SECTION_PR: S05-NAV-FOCUS-002/);
 });
 
-test("a dependency-waiting omission stays in the DAG queue without creating an issue", () => {
+test("a dependency-waiting omission stays in the DAG queue and Check output", () => {
   const node = {
     sectionId: "S05",
     name: "Navigation and Header",
@@ -164,7 +142,6 @@ test("a dependency-waiting omission stays in the DAG queue without creating an i
       reason: "S04 has not passed.",
     },
   };
-  assert.equal(needsFeedbackIssue(node), false);
   const output = buildNodeCheckOutput({
     summary: {
       runId: "run-123",
@@ -179,7 +156,7 @@ test("a dependency-waiting omission stays in the DAG queue without creating an i
   assert.doesNotMatch(output.summary, /issue #7/);
 });
 
-test("PASS nodes create neither feedback issues nor correction PR language", () => {
+test("PASS nodes do not request a correction PR", () => {
   const node = {
     sectionId: "S05",
     name: "Navigation and Header",
@@ -191,15 +168,14 @@ test("PASS nodes create neither feedback issues nor correction PR language", () 
     findings: [],
     patch: { status: "NOT_REQUIRED", reason: "PASS" },
   };
-  assert.equal(needsFeedbackIssue(node), false);
   const output = buildNodeCheckOutput({
     summary: { runId: "run-123", targetId: "target", triggerPath: "trigger/input.md", nodes: [node] },
     node,
   });
-  assert.match(output.summary, /No correction PR or feedback issue is required/);
+  assert.match(output.summary, /No correction PR is required/);
 });
 
-test("a partial PR still requires a feedback issue for unresolved Requirement IDs", () => {
+test("a blocked Section remains visible in the Check without creating an issue", () => {
   const node = {
     sectionId: "S13",
     name: "Interaction and Motion",
@@ -213,25 +189,19 @@ test("a partial PR still requires a feedback issue for unresolved Requirement ID
       { ...auditOutput.findings[0], requirementId: "S13-B" },
     ],
     patch: {
-      status: "PR_CREATED",
-      reason: "Created a verified partial PR.",
-      addressedRequirementIds: ["S13-A"],
-      unresolvedRequirementIds: ["S13-B"],
-      pullRequest: { number: 13, url: "https://example.test/pull/13", branch: "auto/s13" },
+      status: "BLOCKED_MISSING_VALUE",
+      reason: "The complete Section diff could not be generated.",
+      addressedRequirementIds: [],
+      unresolvedRequirementIds: ["S13-A", "S13-B"],
     },
   };
-  assert.equal(needsFeedbackIssue(node), true);
   const output = buildNodeCheckOutput({
     summary: { runId: "run-123", targetId: "target", triggerPath: "trigger/input.md", nodes: [node] },
     node,
-    feedbackIssue: { number: 14, url: "https://example.test/issues/14" },
   });
-  assert.match(output.summary, /draft PR #13/);
-  assert.match(output.summary, /issue #14/);
-  assert.match(output.summary, /Corrected by PR: `S13-A`/);
-  assert.match(output.summary, /Still open: `S13-B`/);
-  assert.match(output.text, /Corrected by the draft PR[\s\S]*S13-A/);
-  assert.match(output.text, /Remaining requirement-level feedback[\s\S]*S13-B/);
+  assert.doesNotMatch(output.summary, /issue #/i);
+  assert.match(output.summary, /Still open: `S13-A`, `S13-B`/);
+  assert.match(output.text, /Requirement-level feedback[\s\S]*S13-A[\s\S]*S13-B/);
 });
 
 test("a stale automation PR stays open and is refreshed in place", () => {

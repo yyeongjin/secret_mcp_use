@@ -39,7 +39,6 @@ permissions:
   contents: write
   pull-requests: write
   checks: write
-  issues: write
 
 concurrency:
   group: design-validation-workflow-${{ github.repository }}
