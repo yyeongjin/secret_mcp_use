@@ -228,6 +228,17 @@ export function rejectedPatchSummaryForRetry(args: {
   };
 }
 
+export function blockedConflictContradictsExactFinding(
+  auditOutput: NodeAuditOutput,
+  patchOutput: NodePatchOutput,
+): boolean {
+  if (patchOutput.status !== "BLOCKED_AUDIT_CONFLICT") return false;
+  const value = auditOutput.publicOutput.exactContractRequirementIds;
+  if (!Array.isArray(value)) return false;
+  const exactIds = new Set(value.filter((item): item is string => typeof item === "string"));
+  return auditOutput.findings.some((finding) => exactIds.has(finding.requirementId));
+}
+
 function sanitizeArtifactText(value: string, config: PipelineConfig, worktreePath?: string): string {
   return value
     .replaceAll(config.repositoryRoot, "<repository>")
@@ -771,6 +782,19 @@ async function runPatches(args: {
           ? { output: rejectedOutput, failure: { stage: "guard", reason: errorMessage(error) } }
           : undefined;
         if (attempt < args.config.patchGenerationAttempts) continue;
+        finalRecord = { sectionId, ...attemptRecord, attempts };
+        break;
+      }
+
+      if (blockedConflictContradictsExactFinding(patchScope.auditOutput, output)) {
+        const reason = `Patch candidate ${attempt}/${args.config.patchGenerationAttempts} contradicted a structurally verified exact-contract omission.`;
+        const attemptRecord: PatchAttemptRecord = { attempt, status: "BLOCKED_MODEL", reason };
+        attempts.push(attemptRecord);
+        await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+        if (attempt < args.config.patchGenerationAttempts) {
+          retryContext = { output, failure: { stage: "guard", reason } };
+          continue;
+        }
         finalRecord = { sectionId, ...attemptRecord, attempts };
         break;
       }

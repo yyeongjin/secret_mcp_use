@@ -5,7 +5,8 @@ import type { AuditFinding, NodeAuditInput, NodeAuditOutput } from "./types.ts";
 export type PatchScopeExclusionReason =
   | "ALREADY_SATISFIED"
   | "CONTRACT_CONFLICT"
-  | "CONTRACT_NOT_PATCHABLE";
+  | "CONTRACT_NOT_PATCHABLE"
+  | "DUPLICATE_EXACT_FINDING";
 
 export interface PatchScopeExclusion {
   requirementId: string;
@@ -112,6 +113,15 @@ function tokenExpectation(finding: string): TokenExpectation | null {
   const match = /\bToken\s+`(--[A-Za-z0-9_-]+)`\s+with value\s+`([^`]+)`(?:\s+and alpha\s+`([^`]+)`)?\s+is required but not found\b/i.exec(finding);
   if (!match) return null;
   return { property: match[1], value: match[2], ...(match[3] ? { alpha: match[3] } : {}) };
+}
+
+function tokenProperty(finding: string): string | null {
+  return tokenExpectation(finding)?.property ?? /(--[A-Za-z0-9_-]+)/.exec(finding)?.[1] ?? null;
+}
+
+function exactRequirementIds(output: NodeAuditOutput): Set<string> {
+  const value = output.publicOutput.exactContractRequirementIds;
+  return new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
 }
 
 function parseAlpha(raw: string | undefined): number | null {
@@ -238,40 +248,65 @@ export function buildPatchScope(input: NodeAuditInput, output: NodeAuditOutput):
 
   const contractTokens = contractCustomProperties(input.contract.designIndexFragment);
   const implementationTokens = implementationCustomProperties(input);
+  const implementationReferences = implementationCustomPropertyReferences(input);
+  const exactIds = exactRequirementIds(output);
+  const exactProperties = new Set(output.findings.flatMap((finding) => (
+    exactIds.has(finding.requirementId) && typeof finding.componentId === "string" && finding.componentId.startsWith("--")
+      ? [finding.componentId]
+      : []
+  )));
   const included = [];
   const excluded: PatchScopeExclusion[] = [];
 
   for (const finding of output.findings) {
     const expected = tokenExpectation(finding.finding);
-    if (!expected) {
+    const property = tokenProperty(finding.finding);
+    if (!property) {
       included.push(finding);
       continue;
     }
 
-    const contractValues = contractTokens.get(expected.property) ?? [];
+    if (!exactIds.has(finding.requirementId) && exactProperties.has(property)) {
+      excluded.push({
+        requirementId: finding.requirementId,
+        reason: "DUPLICATE_EXACT_FINDING",
+        detail: `${property} is covered by a structurally grounded exact-contract finding.`,
+      });
+      continue;
+    }
+
+    const contractValues = contractTokens.get(property) ?? [];
     if (contractValues.length === 0) {
       excluded.push({
         requirementId: finding.requirementId,
         reason: "CONTRACT_NOT_PATCHABLE",
-        detail: `${expected.property} is not declared in a CSS code block in the assigned DESIGN_INDEX Section.`,
+        detail: `${property} is not declared in a CSS code block in the assigned DESIGN_INDEX Section.`,
       });
       continue;
     }
-    if (!contractValues.some((value) => valuesEquivalent(expected.value, value, expected.alpha))) {
+    if (expected && !contractValues.some((value) => valuesEquivalent(expected.value, value, expected.alpha))) {
       excluded.push({
         requirementId: finding.requirementId,
         reason: "CONTRACT_CONFLICT",
-        detail: `${expected.property} finding value does not match the assigned DESIGN_INDEX CSS declaration.`,
+        detail: `${property} finding value does not match the assigned DESIGN_INDEX CSS declaration.`,
       });
       continue;
     }
-    if ((implementationTokens.get(expected.property) ?? []).some((value) => (
+    if ((implementationTokens.get(property) ?? []).some((value) => (
       contractValues.some((contractValue) => valuesEquivalent(contractValue, value))
     ))) {
       excluded.push({
         requirementId: finding.requirementId,
         reason: "ALREADY_SATISFIED",
-        detail: `${expected.property} already has the exact DESIGN_INDEX value in the supplied implementation.`,
+        detail: `${property} already has the exact DESIGN_INDEX value in the supplied implementation.`,
+      });
+      continue;
+    }
+    if (!expected && !exactIds.has(finding.requirementId) && !implementationReferences.has(property)) {
+      excluded.push({
+        requirementId: finding.requirementId,
+        reason: "CONTRACT_NOT_PATCHABLE",
+        detail: `${property} is not referenced by the supplied implementation and has no exact structural omission proof.`,
       });
       continue;
     }

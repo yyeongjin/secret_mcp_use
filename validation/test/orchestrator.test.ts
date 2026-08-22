@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  blockedConflictContradictsExactFinding,
   callAudit,
   enforcePatchGrounding,
   rejectedPatchSummaryForRetry,
@@ -12,6 +13,7 @@ import type {
   FreshNode,
   NodeAuditInput,
   NodeAuditOutput,
+  NodePatchOutput,
   PassAttestation,
   ResolvedNode,
   SectionId,
@@ -240,4 +242,23 @@ test("a schema-valid model-owned UNKNOWN is not retried", async () => {
   assert.equal(calls, 1);
   assert.equal(result.ok, true);
   if (result.ok) assert.equal(result.output.status, "UNKNOWN");
+});
+
+test("an exact structural omission cannot be dismissed as an audit conflict", () => {
+  const audit = patchRequired(["frontend/styles.css"]);
+  audit.publicOutput = { exactContractRequirementIds: ["S18-TEST"] };
+  const patch: NodePatchOutput = {
+    schemaVersion: "design-validation/patch-output/v2",
+    sectionId: "S18",
+    fingerprint,
+    status: "BLOCKED_AUDIT_CONFLICT",
+    requirementIds: [],
+    evidenceRefs: [],
+    readSet: [],
+    writeSet: [],
+    reason: "The base already satisfies it.",
+    diff: "",
+  };
+  assert.equal(blockedConflictContradictsExactFinding(audit, patch), true);
+  assert.equal(blockedConflictContradictsExactFinding({ ...audit, publicOutput: {} }, patch), false);
 });
