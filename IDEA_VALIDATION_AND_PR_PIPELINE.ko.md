@@ -14,7 +14,7 @@
 4. `runPatches`에 dependency wait, write-set wait 또는 `claimedPaths` 기반 중단을 다시 도입하는 변경은 CI invariant test가 거부해야 한다.
 5. 이 규칙을 바꾸려면 먼저 이 파일의 절대 차단 금지 규칙과 해당 CI test를 명시적으로 함께 변경해야 하며, README만 바꿔 동작을 변경할 수 없다.
 6. 1차 `DOCUMENT_GAP` Section 수가 `D`이면 같은 실행에서 Section별 GitHub Issue `D`개를 생성하거나 동일 key의 기존 열린 Issue를 갱신해야 한다.
-7. 2차 `PATCH_REQUIRED` Section 수가 `N`이면 Section별 correction PR chain이 `N`개여야 한다. `N=19`이면 S01-S19 각각 최소 한 개씩, 최소 19개의 PR이 생성되어야 한다.
+7. 2차 상위 감사 뒤 현재 누적 부모 소스에 대한 Requirement별 독립 preflight까지 `PATCH_REQUIRED`로 확정된 Section 수가 `N`이면 Section별 correction PR chain이 `N`개여야 한다. 19개 Section이 모두 실제 코드 누락으로 확정되면 S01-S19 각각 최소 한 개씩, 최소 19개의 PR이 생성되어야 한다.
 8. 한 Section에 Requirement ID가 여러 개면 처음부터 `SXX-1...SXX-K`로 재귀 분할한다. Requirement ID 하나마다 별도 NVIDIA 호출과 별도 PR을 생성하므로, 한 Section에 수십 개가 있으면 총 patch 호출과 PR 수도 그만큼 늘어나 19를 넘는다.
 
 ## 문서 상태
@@ -61,6 +61,8 @@
 
 - S01-S19는 항상 상위 감사 노드다. 하위 번호는 patch 단계에서만 만든다.
 - 한 상위 Section의 첫 patch 요청은 `SXX-1`이며 정렬된 첫 번째 unresolved Requirement ID 하나와 그 항목의 파일 slice만 받는다.
+- 각 하위 노드는 patch 생성 전에 같은 Requirement ID 하나와 현재 누적 부모 소스만 받는 독립 NVIDIA preflight를 수행한다. preflight가 `PATCH_REQUIRED`를 확정한 항목은 반드시 patch·검증·PR로 진행한다.
+- preflight가 현재 소스에서 이미 충족된 거짓 양성을 `PASS`로 확인하거나 정확한 구현 원본이 없는 항목을 비-patch 상태로 재분류하면 `AUDIT_RECLASSIFIED` artifact를 남기고 PR을 만들지 않는다. 이는 대기·차단이 아니라 잘못된 상위 판정을 현재 소스로 정정한 최종 결과다.
 - 해당 Requirement ID를 완전히 구현하고 guard·test·재감사를 통과하면 그 diff만 `SXX-1` PR로 게시한다. 다른 Requirement ID의 변경을 같은 응답이나 PR에 넣지 않는다.
 - 남은 Requirement ID가 있으면 게시된 `SXX-1` commit에서 입력과 fingerprint를 다시 계산해 다음 Requirement ID 하나만 담은 `SXX-2`를 호출한다. 이후에도 같은 규칙으로 재귀한다.
 - 각 하위 노드는 자신에게 할당된 Requirement ID 하나를 완전히 해결해야 한다. 진전 없는 응답은 같은 하위 노드의 교체 후보로만 재시도한다.
@@ -1464,7 +1466,7 @@ GitHub PR은 branch 간 실제 변경이 있어야 하므로, 안전한 code dif
 - Section Check: 현재 commit에 붙는 실행 단위 결과. finding 원문, 근거, 구현 위치, patch 중단 사유와 다음 동작을 표시한다.
 - 실행 artifact: Section 입력, 모든 독립 응답, finding, 중단 사유, fingerprint와 재실행 조건을 불변 파일로 보존한다.
 
-GitHub Issue는 1차 `DOCUMENT_GAP`에만 생성한다. 2차 구현 감사, patch 생성, guard·test·re-audit·publish 실패는 Issue를 만들지 않는다. dependency wait와 write-set wait는 존재하지 않는다. 각 하위 PR은 할당된 Requirement ID 하나를 구현하며, 아직 남은 항목은 Requirement ID별 descendant 하위 PR로 재귀 처리한다. 2차 `PATCH_REQUIRED` chain이 미완료이면 Check와 artifact를 남기고 workflow를 실패 처리한다.
+GitHub Issue는 1차 `DOCUMENT_GAP`에만 생성한다. 2차 구현 감사, preflight, patch 생성, guard·test·re-audit·publish 실패는 Issue를 만들지 않는다. dependency wait와 write-set wait는 존재하지 않는다. 각 하위 PR은 preflight로 실제 누락이 확정된 Requirement ID 하나를 구현하며, 아직 남은 항목은 Requirement ID별 descendant 하위 PR로 재귀 처리한다. 확정된 `PATCH_REQUIRED` chain이 미완료이면 Check와 artifact를 남기고 workflow를 실패 처리한다.
 
 S18이 명세에 있는 페이지별 acceptance test의 부재를 찾았는데 새 파일의 `implementationRefs`만 생략한 경우는 근거 부족이 아니다. S18의 소유 경로 `frontend/tests/**`에서 결정적 기본 경로 `frontend/tests/design-index-s18.spec.ts`를 배정하고 독립 patch 요청으로 보낸다. 경로만 오케스트레이터가 결정하며 테스트 내용과 diff는 NVIDIA가 명세 근거로 생성하고 전체 guard를 통과해야 한다.
 
@@ -1953,7 +1955,7 @@ S19 audit BLOCKED_MISSING_EVIDENCE
 - 상위 감사 항목 수는 항상 19개지만 patch 하위 노드는 각 고유 Requirement ID마다 `SXX-1`, `SXX-2`처럼 하나씩 동적으로 늘어난다.
 - 최초·강제 전체 audit의 논리 NVIDIA primary 요청 수는 정확히 38개다. 1차 19개와 2차 19개를 별도 집계하고 `UNKNOWN`·차단·스키마 오류의 같은-Stage·Section 독립 재시도는 별도 실제 호출 수로 추가 기록한다.
 - 증분 audit 호출 수는 dirty Section 수만큼이며, 언제나 Section별 별도 요청이다.
-- PATCH_REQUIRED가 있으면 primary audit 38개와 별도로 해당 Section의 patch 요청이 추가되므로 전체 API 호출 수는 38개를 넘을 수 있다.
+- PATCH_REQUIRED 후보가 있으면 primary audit 38개와 별도로 Requirement별 독립 preflight, patch 후보, patch 재감사 요청이 추가되므로 전체 API 호출 수는 38개를 넘을 수 있다.
 - PR 수는 실제 누락을 안전하게 구현하고 검증한 하위 노드 수만큼 생긴다. 하나의 상위 Section에서도 여러 stacked PR이 생길 수 있다.
 - 근거 있는 모든 `PATCH_REQUIRED`는 선행 PASS나 병합을 기다리지 않고 같은 실행에서 stacked PR 생성 단계로 진행한다.
 - 이미 통과한 노드는 fingerprint가 바뀌지 않는 한 정적으로 PASS 상태를 재사용한다.

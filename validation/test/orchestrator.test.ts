@@ -300,6 +300,19 @@ test("every PATCH_REQUIRED Section must publish a complete PR chain", () => {
         : complete(sectionId)),
     createPrs: true,
   }), ["S02", "S19"]);
+  assert.deepEqual(incompletePatchSectionIds({
+    requiredSectionIds: ["S03"],
+    records: [{
+      sectionId: "S03",
+      status: "AUDIT_RECLASSIFIED",
+      reason: "Independent child preflight proved the reported omission was already satisfied.",
+      addressedRequirementIds: [],
+      resolvedWithoutPatchRequirementIds: ["S03-A"],
+      unresolvedRequirementIds: [],
+      attempts: [],
+    }],
+    createPrs: true,
+  }), []);
 });
 
 test("recursive patch children receive exactly one Requirement ID at a time", () => {

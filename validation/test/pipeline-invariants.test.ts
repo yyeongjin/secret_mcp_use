@@ -18,6 +18,8 @@ test("PATCH_REQUIRED scheduling cannot regain dependency or write-set wait gates
   assert.match(runPatches, /stackParentCommit/);
   assert.match(runPatches, /ACQUIRED_STACKED/);
   assert.match(runPatches, /nextPatchRequirementFindings/);
+  assert.match(runPatches, /PATCH_PREFLIGHT_SYSTEM_PROMPT/);
+  assert.match(runPatches, /AUDIT_RECLASSIFIED/);
 });
 
 test("the normative pipeline document permanently forbids dependency blocking", async () => {
@@ -28,4 +30,5 @@ test("the normative pipeline document permanently forbids dependency blocking", 
   assert.match(document, /절대 차단 금지 규칙/);
   assert.match(document, /유일한 규범 설계 문서/);
   assert.match(document, /README만 바꿔 동작을 변경할 수 없다/);
+  assert.match(document, /Requirement별 독립 preflight/);
 });

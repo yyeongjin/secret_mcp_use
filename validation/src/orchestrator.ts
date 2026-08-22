@@ -43,12 +43,14 @@ import { augmentAuditWithExactCssFindings, buildPatchScope } from "./patch-scope
 import {
   AUDIT_SYSTEM_PROMPT,
   DOCUMENT_AUDIT_SYSTEM_PROMPT,
+  PATCH_PREFLIGHT_SYSTEM_PROMPT,
   PATCH_REAUDIT_SYSTEM_PROMPT,
   PATCH_RETRY_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
   REGRESSION_AUDIT_SYSTEM_PROMPT,
   auditUserPrompt,
   documentAuditUserPrompt,
+  patchPreflightUserPrompt,
   patchRetryUserPrompt,
   patchReauditUserPrompt,
   patchUserPrompt,
@@ -144,6 +146,7 @@ interface PatchAttemptRecord {
     | "BLOCKED_PATCH_TOO_LARGE"
     | "BLOCKED_AUDIT_CONFLICT"
     | "BLOCKED_GUARD"
+    | "AUDIT_RECLASSIFIED"
     | "FAILED_TEST"
     | "FAILED_REAUDIT"
     | "FAILED_PUBLISH"
@@ -166,6 +169,7 @@ export interface PatchRecord {
     | "BLOCKED_PATCH_TOO_LARGE"
     | "BLOCKED_AUDIT_CONFLICT"
     | "BLOCKED_GUARD"
+    | "AUDIT_RECLASSIFIED"
     | "FAILED_TEST"
     | "FAILED_REAUDIT"
     | "FAILED_PUBLISH"
@@ -176,6 +180,7 @@ export interface PatchRecord {
   patchHash?: string;
   changedPaths?: string[];
   addressedRequirementIds?: string[];
+  resolvedWithoutPatchRequirementIds?: string[];
   unresolvedRequirementIds?: string[];
   pullRequest?: { number: number; url: string; branch: string };
   childPullRequests?: Array<{
@@ -463,6 +468,7 @@ export function incompletePatchSectionIds(args: {
   return args.requiredSectionIds.filter((sectionId) => {
     const record = records.get(sectionId);
     if (!record || (record.unresolvedRequirementIds?.length ?? 0) > 0) return true;
+    if (record.status === "AUDIT_RECLASSIFIED") return false;
     if (!args.createPrs) return record.status !== "PATCH_VERIFIED";
     return !(
       (record.status === "PR_CREATED" || record.status === "PR_REUSED") &&
@@ -965,6 +971,7 @@ async function runPatches(args: {
     }
     const attempts: PatchAttemptRecord[] = [];
     const addressedRequirementIds = new Set<string>();
+    const resolvedWithoutPatchRequirementIds = new Set<string>();
     const childPullRequests: NonNullable<PatchRecord["childPullRequests"]> = [];
     let currentInput = input;
     let currentInputs = args.inputs;
@@ -1037,11 +1044,18 @@ async function runPatches(args: {
         allPatchableFindings.map((finding) => finding.requirementId),
       )].sort();
 
-      while (addressedRequirementIds.size < allPatchableRequirementIds.length) {
+      while (
+        addressedRequirementIds.size + resolvedWithoutPatchRequirementIds.size <
+        allPatchableRequirementIds.length
+      ) {
         if (finalRecord) break;
+        const completedRequirementIds = new Set([
+          ...addressedRequirementIds,
+          ...resolvedWithoutPatchRequirementIds,
+        ]);
         const remainingFindings = nextPatchRequirementFindings(
           allPatchableFindings,
-          addressedRequirementIds,
+          completedRequirementIds,
         );
         if (remainingFindings.length === 0) break;
         const remainingAuditOutput: NodeAuditOutput = {
@@ -1055,6 +1069,70 @@ async function runPatches(args: {
           failure: { stage: "guard" | "test" | "reaudit" | "regression"; reason: string };
         } | undefined;
         let childPublished = false;
+
+        const preflight = await callAudit({
+          client: args.client,
+          input: currentInput,
+          kind: "reaudit",
+          requestId: `${args.runId}:patch-preflight:${patchNodeId}`,
+          maxAttempts: args.config.auditAttempts,
+          validate: args.validateAudit,
+          outputSchema: args.auditOutputSchema,
+          systemPrompt: PATCH_PREFLIGHT_SYSTEM_PROMPT,
+          userPrompt: patchPreflightUserPrompt({
+            auditInput: currentInput,
+            auditOutput: remainingAuditOutput,
+          }),
+        });
+        reauditCalls += preflight.attempts.length;
+        await saveAuditCall(
+          path.join(scratchDirectory, sectionId, patchNodeId, "preflight"),
+          currentInput,
+          preflight,
+        );
+        if (!preflight.ok) {
+          finalRecord = {
+            sectionId,
+            status: "BLOCKED_MODEL",
+            reason: `${patchNodeId} preflight failed: ${preflight.error}`,
+            attempts,
+          };
+          break;
+        }
+        const requirementId = remainingFindings[0].requirementId;
+        const preflightRequirementIds = new Set(
+          preflight.output.findings.map((finding) => finding.requirementId),
+        );
+        if (
+          preflight.output.status === "UNKNOWN" ||
+          (preflight.output.status !== "PASS" && (
+            preflightRequirementIds.size !== 1 || !preflightRequirementIds.has(requirementId)
+          ))
+        ) {
+          finalRecord = {
+            sectionId,
+            status: "BLOCKED_MODEL",
+            reason: `${patchNodeId} preflight did not return a final judgment for exactly ${requirementId}.`,
+            attempts,
+          };
+          break;
+        }
+        if (preflight.output.status !== "PATCH_REQUIRED") {
+          resolvedWithoutPatchRequirementIds.add(requirementId);
+          const attemptRecord: PatchAttemptRecord = {
+            attempt: 0,
+            patchNodeId,
+            status: "AUDIT_RECLASSIFIED",
+            reason: `${patchNodeId} independent preflight reclassified ${requirementId} as ${preflight.output.status}.`,
+          };
+          attempts.push(attemptRecord);
+          await writeJson(
+            path.join(scratchDirectory, sectionId, patchNodeId, "preflight-result.json"),
+            attemptRecord,
+          );
+          childIndex += 1;
+          continue;
+        }
 
         for (let attempt = 1; attempt <= args.config.patchGenerationAttempts; attempt += 1) {
           const attemptId = `${args.runId}:patch:${patchNodeId}:attempt:${attempt}`;
@@ -1544,16 +1622,25 @@ async function runPatches(args: {
       if (activeParentWorktree) await activeParentWorktree.cleanup();
     }
 
-    if (!finalRecord && addressedRequirementIds.size === allPatchableRequirementIds.length) {
+    const completedRequirementIds = new Set([
+      ...addressedRequirementIds,
+      ...resolvedWithoutPatchRequirementIds,
+    ]);
+    if (!finalRecord && completedRequirementIds.size === allPatchableRequirementIds.length) {
       const lastPull = childPullRequests.at(-1);
       const allReused = childPullRequests.length > 0 && attempts
         .filter((attempt) => attempt.status === "PR_CREATED" || attempt.status === "PR_REUSED")
         .every((attempt) => attempt.status === "PR_REUSED");
       finalRecord = {
         sectionId,
-        status: allReused ? "PR_REUSED" : "PR_CREATED",
-        reason: `Published ${childPullRequests.length} stacked child PR(s) for ${sectionId}.`,
+        status: childPullRequests.length === 0
+          ? "AUDIT_RECLASSIFIED"
+          : allReused ? "PR_REUSED" : "PR_CREATED",
+        reason: childPullRequests.length === 0
+          ? `Independent child preflights reclassified all ${sectionId} findings against the current source.`
+          : `Published ${childPullRequests.length} stacked child PR(s) for ${sectionId}; ${resolvedWithoutPatchRequirementIds.size} false-positive or non-patchable finding(s) were independently reclassified.`,
         addressedRequirementIds: [...addressedRequirementIds],
+        resolvedWithoutPatchRequirementIds: [...resolvedWithoutPatchRequirementIds],
         unresolvedRequirementIds: [],
         ...(lastPull ? { pullRequest: { number: lastPull.number, url: lastPull.url, branch: lastPull.branch } } : {}),
         childPullRequests,
@@ -1563,8 +1650,9 @@ async function runPatches(args: {
       finalRecord = {
         ...finalRecord,
         addressedRequirementIds: [...addressedRequirementIds],
+        resolvedWithoutPatchRequirementIds: [...resolvedWithoutPatchRequirementIds],
         unresolvedRequirementIds: allPatchableRequirementIds
-          .filter((requirementId) => !addressedRequirementIds.has(requirementId)),
+          .filter((requirementId) => !completedRequirementIds.has(requirementId)),
         childPullRequests,
         ...(childPullRequests.at(-1)
           ? {

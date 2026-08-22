@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AUDIT_SYSTEM_PROMPT,
+  PATCH_PREFLIGHT_SYSTEM_PROMPT,
   PATCH_REAUDIT_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
   auditUserPrompt,
+  patchPreflightUserPrompt,
   patchReauditUserPrompt,
   patchRetryUserPrompt,
   patchUserPrompt,
@@ -41,6 +43,8 @@ const auditInput = {
 const auditOutput = {
   findings: [{
     requirementId: "S10-COLOR",
+    componentId: "body",
+    finding: "The `body` color is missing.",
     evidenceRefs: [],
     implementationRefs: ["frontend/styles.css"],
   }],
@@ -60,15 +64,31 @@ test("audit output requires exact repository paths instead of source excerpts", 
 });
 
 test("patch prompt includes only finding-referenced files and exact physical lines", () => {
-  assert.match(PATCH_SYSTEM_PROMPT, /strict subset/);
-  assert.match(PATCH_SYSTEM_PROMPT, /still-unresolved IDs/);
+  assert.match(PATCH_SYSTEM_PROMPT, /exactly the one supplied Requirement ID/);
   const prompt = JSON.parse(patchUserPrompt({ auditInput, auditOutput })) as {
-    files: Array<{ path: string; canonicalLines: Array<{ line: number; text: string }> }>;
+    files: Array<{
+      path: string;
+      canonicalLines: Array<{ line: number; text: string }>;
+      targetLineHints: Array<{ line: number; text: string }>;
+    }>;
     maxDiffLines: number;
   };
   assert.deepEqual(prompt.files.map((file) => file.path), ["frontend/styles.css"]);
   assert.deepEqual(prompt.files[0].canonicalLines[0], { line: 1, text: "body { color: black; }" });
+  assert.deepEqual(prompt.files[0].targetLineHints, [{ line: 1, text: "body { color: black; }" }]);
   assert.equal(prompt.maxDiffLines, 120);
+});
+
+test("patch preflight independently owns one Requirement ID", () => {
+  assert.match(PATCH_PREFLIGHT_SYSTEM_PROMPT, /Do not trust the earlier PATCH_REQUIRED judgment/);
+  const prompt = JSON.parse(patchPreflightUserPrompt({ auditInput, auditOutput })) as {
+    requiredOutput: { ownedRequirementIds: string[] };
+    claimedFinding: Array<{ requirementId: string }>;
+    files: Array<{ path: string }>;
+  };
+  assert.deepEqual(prompt.requiredOutput.ownedRequirementIds, ["S10-COLOR"]);
+  assert.deepEqual(prompt.claimedFinding.map((finding) => finding.requirementId), ["S10-COLOR"]);
+  assert.deepEqual(prompt.files.map((file) => file.path), ["frontend/styles.css"]);
 });
 
 test("retry prompt carries a bounded rejection summary instead of the rejected diff", () => {
