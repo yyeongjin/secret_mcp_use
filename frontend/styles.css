@@ -103,6 +103,8 @@
   .action svg { width: 15px; height: 15px; }
   .action:active { transform: translateY(1px); }
   .action--light { margin-top: 34px; border-color: rgb(255 255 255 / 70%); color: #fff; }
+  .action--dark:active {
+    transform: translateY(1px); opacity: .85; transition: transform 80ms var(--ease), opacity 80ms var(--ease); }
   .action--light:hover { background: #fff; color: #111; }
   .action--dark { background: #000; color: #fff; }
   .action--dark:hover { background: #222; }
