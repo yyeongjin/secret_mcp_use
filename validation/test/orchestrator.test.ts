@@ -8,6 +8,7 @@ import {
   enforcePatchGrounding,
   groundOwnedNewImplementationPaths,
   incompletePatchSectionIds,
+  nextPatchRequirementFindings,
   patchOutputNeedsIndependentRetry,
   rejectedPatchSummaryForRetry,
 } from "../src/orchestrator.ts";
@@ -299,6 +300,32 @@ test("every PATCH_REQUIRED Section must publish a complete PR chain", () => {
         : complete(sectionId)),
     createPrs: true,
   }), ["S02", "S19"]);
+});
+
+test("recursive patch children receive exactly one Requirement ID at a time", () => {
+  const findings: NodeAuditOutput["findings"] = ["B", "A", "C"].map((suffix) => ({
+    requirementId: `S09-${suffix}`,
+    pageId: null,
+    componentId: null,
+    status: "MISSING",
+    finding: `Missing ${suffix}`,
+    evidenceRefs: [`trigger/DESIGN_INDEX_gdweb-26357.md#${suffix}`],
+    implementationRefs: ["frontend/index.html"],
+    proposedValue: null,
+  }));
+
+  assert.deepEqual(
+    nextPatchRequirementFindings(findings, new Set()).map((finding) => finding.requirementId),
+    ["S09-A"],
+  );
+  assert.deepEqual(
+    nextPatchRequirementFindings(findings, new Set(["S09-A"])).map((finding) => finding.requirementId),
+    ["S09-B"],
+  );
+  assert.deepEqual(
+    nextPatchRequirementFindings(findings, new Set(["S09-A", "S09-B", "S09-C"])),
+    [],
+  );
 });
 
 test("an exact structural omission cannot be dismissed as an audit conflict", () => {

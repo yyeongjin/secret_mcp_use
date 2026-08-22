@@ -472,6 +472,18 @@ export function incompletePatchSectionIds(args: {
   });
 }
 
+export function nextPatchRequirementFindings(
+  findings: NodeAuditOutput["findings"],
+  addressedRequirementIds: ReadonlySet<string>,
+): NodeAuditOutput["findings"] {
+  const nextRequirementId = [...new Set(findings.map((finding) => finding.requirementId))]
+    .sort()
+    .find((requirementId) => !addressedRequirementIds.has(requirementId));
+  return nextRequirementId
+    ? findings.filter((finding) => finding.requirementId === nextRequirementId)
+    : [];
+}
+
 async function exists(pathname: string): Promise<boolean> {
   try {
     await access(pathname);
@@ -1027,13 +1039,11 @@ async function runPatches(args: {
 
       while (addressedRequirementIds.size < allPatchableRequirementIds.length) {
         if (finalRecord) break;
-        const nextRequirementId = allPatchableRequirementIds.find(
-          (requirementId) => !addressedRequirementIds.has(requirementId),
+        const remainingFindings = nextPatchRequirementFindings(
+          allPatchableFindings,
+          addressedRequirementIds,
         );
-        if (!nextRequirementId) break;
-        const remainingFindings = allPatchableFindings.filter(
-          (finding) => finding.requirementId === nextRequirementId,
-        );
+        if (remainingFindings.length === 0) break;
         const remainingAuditOutput: NodeAuditOutput = {
           ...patchScope.auditOutput,
           fingerprint: currentInput.node.fingerprint,
