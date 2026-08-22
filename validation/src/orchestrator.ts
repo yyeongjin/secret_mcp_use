@@ -1023,32 +1023,9 @@ async function runPatches(args: {
         feedbackRequirementIds: patchScope.feedbackOutput.findings.map((finding) => finding.requirementId),
         excluded: patchScope.excluded,
       });
-      if (patchScope.auditOutput.findings.length === 0) {
-        const onlyAlreadySatisfied = patchScope.excluded.length > 0 && patchScope.excluded.every(
-          (item) => item.reason === "ALREADY_SATISFIED" || item.reason === "DUPLICATE_EXACT_FINDING",
-        );
-        finalRecord = {
-          sectionId,
-          status: onlyAlreadySatisfied ? "BLOCKED_AUDIT_CONFLICT" : "BLOCKED_MISSING_VALUE",
-          reason: onlyAlreadySatisfied
-            ? "Every reported finding is already satisfied by the exact stacked parent implementation."
-            : "No reported finding has an unambiguous application value in the assigned DESIGN_INDEX contract.",
-          attempts,
-        };
-      }
-      const includedRequirementIds = new Set(patchScope.includedRequirementIds);
-      const unresolvedSectionFindings = patchScope.feedbackOutput.findings.filter(
-        (finding) => !includedRequirementIds.has(finding.requirementId),
-      );
-      if (!finalRecord && unresolvedSectionFindings.length > 0) {
-        finalRecord = {
-          sectionId,
-          status: "BLOCKED_MISSING_VALUE",
-          reason: `A complete Section PR cannot be generated because these supplied findings lack a patchable contract value: ${unresolvedSectionFindings.map((finding) => finding.requirementId).join(", ")}.`,
-          attempts,
-        };
-      }
-      allPatchableFindings = patchScope.auditOutput.findings;
+      // The Section-wide scope is diagnostic only. Every Stage 2 Requirement ID
+      // still receives its own current-source preflight before any patch decision.
+      allPatchableFindings = resolved.output.findings;
       allPatchableRequirementIds = [...new Set(
         allPatchableFindings.map((finding) => finding.requirementId),
       )].sort();
@@ -1062,13 +1039,13 @@ async function runPatches(args: {
           ...addressedRequirementIds,
           ...resolvedWithoutPatchRequirementIds,
         ]);
-        const remainingFindings = nextPatchRequirementFindings(
+        let remainingFindings = nextPatchRequirementFindings(
           allPatchableFindings,
           completedRequirementIds,
         );
         if (remainingFindings.length === 0) break;
-        const remainingAuditOutput: NodeAuditOutput = {
-          ...patchScope.auditOutput,
+        let remainingAuditOutput: NodeAuditOutput = {
+          ...resolved.output,
           fingerprint: currentInput.node.fingerprint,
           findings: remainingFindings,
         };
@@ -1078,6 +1055,7 @@ async function runPatches(args: {
           failure: { stage: "guard" | "test" | "reaudit" | "regression"; reason: string };
         } | undefined;
         let childPublished = false;
+        let childResolvedWithoutPatch = false;
 
         const preflight = await callAudit({
           client: args.client,
@@ -1142,6 +1120,11 @@ async function runPatches(args: {
           childIndex += 1;
           continue;
         }
+        remainingAuditOutput = {
+          ...preflight.output,
+          fingerprint: currentInput.node.fingerprint,
+        };
+        remainingFindings = preflight.output.findings;
 
         for (let attempt = 1; attempt <= args.config.patchGenerationAttempts; attempt += 1) {
           const attemptId = `${args.runId}:patch:${patchNodeId}:attempt:${attempt}`;
@@ -1244,6 +1227,45 @@ async function runPatches(args: {
             if (attempt < args.config.patchGenerationAttempts && patchOutputNeedsIndependentRetry(output)) {
               retryContext = { output, failure: { stage: "guard", reason } };
               continue;
+            }
+            if (output.status === "BLOCKED_AUDIT_CONFLICT") {
+              const conflictResolution = await callAudit({
+                client: args.client,
+                input: currentInput,
+                kind: "reaudit",
+                requestId: `${args.runId}:patch-conflict-preflight:${patchNodeId}`,
+                maxAttempts: args.config.auditAttempts,
+                validate: args.validateAudit,
+                outputSchema: args.auditOutputSchema,
+                systemPrompt: PATCH_PREFLIGHT_SYSTEM_PROMPT,
+                userPrompt: patchPreflightUserPrompt({
+                  auditInput: currentInput,
+                  auditOutput: remainingAuditOutput,
+                }),
+              });
+              reauditCalls += conflictResolution.attempts.length;
+              await saveAuditCall(
+                path.join(scratchDirectory, sectionId, patchNodeId, "conflict-preflight"),
+                currentInput,
+                conflictResolution,
+              );
+              if (conflictResolution.ok && conflictResolution.output.status === "PASS") {
+                resolvedWithoutPatchRequirementIds.add(requirementId);
+                const reclassified: PatchAttemptRecord = {
+                  attempt: 0,
+                  patchNodeId,
+                  status: "AUDIT_RECLASSIFIED",
+                  reason: `${patchNodeId} independent conflict preflight confirmed ${requirementId} is already satisfied.`,
+                };
+                attempts.push(reclassified);
+                await writeJson(
+                  path.join(scratchDirectory, sectionId, patchNodeId, "conflict-preflight-result.json"),
+                  reclassified,
+                );
+                childIndex += 1;
+                childResolvedWithoutPatch = true;
+                break;
+              }
             }
             finalRecord = { sectionId, ...attemptRecord, attempts };
             break;
@@ -1625,7 +1647,7 @@ async function runPatches(args: {
           }
         }
 
-        if (finalRecord || !childPublished) break;
+        if (finalRecord || (!childPublished && !childResolvedWithoutPatch)) break;
       }
     } finally {
       if (activeParentWorktree) await activeParentWorktree.cleanup();

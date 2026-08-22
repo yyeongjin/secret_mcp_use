@@ -73,7 +73,7 @@ unset NVIDIA_API_KEY
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | 일반 코드 검증에서 유효한 PASS cache를 유지 |
 | `PIPELINE_DRY_RUN` | `false` | 임시 worktree 검증을 통과한 patch 게시 허용 |
 | `PIPELINE_CREATE_PRS` | `true` | 검증된 Section 하위 diff를 멱등적인 stacked draft PR로 게시하고 PR이 아닌 모든 결과는 GitHub Issue 없이 Check와 실행 artifact에만 기록 |
-| `PIPELINE_AUDIT_ATTEMPTS` | `3` | transport/schema 결함과 애매하거나 차단된 판정을 위한 동일 Section 독립 audit 최대 시도 횟수 |
+| `PIPELINE_AUDIT_ATTEMPTS` | `5` (최소값) | transport/schema 결함과 애매하거나 차단된 판정을 위한 동일 Section 독립 audit 최대 시도 횟수 |
 | `PIPELINE_PATCH_ATTEMPTS` | `8` | `PATCH_REQUIRED` Section 하나에 허용하는 전체 검증 재시도를 포함한 독립 seed patch 후보 최대 횟수 |
 
 이 값들은 runner 설정이며 전부 NVIDIA 요청에 그대로 전달되는 필드는 아닙니다. 특히 `NVIDIA_MAX_INPUT_TOKENS`는 HTTP 요청을 보내기 전에 runner가 검사합니다. 입력을 100만 token으로 가득 채우지 않고 `980000`으로 제한해 system message, chat template과 최대 4,096 output token을 위한 약 20,000 token의 여유를 둡니다.
@@ -98,7 +98,7 @@ gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' -
 gh variable set PIPELINE_FORCE_FULL_AUDIT --body 'false' --repo "$REPO"
 gh variable set PIPELINE_DRY_RUN --body 'false' --repo "$REPO"
 gh variable set PIPELINE_CREATE_PRS --body 'true' --repo "$REPO"
-gh variable set PIPELINE_AUDIT_ATTEMPTS --body '3' --repo "$REPO"
+gh variable set PIPELINE_AUDIT_ATTEMPTS --body '5' --repo "$REPO"
 gh variable set PIPELINE_PATCH_ATTEMPTS --body '8' --repo "$REPO"
 ```
 

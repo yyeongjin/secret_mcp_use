@@ -20,8 +20,15 @@ test("PATCH_REQUIRED scheduling cannot regain dependency or write-set wait gates
   assert.match(runPatches, /nextPatchRequirementFindings/);
   assert.match(runPatches, /PATCH_PREFLIGHT_SYSTEM_PROMPT/);
   assert.match(runPatches, /AUDIT_RECLASSIFIED/);
+  assert.match(runPatches, /patch-conflict-preflight/);
+  assert.doesNotMatch(runPatches, /unresolvedSectionFindings/);
   assert.match(source, /result\.ok && result\.output\.status === "UNKNOWN"/);
   assert.doesNotMatch(source, /result\.output\.status === "UNKNOWN" &&\s*Boolean\(result\.completion\.warning\)/);
+});
+
+test("audit retries cannot be configured below five independent calls", async () => {
+  const config = await readFile(new URL("../src/config.ts", import.meta.url), "utf8");
+  assert.match(config, /auditAttempts: Math\.max\(integer\(process\.env\.PIPELINE_AUDIT_ATTEMPTS, 5, 1\), 5\)/);
 });
 
 test("the normative pipeline document permanently forbids dependency blocking", async () => {

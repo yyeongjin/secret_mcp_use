@@ -73,7 +73,7 @@ Open **Settings → Secrets and variables → Actions → Variables → New repo
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | Preserves valid cached PASS results during ordinary code validation |
 | `PIPELINE_DRY_RUN` | `false` | Allows verified patches to be published after temporary-worktree validation |
 | `PIPELINE_CREATE_PRS` | `true` | Publishes idempotent stacked draft PRs for verified Section child diffs; all non-PR results stay in Checks and run artifacts, never GitHub Issues |
-| `PIPELINE_AUDIT_ATTEMPTS` | `3` | Maximum same-Section independent audit attempts for transport/schema defects and ambiguous or blocked judgments |
+| `PIPELINE_AUDIT_ATTEMPTS` | `5` (minimum) | Maximum same-Section independent audit attempts for transport/schema defects and ambiguous or blocked judgments |
 | `PIPELINE_PATCH_ATTEMPTS` | `8` | Maximum independently seeded patch candidates, including full verification retries, for one `PATCH_REQUIRED` Section |
 
 These are runner configuration variables, not all direct NVIDIA request fields. In particular, `NVIDIA_MAX_INPUT_TOKENS` is enforced before the HTTP request is sent. The `980000` limit deliberately keeps approximately 20,000 tokens available for the system message, chat template, and up to 4,096 output tokens instead of filling the entire one-million-token window with input.
@@ -98,7 +98,7 @@ gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' -
 gh variable set PIPELINE_FORCE_FULL_AUDIT --body 'false' --repo "$REPO"
 gh variable set PIPELINE_DRY_RUN --body 'false' --repo "$REPO"
 gh variable set PIPELINE_CREATE_PRS --body 'true' --repo "$REPO"
-gh variable set PIPELINE_AUDIT_ATTEMPTS --body '3' --repo "$REPO"
+gh variable set PIPELINE_AUDIT_ATTEMPTS --body '5' --repo "$REPO"
 gh variable set PIPELINE_PATCH_ATTEMPTS --body '8' --repo "$REPO"
 ```
 
