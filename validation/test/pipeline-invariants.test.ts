@@ -23,6 +23,7 @@ test("PATCH_REQUIRED scheduling cannot regain dependency or write-set wait gates
   assert.match(runPatches, /patch-conflict-preflight/);
   assert.doesNotMatch(runPatches, /unresolvedSectionFindings/);
   assert.match(source, /result\.ok && result\.output\.status === "UNKNOWN"/);
+  assert.match(source, /isUnknownRequirementId\(finding\.requirementId\)/);
   assert.doesNotMatch(source, /result\.output\.status === "UNKNOWN" &&\s*Boolean\(result\.completion\.warning\)/);
 });
 
@@ -40,4 +41,7 @@ test("the normative pipeline document permanently forbids dependency blocking", 
   assert.match(document, /유일한 규범 설계 문서/);
   assert.match(document, /README만 바꿔 동작을 변경할 수 없다/);
   assert.match(document, /Requirement별 독립 preflight/);
+  assert.match(document, /19개 Section이 모두 실제 코드 누락이면 최소 19개의 correction PR/);
+  assert.match(document, /고유 Requirement ID가 N개면 N개의 독립 하위 patch 호출과 N개의 stacked PR/);
+  assert.match(document, /UNKNOWN` finding.*patch 후보나 PR 큐에 절대 넣지 않는다/);
 });

@@ -147,6 +147,57 @@ test("an UNKNOWN contract value cannot enter repeated patch generation", () => {
   assert.match(result.warning ?? "", /unknown or absent source value/);
 });
 
+test("an UNKNOWN finding or placeholder Requirement ID cannot enter the recursive PR queue", () => {
+  const unknownStatus = patchRequired(["frontend/styles.css"]);
+  unknownStatus.findings[0].status = "UNKNOWN";
+  const statusResult = enforcePatchGrounding(groundingInput(["frontend/**"]), unknownStatus);
+  assert.equal(statusResult.output.status, "UNKNOWN");
+
+  const unknownId = patchRequired(["frontend/styles.css"]);
+  unknownId.findings[0].requirementId = "S18-UNKNOWN-001";
+  const idResult = enforcePatchGrounding(groundingInput(["frontend/**"]), unknownId);
+  assert.equal(idResult.output.status, "UNKNOWN");
+  assert.match(idResult.warning ?? "", /ungrounded or UNKNOWN finding/);
+});
+
+test("a PATCH_REQUIRED UNKNOWN placeholder retries before any recursive PR scheduling", async () => {
+  const input = groundingInput(["frontend/styles.css"]);
+  const requests: string[] = [];
+  const unknownPatch = patchRequired(["frontend/styles.css"]);
+  unknownPatch.findings[0].requirementId = "S18-UNKNOWN-001";
+  const groundedPatch = patchRequired(["frontend/styles.css"]);
+  const client = {
+    async completeJson(args: { requestId: string }) {
+      requests.push(args.requestId);
+      const parsed = requests.length === 1 ? unknownPatch : groundedPatch;
+      return {
+        parsed,
+        raw: {},
+        rawHash: fingerprint,
+        requestId: args.requestId,
+        usage: {},
+      };
+    },
+  } as unknown as NvidiaClient;
+  const validate = Object.assign((value: unknown) => typeof value === "object" && value !== null, {
+    errors: null,
+  });
+
+  const result = await callAudit({
+    client,
+    input,
+    kind: "audit",
+    requestId: "run:audit:S18",
+    maxAttempts: 3,
+    validate: validate as never,
+    outputSchema: {},
+  });
+
+  assert.deepEqual(requests, ["run:audit:S18", "run:audit:S18:retry:2"]);
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.output.status, "PATCH_REQUIRED");
+});
+
 test("an invalid PATCH response becomes bounded same-Section retry context", () => {
   const input = groundingInput(["frontend/styles.css"]);
   const auditOutput = patchRequired(["frontend/styles.css"]);
@@ -309,6 +360,11 @@ test("every PATCH_REQUIRED Section must publish a complete PR chain", () => {
     records: SECTION_IDS.map(complete),
     createPrs: true,
   }), []);
+  assert.equal(
+    SECTION_IDS.map(complete).flatMap((record) => record.childPullRequests).length,
+    19,
+    "19 independently confirmed faulty Sections require at least 19 child PRs",
+  );
   assert.deepEqual(incompletePatchSectionIds({
     requiredSectionIds: [...SECTION_IDS],
     records: SECTION_IDS
@@ -357,6 +413,32 @@ test("recursive patch children receive exactly one Requirement ID at a time", ()
     nextPatchRequirementFindings(findings, new Set(["S09-A", "S09-B", "S09-C"])),
     [],
   );
+});
+
+test("dozens of findings in one Section produce dozens of independent recursive child slots", () => {
+  const findings: NodeAuditOutput["findings"] = Array.from({ length: 40 }, (_, index) => ({
+    requirementId: `S09-REQ-${String(index + 1).padStart(2, "0")}`,
+    pageId: null,
+    componentId: null,
+    status: "MISSING",
+    finding: `Missing requirement ${index + 1}`,
+    evidenceRefs: [`trigger/DESIGN_INDEX_gdweb-26357.md#req-${index + 1}`],
+    implementationRefs: ["frontend/styles.css"],
+    proposedValue: null,
+  }));
+  const addressed = new Set<string>();
+  const childRequirementIds: string[] = [];
+
+  while (true) {
+    const child = nextPatchRequirementFindings(findings, addressed);
+    if (child.length === 0) break;
+    assert.equal(new Set(child.map((finding) => finding.requirementId)).size, 1);
+    childRequirementIds.push(child[0].requirementId);
+    addressed.add(child[0].requirementId);
+  }
+
+  assert.equal(childRequirementIds.length, 40);
+  assert.equal(new Set(childRequirementIds).size, 40);
 });
 
 test("an exact structural omission cannot be dismissed as an audit conflict", () => {

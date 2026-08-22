@@ -28,6 +28,7 @@ import { matchesAnyPath, readImpactManifest, topologicalSections } from "./manif
 import { readSpecification, readTrigger } from "./markdown.ts";
 import {
   NvidiaClient,
+  isUnknownRequirementId,
   quarantineAuditOutput,
   quarantineDocumentAuditOutput,
   runWithConcurrency,
@@ -513,6 +514,17 @@ export function enforcePatchGrounding(
   output: NodeAuditOutput,
 ): { output: NodeAuditOutput; warning?: string } {
   if (output.status !== "PATCH_REQUIRED") return { output };
+  const ungroundedFinding = output.findings.find((finding) => (
+    finding.status !== "MISSING" ||
+    isUnknownRequirementId(finding.requirementId) ||
+    finding.finding.startsWith("The isolated audit returned")
+  ));
+  if (ungroundedFinding) {
+    return {
+      output: { ...output, status: "UNKNOWN" },
+      warning: `${input.node.sectionId} returned PATCH_REQUIRED with an ungrounded or UNKNOWN finding: ${ungroundedFinding.requirementId}.`,
+    };
+  }
   const missingValue = output.findings.find((finding) => (
     /\b(?:UNKNOWN|TBD|TO BE DETERMINED)\b/i.test(finding.finding) ||
     /(?:value|font family|font|measurement|asset|coordinate|breakpoint|duration).{0,80}(?:not provided|not specified|unavailable|has no value|no value)/i.test(finding.finding)

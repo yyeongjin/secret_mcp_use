@@ -145,6 +145,10 @@ function requirementId(value: unknown, sectionId: SectionId, index: number): str
   return `${trimmed.slice(0, 143)}-${hashHex(sha256(trimmed)).slice(0, 16)}`;
 }
 
+export function isUnknownRequirementId(value: string): boolean {
+  return /(?:^|[-_:])UNKNOWN(?:[-_:]|$)/i.test(value);
+}
+
 function boundedString(value: unknown, maxLength: number): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -286,6 +290,8 @@ export function normalizeCompletionOutput(
     const findings = normalizeFindings(source.findings, sectionId);
     const patchFindingsAreGrounded = findings.length > 0 && findings.every(
       (finding) => finding.status === "MISSING" &&
+        typeof finding.requirementId === "string" &&
+        !isUnknownRequirementId(finding.requirementId) &&
         typeof finding.finding === "string" &&
         !finding.finding.startsWith("The isolated audit returned"),
     );

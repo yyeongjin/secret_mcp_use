@@ -7,6 +7,7 @@ import {
   completionSeed,
   nvidiaGuidedJsonSchema,
   normalizeCompletionOutput,
+  isUnknownRequirementId,
   parseJsonContent,
   quarantineAuditOutput,
   structuredOutputControls,
@@ -305,6 +306,25 @@ test("downgrades an ungrounded PATCH_REQUIRED envelope to UNKNOWN", () => {
   }, sectionId, fingerprint) as { status: string; findings: unknown[] };
   assert.equal(normalized.status, "UNKNOWN");
   assert.equal(normalized.findings.length, 1);
+});
+
+test("quarantines a PATCH_REQUIRED finding with an UNKNOWN placeholder Requirement ID", () => {
+  const normalized = normalizeCompletionOutput("audit", {
+    status: "PATCH_REQUIRED",
+    findings: [{
+      requirementId: "S11-UNKNOWN-001",
+      status: "MISSING",
+      finding: "A referenced asset is absent from the implementation.",
+      evidenceRefs: ["E-D01"],
+      implementationRefs: ["frontend/index.html"],
+    }],
+    publicOutput: {},
+  }, sectionId, fingerprint) as NodeAuditOutput;
+
+  assert.equal(isUnknownRequirementId("S11-UNKNOWN-001"), true);
+  assert.equal(isUnknownRequirementId("S11-ASSET-001"), false);
+  assert.equal(normalized.status, "UNKNOWN");
+  assert.equal(normalized.findings[0].requirementId, "S11-UNKNOWN-001");
 });
 
 test("each patch candidate receives a deterministic seed distinct from the previous candidate", () => {
