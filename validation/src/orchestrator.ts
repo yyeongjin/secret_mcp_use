@@ -682,11 +682,12 @@ async function runPatches(args: {
       sectionId,
       originalRequirementIds: resolved.output.findings.map((finding) => finding.requirementId),
       includedRequirementIds: patchScope.includedRequirementIds,
+      feedbackRequirementIds: patchScope.feedbackOutput.findings.map((finding) => finding.requirementId),
       excluded: patchScope.excluded,
     });
     if (patchScope.auditOutput.findings.length === 0) {
       const onlyAlreadySatisfied = patchScope.excluded.length > 0 && patchScope.excluded.every(
-        (item) => item.reason === "ALREADY_SATISFIED",
+        (item) => item.reason === "ALREADY_SATISFIED" || item.reason === "DUPLICATE_EXACT_FINDING",
       );
       records.push({
         sectionId,
@@ -1109,7 +1110,7 @@ async function runPatches(args: {
             config: args.config,
             worktreePath: worktree.path,
             input,
-            auditOutput: resolved.output,
+            auditOutput: patchScope.feedbackOutput,
             patch: guarded,
             manifest: prManifest,
             patchAttempt: attempt,
@@ -1128,7 +1129,7 @@ async function runPatches(args: {
             ...attemptRecord,
             attempts,
             addressedRequirementIds: output.requirementIds,
-            unresolvedRequirementIds: resolved.output.findings
+            unresolvedRequirementIds: patchScope.feedbackOutput.findings
               .map((finding) => finding.requirementId)
               .filter((requirementId) => !output.requirementIds.includes(requirementId)),
             pullRequest: { number: pull.number, url: pull.url, branch: pull.branch },
