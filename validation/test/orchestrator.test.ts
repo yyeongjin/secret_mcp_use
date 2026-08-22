@@ -5,6 +5,7 @@ import {
   blockedConflictContradictsExactFinding,
   callAudit,
   enforcePatchGrounding,
+  groundOwnedNewImplementationPaths,
   patchOutputNeedsIndependentRetry,
   rejectedPatchSummaryForRetry,
   unresolvedPatchDependencies,
@@ -128,6 +129,21 @@ test("PATCH_REQUIRED must identify a supplied file or a safe owned text file", (
     patchRequired(["frontend/../trigger/rewrite.md"]),
   );
   assert.equal(unsafeNewFile.output.status, "BLOCKED_MISSING_EVIDENCE");
+});
+
+test("an owned missing acceptance test receives a deterministic new implementation path", () => {
+  const output = patchRequired([]);
+  output.findings[0].finding = "No page-specific acceptance test files exist for the documented page.";
+  const grounded = groundOwnedNewImplementationPaths(
+    groundingInput(["frontend/tests/**"]),
+    output,
+  );
+  assert.deepEqual(grounded.addedRequirementIds, ["S18-TEST"]);
+  assert.deepEqual(
+    grounded.output.findings[0].implementationRefs,
+    ["frontend/tests/design-index-s18.spec.ts"],
+  );
+  assert.equal(enforcePatchGrounding(groundingInput(["frontend/tests/**"]), grounded.output).output.status, "PATCH_REQUIRED");
 });
 
 test("a DESIGN_INDEX documentation gap cannot become an application patch", () => {

@@ -249,6 +249,32 @@ export function patchOutputNeedsIndependentRetry(output: NodePatchOutput): boole
   return output.status !== "PATCH";
 }
 
+export function groundOwnedNewImplementationPaths(
+  input: NodeAuditInput,
+  output: NodeAuditOutput,
+): { output: NodeAuditOutput; addedRequirementIds: string[] } {
+  if (output.status !== "PATCH_REQUIRED") return { output, addedRequirementIds: [] };
+  const testGlob = input.policy.allowedWriteGlobs.find((glob) => glob.endsWith("/tests/**"));
+  if (!testGlob) return { output, addedRequirementIds: [] };
+  const defaultTestPath = `${testGlob.slice(0, -3)}/design-index-${input.node.sectionId.toLowerCase()}.spec.ts`;
+  const addedRequirementIds: string[] = [];
+  const findings = output.findings.map((finding) => {
+    if (
+      finding.implementationRefs.length > 0 ||
+      finding.status !== "MISSING" ||
+      !/(?:acceptance|page-specific).{0,80}test|test files?/i.test(finding.finding)
+    ) {
+      return finding;
+    }
+    addedRequirementIds.push(finding.requirementId);
+    return { ...finding, implementationRefs: [defaultTestPath] };
+  });
+  return {
+    output: { ...output, findings },
+    addedRequirementIds,
+  };
+}
+
 function sanitizeArtifactText(value: string, config: PipelineConfig, worktreePath?: string): string {
   return value
     .replaceAll(config.repositoryRoot, "<repository>")
@@ -461,7 +487,8 @@ export async function callAudit(args: {
         sectionId,
         args.input.node.fingerprint,
       );
-      const initiallyGrounded = enforcePatchGrounding(args.input, completion.parsed);
+      const pathGrounded = groundOwnedNewImplementationPaths(args.input, completion.parsed);
+      const initiallyGrounded = enforcePatchGrounding(args.input, pathGrounded.output);
       const augmented = args.kind === "audit"
         ? augmentAuditWithExactCssFindings(args.input, initiallyGrounded.output)
         : { output: initiallyGrounded.output, addedRequirementIds: [] };
@@ -470,6 +497,9 @@ export async function callAudit(args: {
       output = grounded.output;
       const warnings = [
         completion.warning,
+        pathGrounded.addedRequirementIds.length > 0
+          ? `Assigned owned new test paths for grounded omissions: ${pathGrounded.addedRequirementIds.join(", ")}.`
+          : undefined,
         initiallyGrounded.warning,
         augmented.addedRequirementIds.length > 0
           ? `Exact CSS contract comparison added grounded findings: ${augmented.addedRequirementIds.join(", ")}.`

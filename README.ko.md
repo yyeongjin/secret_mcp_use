@@ -140,7 +140,7 @@ Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마
 
 하나의 `PATCH_REQUIRED` Section에는 최대 `PIPELINE_PATCH_ATTEMPTS`개의 완전한 patch 후보를 허용합니다. 후보마다 서로 다른 결정적 seed를 쓰는 별도 NVIDIA 요청이며, 같은 격리 Section 계약과 변경되지 않은 원본 파일에서 시작합니다. 요청에는 해당 Section finding이 지목한 구현 파일만 넣고, 한 줄짜리 원본 규칙을 정확한 diff 한 줄로 유지할 수 있도록 번호가 붙은 물리 소스 줄도 함께 제공합니다. 후보는 supplied Requirement ID 전체를 구현해야 합니다. 부분 coverage, JSON·schema 오류, 차단 후보 판정, 보정 가능한 diff 형식 오류, 테스트 실패, 수정 Section 재감사 실패, 영향받은 기존 PASS 회귀 감사 실패가 발생하면 해당 후보만 폐기하고 다음 후보를 시작합니다. 재시도에는 자기 거부 출력의 제한된 요약과 실패 진단만 전달하며 다른 Section의 계약, 응답 또는 diff는 전달하지 않습니다. 불변 경로 쓰기, 소유권 밖 쓰기, 위험한 경로·파일 작업에서 guard를 완화하지 않습니다. dependency와 write-lock 충돌은 다음 main revision까지 queue에 남기고, 다른 실패는 독립 후보를 모두 소진한 뒤 명확히 보고합니다. 모든 시도는 `patches/SXX/attempt-N/` 아래에 기록합니다. PASS에는 patch 요청과 PR을 만들지 않으며, 실제 근거 부족은 독립 audit 재시도를 모두 소진한 뒤에만 피드백으로 게시합니다.
 
-audit의 `implementationRefs`는 schema에서 저장소 상대 경로만 허용합니다. selector, 소스 조각, `path:line`, 컴포넌트 이름 또는 설명문은 patch scheduling 전에 거부합니다. 모든 `PATCH_REQUIRED` finding은 supplied writable path 또는 허용된 안전한 새 text file 경로를 정확히 지목해야 하므로, 모델이 파일 대신 코드를 설명했다는 이유로 근거 있는 누락이 조용히 차단 상태로 강등되지 않습니다.
+audit의 `implementationRefs`는 schema에서 저장소 상대 경로만 허용합니다. selector, 소스 조각, `path:line`, 컴포넌트 이름 또는 설명문은 patch scheduling 전에 거부합니다. 모든 `PATCH_REQUIRED` finding은 supplied writable path 또는 허용된 안전한 새 text file 경로를 정확히 지목해야 합니다. S18이 필수 페이지별 acceptance test 파일 부재를 증명하고 `frontend/tests/**`를 소유하지만 audit가 새 파일 경로를 생략하면, 결정적 오케스트레이터가 코드 누락을 근거 부족으로 강등하지 않고 `frontend/tests/design-index-s18.spec.ts`를 배정합니다. 실제 테스트 diff의 작성과 검증은 계속 NVIDIA 독립 patch 요청이 담당합니다.
 
 DESIGN_INDEX, Specification 또는 문서 자체의 누락은 애플리케이션 patch로 바꾸지 않습니다. 주석, marker, TODO, hidden metadata, 문서 문자열 또는 report file만 추가하는 후보는 `COMMENT_ONLY_PATCH`로 거부하며 사용자에게 보이거나 동작하는 프론트엔드 요구사항을 통과시킬 수 없습니다.
 

@@ -1420,6 +1420,8 @@ GitHub PR은 branch 간 실제 변경이 있어야 하므로, 안전한 code dif
 
 피드백 Issue 대상은 독립 audit 재시도를 모두 소진한 `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`, `UNKNOWN`, 그리고 독립 patch 후보를 모두 소진한 guard·test·re-audit·publish 실패다. `PATCH_WAITING_DEPENDENCY`, write-set lock 대기, PASS, CACHED_PASS에는 Issue를 만들지 않는다. patch 후보는 supplied finding 전체를 구현해야 하며 부분 수정 PR은 허용하지 않는다. 모든 finding을 구현하고 검증한 diff만 PR이 된다.
 
+S18이 명세에 있는 페이지별 acceptance test의 부재를 찾았는데 새 파일의 `implementationRefs`만 생략한 경우는 근거 부족이 아니다. S18의 소유 경로 `frontend/tests/**`에서 결정적 기본 경로 `frontend/tests/design-index-s18.spec.ts`를 배정하고 독립 patch 요청으로 보낸다. 경로만 오케스트레이터가 결정하며 테스트 내용과 diff는 NVIDIA가 명세 근거로 생성하고 전체 guard를 통과해야 한다.
+
 ```markdown
 ## Validation feedback
 
