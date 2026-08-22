@@ -1,6 +1,6 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
 import postcss from "postcss";
-import type { NodeAuditInput, NodeAuditOutput } from "./types.ts";
+import type { AuditFinding, NodeAuditInput, NodeAuditOutput } from "./types.ts";
 
 export type PatchScopeExclusionReason =
   | "ALREADY_SATISFIED"
@@ -77,6 +77,37 @@ function implementationCustomProperties(input: NodeAuditInput): Map<string, stri
   return declarations;
 }
 
+function implementationCustomPropertyReferences(input: NodeAuditInput): Map<string, Set<string>> {
+  const references = new Map<string, Set<string>>();
+  for (const file of input.implementation.files) {
+    if (!file.path.endsWith(".css") || file.content === null) continue;
+    try {
+      postcss.parse(file.content, { from: file.path }).walkDecls((declaration) => {
+        for (const match of declaration.value.matchAll(/var\(\s*(--[A-Za-z0-9_-]+)/g)) {
+          const paths = references.get(match[1]) ?? new Set<string>();
+          paths.add(file.path);
+          references.set(match[1], paths);
+        }
+      });
+    } catch {
+      // Invalid CSS cannot establish a deterministic reference fact.
+    }
+  }
+  return references;
+}
+
+function sourceFacts(input: NodeAuditInput): Array<{ factId: string; text: string }> {
+  const candidates = input.payload.sourceFacts;
+  if (!Array.isArray(candidates)) return [];
+  return candidates.flatMap((candidate) => {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) return [];
+    const record = candidate as Record<string, unknown>;
+    return typeof record.factId === "string" && typeof record.text === "string"
+      ? [{ factId: record.factId, text: record.text }]
+      : [];
+  });
+}
+
 function tokenExpectation(finding: string): TokenExpectation | null {
   const match = /\bToken\s+`(--[A-Za-z0-9_-]+)`\s+with value\s+`([^`]+)`(?:\s+and alpha\s+`([^`]+)`)?\s+is required but not found\b/i.exec(finding);
   if (!match) return null;
@@ -139,6 +170,65 @@ function valuesEquivalent(left: string, right: string, leftAlpha?: string): bool
   if (leftAlpha !== undefined) return false;
   const normalize = (value: string) => value.trim().toLowerCase().replaceAll(/\s+/g, " ");
   return normalize(left) === normalize(right);
+}
+
+export function augmentAuditWithExactCssFindings(
+  input: NodeAuditInput,
+  output: NodeAuditOutput,
+): { output: NodeAuditOutput; addedRequirementIds: string[] } {
+  if (input.node.sectionId !== "S09") return { output, addedRequirementIds: [] };
+
+  const contractTokens = contractCustomProperties(input.contract.designIndexFragment);
+  const implementationTokens = implementationCustomProperties(input);
+  const references = implementationCustomPropertyReferences(input);
+  const facts = sourceFacts(input);
+  const knownRequirementIds = new Set(input.node.requirementIds);
+  const existingRequirementIds = new Set(output.findings.map((finding) => finding.requirementId));
+  const deterministicFindings: AuditFinding[] = [];
+
+  for (const [property, referencedPaths] of references) {
+    const contractValues = contractTokens.get(property) ?? [];
+    if (contractValues.length === 0) continue;
+    const actualValues = implementationTokens.get(property) ?? [];
+    if (actualValues.some((actual) => contractValues.some((expected) => valuesEquivalent(expected, actual)))) {
+      continue;
+    }
+    const sourceFact = facts.find((fact) => fact.text.trim().startsWith(`${property}:`));
+    if (!sourceFact) continue;
+    const requirementId = sourceFact.factId.replace("-FACT-", "-REQ-");
+    if (!knownRequirementIds.has(requirementId) || existingRequirementIds.has(requirementId)) continue;
+    const expectedValue = contractValues[0];
+    deterministicFindings.push({
+      requirementId,
+      pageId: null,
+      componentId: property,
+      status: "MISSING",
+      finding: actualValues.length === 0
+        ? `Token \`${property}\` with value \`${expectedValue}\` is required but not found in the supplied CSS.`
+        : `Token \`${property}\` must use exact contract value \`${expectedValue}\`; the supplied CSS uses a different value.`,
+      evidenceRefs: [sourceFact.factId],
+      implementationRefs: [...referencedPaths].sort(),
+      proposedValue: null,
+    });
+  }
+
+  if (deterministicFindings.length === 0) return { output, addedRequirementIds: [] };
+  const findings = output.status === "PATCH_REQUIRED"
+    ? [...output.findings, ...deterministicFindings]
+    : deterministicFindings;
+  const addedRequirementIds = deterministicFindings.map((finding) => finding.requirementId);
+  return {
+    output: {
+      ...output,
+      status: "PATCH_REQUIRED",
+      findings,
+      publicOutput: {
+        ...output.publicOutput,
+        exactContractRequirementIds: addedRequirementIds,
+      },
+    },
+    addedRequirementIds,
+  };
 }
 
 export function buildPatchScope(input: NodeAuditInput, output: NodeAuditOutput): PatchScopeResult {

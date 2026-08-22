@@ -31,7 +31,7 @@ import {
   isRetryablePatchCandidateError,
   type GuardedPatch,
 } from "./patch.ts";
-import { buildPatchScope } from "./patch-scope.ts";
+import { augmentAuditWithExactCssFindings, buildPatchScope } from "./patch-scope.ts";
 import {
   AUDIT_SYSTEM_PROMPT,
   PATCH_REAUDIT_SYSTEM_PROMPT,
@@ -440,14 +440,26 @@ export async function callAudit(args: {
         sectionId,
         args.input.node.fingerprint,
       );
-      const grounded = enforcePatchGrounding(args.input, completion.parsed);
+      const initiallyGrounded = enforcePatchGrounding(args.input, completion.parsed);
+      const augmented = args.kind === "audit"
+        ? augmentAuditWithExactCssFindings(args.input, initiallyGrounded.output)
+        : { output: initiallyGrounded.output, addedRequirementIds: [] };
+      const grounded = enforcePatchGrounding(args.input, augmented.output);
       assertAuditOutput(args.validate, grounded.output, sectionId, args.input.node.fingerprint);
       output = grounded.output;
-      validatedCompletion = grounded.warning
+      const warnings = [
+        completion.warning,
+        initiallyGrounded.warning,
+        augmented.addedRequirementIds.length > 0
+          ? `Exact CSS contract comparison added grounded findings: ${augmented.addedRequirementIds.join(", ")}.`
+          : undefined,
+        grounded.warning,
+      ].filter((warning): warning is string => Boolean(warning));
+      validatedCompletion = warnings.length > 0
         ? {
           ...completion,
           parsed: grounded.output,
-          warning: [completion.warning, grounded.warning].filter(Boolean).join(" "),
+          warning: warnings.join(" "),
         }
         : completion;
     } catch (error) {
