@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildPatchScope } from "../src/patch-scope.ts";
+import { augmentAuditWithExactCssFindings, buildPatchScope } from "../src/patch-scope.ts";
 import type { NodeAuditInput, NodeAuditOutput, Sha256 } from "../src/types.ts";
 
 const fingerprint = `sha256:${"1".repeat(64)}` as Sha256;
@@ -112,4 +112,40 @@ test("non-token findings remain in the isolated patch scope", () => {
   const result = buildPatchScope(auditInput(":root {}\n"), output);
   assert.deepEqual(result.includedRequirementIds, ["S09-FOCUS"]);
   assert.deepEqual(result.excluded, []);
+});
+
+test("exact CSS comparison adds a grounded finding for a referenced missing contract token", () => {
+  const input = auditInput([
+    ":root {",
+    "  --color-primary: #4169f5;",
+    "}",
+    ".action:hover { background: var(--color-primary-hover); }",
+  ].join("\n"));
+  input.node.requirementIds = ["S09-REQ-HOVER"];
+  input.payload = {
+    sourceFacts: [{
+      factId: "S09-FACT-HOVER",
+      text: "--color-primary-hover: #3157dd;",
+    }],
+  };
+  const pass = { ...auditOutput(), status: "PASS" as const, findings: [] };
+
+  const result = augmentAuditWithExactCssFindings(input, pass);
+  assert.deepEqual(result.addedRequirementIds, ["S09-REQ-HOVER"]);
+  assert.equal(result.output.status, "PATCH_REQUIRED");
+  assert.equal(result.output.findings[0].implementationRefs[0], "frontend/styles.css");
+  assert.match(result.output.findings[0].finding, /--color-primary-hover/);
+});
+
+test("exact CSS comparison ignores unreferenced optional contract tokens", () => {
+  const input = auditInput(":root { --color-primary: #4169f5; }\n");
+  input.node.requirementIds = ["S09-REQ-DISABLED"];
+  input.payload = {
+    sourceFacts: [{ factId: "S09-FACT-DISABLED", text: "--color-disabled: #bbb;" }],
+  };
+  const pass = { ...auditOutput(), status: "PASS" as const, findings: [] };
+
+  const result = augmentAuditWithExactCssFindings(input, pass);
+  assert.deepEqual(result.addedRequirementIds, []);
+  assert.equal(result.output.status, "PASS");
 });
