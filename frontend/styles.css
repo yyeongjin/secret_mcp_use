@@ -40,6 +40,7 @@
     --color-primary-pressed: #2748be;
     --z-overlay: 190;
     --bp-xl: 1280px;
+    --bp-lg: 1024px;
     --color-overlay: rgb(0 0 0 / 52%);
     --z-panel: 200;
     --container-main: 1012px;
