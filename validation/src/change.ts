@@ -50,6 +50,14 @@ async function eventPayload(config: PipelineConfig): Promise<Record<string, unkn
   return JSON.parse(await readFile(config.eventPath, "utf8")) as Record<string, unknown>;
 }
 
+export function fallbackBeforeCommit(
+  eventName: string,
+  baseCommit: string,
+  parentCommit: string | null,
+): string | null {
+  return eventName === "workflow_dispatch" ? baseCommit : parentCommit;
+}
+
 export async function buildChangeEvent(
   config: PipelineConfig,
   manifest: ImpactManifest,
@@ -74,7 +82,11 @@ export async function buildChangeEvent(
   let beforeCommit = eventBefore;
   if (!beforeCommit) {
     const parent = await runCommand("git", ["rev-parse", `${config.baseCommit}^`], { cwd: config.repositoryRoot, allowFailure: true });
-    beforeCommit = parent.exitCode === 0 ? parent.stdout.trim() : null;
+    beforeCommit = fallbackBeforeCommit(
+      config.eventName,
+      config.baseCommit,
+      parent.exitCode === 0 ? parent.stdout.trim() : null,
+    );
   }
   const changes = await changedFiles(config, beforeCommit, config.baseCommit);
   const triggerChanged = changes.some((file) => file.path.startsWith("trigger/DESIGN_INDEX_gdweb-"));
