@@ -31,6 +31,7 @@ import {
   isRetryablePatchCandidateError,
   type GuardedPatch,
 } from "./patch.ts";
+import { buildPatchScope } from "./patch-scope.ts";
 import {
   AUDIT_SYSTEM_PROMPT,
   PATCH_REAUDIT_SYSTEM_PROMPT,
@@ -650,6 +651,27 @@ async function runPatches(args: {
     }
 
     const attempts: PatchAttemptRecord[] = [];
+    const patchScope = buildPatchScope(input, resolved.output);
+    await writeJson(path.join(args.runDirectory, "nodes", sectionId, "patch-scope.json"), {
+      schemaVersion: "design-validation/patch-scope/v1",
+      sectionId,
+      originalRequirementIds: resolved.output.findings.map((finding) => finding.requirementId),
+      includedRequirementIds: patchScope.includedRequirementIds,
+      excluded: patchScope.excluded,
+    });
+    if (patchScope.auditOutput.findings.length === 0) {
+      const onlyAlreadySatisfied = patchScope.excluded.length > 0 && patchScope.excluded.every(
+        (item) => item.reason === "ALREADY_SATISFIED",
+      );
+      records.push({
+        sectionId,
+        status: onlyAlreadySatisfied ? "BLOCKED_AUDIT_CONFLICT" : "BLOCKED_MISSING_VALUE",
+        reason: onlyAlreadySatisfied
+          ? "Every reported finding is already satisfied by the exact current implementation."
+          : "No reported finding has an unambiguous application value in the assigned DESIGN_INDEX CSS contract.",
+      });
+      continue;
+    }
     let retryContext: {
       output: NodePatchOutput;
       failure: { stage: "guard" | "test" | "reaudit" | "regression"; reason: string };
@@ -663,7 +685,7 @@ async function runPatches(args: {
       let completion: CompletionResult | undefined;
       let output: NodePatchOutput;
       try {
-        const findingPaths = new Set(resolved.output.findings.flatMap((finding) => finding.implementationRefs));
+        const findingPaths = new Set(patchScope.auditOutput.findings.flatMap((finding) => finding.implementationRefs));
         const patchInputArtifact = {
           schemaVersion: "design-validation/patch-input/v2",
           runId: args.runId,
@@ -671,7 +693,7 @@ async function runPatches(args: {
           sectionId,
           fingerprint: input.node.fingerprint,
           baseCommit: input.run.baseCommit,
-          findings: resolved.output.findings,
+          findings: patchScope.auditOutput.findings,
           designIndexSource: input.contract.designIndexSource,
           specificationFragment: input.contract.specificationFragment,
           designIndexFragment: input.contract.designIndexFragment,
@@ -694,18 +716,18 @@ async function runPatches(args: {
           userPrompt: retryContext
             ? patchRetryUserPrompt({
               auditInput: input,
-              auditOutput: resolved.output,
+              auditOutput: patchScope.auditOutput,
               rejectedOutput: retryContext.output,
               failure: retryContext.failure,
             })
-            : patchUserPrompt({ auditInput: input, auditOutput: resolved.output }),
+            : patchUserPrompt({ auditInput: input, auditOutput: patchScope.auditOutput }),
           outputSchema: args.patchCandidateOutputSchema,
         });
         await writeJson(path.join(attemptDirectory, "api-response.json"), completion.raw);
         output = canonicalizePatchOutput({
           value: completion.parsed,
           auditInput: input,
-          auditOutput: resolved.output,
+          auditOutput: patchScope.auditOutput,
         });
         assertPatchOutput(
           args.validatePatch,
@@ -730,7 +752,7 @@ async function runPatches(args: {
           ? rejectedPatchSummaryForRetry({
             value: completion.parsed,
             input,
-            auditOutput: resolved.output,
+            auditOutput: patchScope.auditOutput,
           })
           : null;
         retryContext = rejectedOutput
