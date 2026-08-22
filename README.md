@@ -138,6 +138,8 @@ One `PATCH_REQUIRED` Section may receive up to `PIPELINE_PATCH_ATTEMPTS` complet
 
 Audit `implementationRefs` are schema-constrained repository-relative paths. A selector, source excerpt, `path:line`, component name, or prose description is rejected before patch scheduling. Every `PATCH_REQUIRED` finding must identify an exact supplied writable path or an allowed safe new text-file path, so a grounded omission cannot be silently downgraded merely because the model described the code instead of naming its file.
 
+A DESIGN_INDEX/Specification/documentation gap cannot be converted into an application patch. Comment-only, marker-only, TODO-only, hidden-metadata, documentation-string, and report-file candidates are rejected as `COMMENT_ONLY_PATCH`; they can never satisfy a user-visible or behavioral frontend requirement.
+
 An affected prior-PASS regression request is a before/after delta audit, not another fresh completeness audit. It receives only that prior-PASS Section's unchanged contract, its own implementation slice before and after the candidate, the changed path list, and a PASS fingerprint proof. A pre-existing omission or a requirement unchanged by the candidate cannot block the PR as a new regression. The patching Section's findings and response are never included.
 
 ### 5. Run and inspect the pipeline

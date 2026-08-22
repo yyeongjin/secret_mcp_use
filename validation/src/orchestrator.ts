@@ -288,6 +288,15 @@ export function enforcePatchGrounding(
   output: NodeAuditOutput,
 ): { output: NodeAuditOutput; warning?: string } {
   if (output.status !== "PATCH_REQUIRED") return { output };
+  const contractGap = output.findings.find((finding) => (
+    /(?:design[_ ]index|specification|contract|source document|design document).{0,100}(?:section|table|field|heading|entry|evidence).{0,60}(?:lacks?|missing|absent|not (?:provided|specified|present)|does not (?:contain|include))/i.test(finding.finding)
+  ));
+  if (contractGap) {
+    return {
+      output: { ...output, status: "BLOCKED_CONTRACT_CONFLICT" },
+      warning: `${input.node.sectionId} described a DESIGN_INDEX or Specification gap as an application patch: ${contractGap.requirementId}.`,
+    };
+  }
   if (input.policy.allowedWriteGlobs.length === 0) {
     return {
       output: { ...output, status: "BLOCKED_CONTRACT_CONFLICT" },

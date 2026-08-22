@@ -9,6 +9,7 @@ import {
   canonicalizePatchOutput,
   guardPatch,
   inspectUnifiedDiff,
+  isCommentOnlyPatch,
   isRetryablePatchCandidateError,
   normalizeUnifiedDiffMechanics,
   relocateUnifiedDiffHunks,
@@ -31,6 +32,26 @@ test("unified diff inspection returns exact frontend write paths", () => {
   assert.deepEqual(result.changedPaths, ["frontend/styles.css"]);
   assert.equal(result.additions, 1);
   assert.equal(result.deletions, 1);
+});
+
+test("comment-only patches cannot masquerade as frontend implementation", () => {
+  const commentOnly = [
+    "diff --git a/frontend/index.html b/frontend/index.html",
+    "--- a/frontend/index.html",
+    "+++ b/frontend/index.html",
+    "@@ -1 +1,2 @@",
+    " <main></main>",
+    "+<!-- S11 specification marker -->",
+    "",
+  ].join("\n");
+  assert.equal(isCommentOnlyPatch(commentOnly), true);
+  assert.equal(isCommentOnlyPatch(commentOnly.replace(
+    "+<!-- S11 specification marker -->",
+    "+<img src=\"/assets/icon.svg\" alt=\"\">",
+  )), false);
+  assert.equal(isRetryablePatchCandidateError(new Error(
+    "COMMENT_ONLY_PATCH: comments do not implement a requirement.",
+  )), true);
 });
 
 test("file deletion and path traversal are rejected", () => {

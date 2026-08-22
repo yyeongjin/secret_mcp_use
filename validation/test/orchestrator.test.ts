@@ -126,6 +126,14 @@ test("PATCH_REQUIRED must identify a supplied file or a safe owned text file", (
   assert.equal(unsafeNewFile.output.status, "BLOCKED_MISSING_EVIDENCE");
 });
 
+test("a DESIGN_INDEX documentation gap cannot become an application patch", () => {
+  const output = patchRequired(["frontend/index.html"]);
+  output.findings[0].finding = "Design Index section S11 lacks a specification table header.";
+  const result = enforcePatchGrounding(groundingInput(["frontend/**"]), output);
+  assert.equal(result.output.status, "BLOCKED_CONTRACT_CONFLICT");
+  assert.match(result.warning ?? "", /DESIGN_INDEX or Specification gap/);
+});
+
 test("an invalid PATCH response becomes bounded same-Section retry context", () => {
   const input = groundingInput(["frontend/styles.css"]);
   const auditOutput = patchRequired(["frontend/styles.css"]);

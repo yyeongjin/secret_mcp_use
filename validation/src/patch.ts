@@ -24,6 +24,7 @@ export interface GuardedPatch {
 
 export function isRetryablePatchCandidateError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith("COMMENT_ONLY_PATCH:")) return true;
   if (
     message === "Malformed unified diff file headers." ||
     message === "Patch contains no changed files." ||
@@ -372,6 +373,39 @@ export function inspectUnifiedDiff(diff: string): {
   return { changedPaths: changedPaths.sort(), additions, deletions };
 }
 
+export function isCommentOnlyPatch(diff: string): boolean {
+  const changedLines = diff.split("\n")
+    .filter((line) => (
+      (line.startsWith("+") && !line.startsWith("+++")) ||
+      (line.startsWith("-") && !line.startsWith("---"))
+    ))
+    .map((line) => line.slice(1).trim())
+    .filter((line) => line !== "");
+  if (changedLines.length === 0) return false;
+
+  let htmlComment = false;
+  let blockComment = false;
+  return changedLines.every((line) => {
+    if (htmlComment) {
+      if (line.includes("-->")) htmlComment = false;
+      return true;
+    }
+    if (blockComment) {
+      if (line.includes("*/")) blockComment = false;
+      return true;
+    }
+    if (line.startsWith("<!--")) {
+      htmlComment = !line.includes("-->");
+      return true;
+    }
+    if (line.startsWith("/*") || line.startsWith("{/*")) {
+      blockComment = !line.includes("*/");
+      return true;
+    }
+    return line.startsWith("//");
+  });
+}
+
 async function currentHash(repositoryRoot: string, relativePath: string): Promise<Sha256> {
   const absolutePath = path.join(repositoryRoot, relativePath);
   if (!(await exists(absolutePath))) return sha256("");
@@ -386,6 +420,9 @@ export async function guardPatch(args: {
   scratchDirectory: string;
 }): Promise<GuardedPatch> {
   const inspection = inspectUnifiedDiff(args.patchOutput.diff);
+  if (isCommentOnlyPatch(args.patchOutput.diff)) {
+    throw new Error("COMMENT_ONLY_PATCH: comments do not implement a user-visible or behavioral DESIGN_INDEX requirement.");
+  }
   if (inspection.changedPaths.length > args.config.maxChangedFiles) {
     throw new Error(
       `Patch changes ${inspection.changedPaths.length} files; limit is ${args.config.maxChangedFiles}.`,
