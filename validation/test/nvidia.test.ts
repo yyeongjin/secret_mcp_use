@@ -232,10 +232,32 @@ test("normalizes identifier transport defects without changing the finding judgm
     ],
   }, sectionId, fingerprint) as { findings: Array<{ requirementId: string; status: string }> };
 
-  assert.equal(normalized.findings[0].requirementId, "Typography size");
+  assert.equal(normalized.findings[0].requirementId, "S05-Typography size");
   assert.equal(normalized.findings[0].status, "INSUFFICIENT_EVIDENCE");
   assert.equal(normalized.findings[1].requirementId.length, 160);
   assert.equal(normalized.findings[1].status, "MISSING");
+});
+
+test("deterministically assigns foreign document finding IDs to the isolated Section", () => {
+  const normalized = normalizeCompletionOutput("document-audit", {
+    status: "DOCUMENT_GAP",
+    findings: [{
+      requirementId: "REQ-1.1.3",
+      status: "MISSING",
+      finding: "The target viewport list is absent.",
+    }, {
+      requirementId: "Casing",
+      status: "MISSING",
+      finding: "Text casing is not specified.",
+    }],
+    publicOutput: {},
+  }, sectionId, fingerprint) as { status: string; findings: Array<{ requirementId: string }> };
+
+  assert.equal(normalized.status, "DOCUMENT_GAP");
+  assert.deepEqual(
+    normalized.findings.map((finding) => finding.requirementId),
+    ["S05-REQ-1.1.3", "S05-Casing"],
+  );
 });
 
 test("quarantines an incomplete audit response as UNKNOWN instead of creating a patch", () => {
@@ -324,7 +346,7 @@ test("quarantines a PATCH_REQUIRED finding with an UNKNOWN placeholder Requireme
   assert.equal(isUnknownRequirementId("S11-UNKNOWN-001"), true);
   assert.equal(isUnknownRequirementId("S11-ASSET-001"), false);
   assert.equal(normalized.status, "UNKNOWN");
-  assert.equal(normalized.findings[0].requirementId, "S11-UNKNOWN-001");
+  assert.equal(normalized.findings[0].requirementId, "S05-UNKNOWN-001");
 });
 
 test("each patch candidate receives a deterministic seed distinct from the previous candidate", () => {

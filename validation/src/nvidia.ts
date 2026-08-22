@@ -141,8 +141,12 @@ function requirementId(value: unknown, sectionId: SectionId, index: number): str
     return `${sectionId}-FINDING-${String(index + 1).padStart(3, "0")}`;
   }
   const trimmed = value.trim();
-  if (trimmed.length <= 160) return trimmed;
-  return `${trimmed.slice(0, 143)}-${hashHex(sha256(trimmed)).slice(0, 16)}`;
+  const localId = trimmed.replace(/^S(?:0[1-9]|1[0-9])[-_:]/i, "");
+  const owned = new RegExp(`^${sectionId}(?:[-_:]|$)`, "i").test(trimmed)
+    ? trimmed
+    : `${sectionId}-${localId}`;
+  if (owned.length <= 160) return owned;
+  return `${owned.slice(0, 143)}-${hashHex(sha256(owned)).slice(0, 16)}`;
 }
 
 export function isUnknownRequirementId(value: string): boolean {
