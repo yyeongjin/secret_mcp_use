@@ -166,7 +166,7 @@
 
   .back-to-top { position: fixed; z-index: 90; right: 18px; bottom: 18px; display: grid; width: 38px; height: 38px; place-items: center; border-radius: 50%; background: #000; color: #fff; cursor: pointer; opacity: 0; pointer-events: none; transform: translateY(8px); transition: opacity 160ms var(--ease), transform 160ms var(--ease); }
   .back-to-top.is-visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
-  .back-to-top svg { width: 15px; height: 15px; }
+  .back-to-top svg { width: 14px; height: 14px; }
 
   .site-footer { min-height: 457px; border-top: 1px solid var(--color-border); background: #fff; }
   .site-footer__inner { position: relative; width: min(calc(100% - 70px), 1130px); margin-inline: auto; padding: 54px 0 30px; }
