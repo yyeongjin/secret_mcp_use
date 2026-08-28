@@ -138,6 +138,12 @@
   .games { min-height: 800px; margin-top: 40px; padding-top: 108px; }
   .games__grid { display: grid; grid-template-columns: 400px 1fr; gap: 64px; align-items: end; }
   .games h2 { font-size: 35px; font-weight: 500; line-height: 1.25; }
+  .games-layout {
+    display: grid;
+    grid-template-columns: 400px 548px;
+    gap: 64px;
+    align-items: start;
+  }
   .games__intro { margin-top: 18px; color: var(--color-muted-dark); }
   .game-selector { display: grid; margin-top: 44px; }
   .game-selector button { width: max-content; min-height: 52px; padding: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--color-muted); cursor: pointer; font-size: 24px; font-weight: 500; text-align: left; }
