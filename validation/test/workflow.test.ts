@@ -31,4 +31,5 @@ test("a broken baseline is recorded without bypassing patched-worktree verificat
 
   const worktreeSource = await readFile("validation/src/worktree.ts", "utf8");
   assert.match(worktreeSource, /runCommand\("npm", \["run", "test:frontend"\]/);
+  assert.match(worktreeSource, /\["apply", "--unidiff-zero", "--whitespace=error-all"/);
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -15,6 +15,7 @@ import {
   relocateUnifiedDiffHunks,
   restoreOmittedAdditionPrefixes,
 } from "../src/patch.ts";
+import { sha256 } from "../src/hash.ts";
 import type { ImpactManifest, NodeAuditInput, NodeAuditOutput, PipelineConfig, Sha256 } from "../src/types.ts";
 
 const execFileAsync = promisify(execFile);
@@ -499,6 +500,73 @@ test("new text file guard requires an owned 100644 creation patch", async () => 
       scratchDirectory: path.join(root, "scratch"),
     });
     assert.deepEqual(guarded.changedPaths, ["frontend/tests/home.spec.ts"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("zero-context replacement is accepted only against the exact declared base hash", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "secret-mcp-zero-context-test-"));
+  try {
+    await execFileAsync("git", ["init", "-q"], { cwd: root });
+    await mkdir(path.join(root, "frontend"));
+    await mkdir(path.join(root, "scratch"));
+    const source = [
+      "@media (max-width: 768px) {",
+      "  .main-container { width: calc(100% - 32px); }",
+      "}",
+      "",
+    ].join("\n");
+    await writeFile(path.join(root, "frontend/styles.css"), source);
+    const fingerprint = `sha256:${"c".repeat(64)}` as Sha256;
+    const diff = [
+      "diff --git a/frontend/styles.css b/frontend/styles.css",
+      "--- a/frontend/styles.css",
+      "+++ b/frontend/styles.css",
+      "@@ -2,1 +2,1 @@",
+      "-  .main-container { width: calc(100% - 32px); }",
+      "+  .main-container { width: calc(100% - 64px); }",
+      "",
+    ].join("\n");
+    const input = {
+      node: { sectionId: "S12", fingerprint },
+      implementation: {
+        files: [{
+          path: "frontend/styles.css",
+          contentHash: sha256(source),
+          byteLength: source.length,
+          encoding: "utf8",
+          content: source,
+        }],
+      },
+      policy: { allowedWriteGlobs: ["frontend/**"] },
+    } as unknown as NodeAuditInput;
+    const guarded = await guardPatch({
+      config: {
+        repositoryRoot: root,
+        maxChangedFiles: 5,
+        maxChangedLines: 500,
+      } as PipelineConfig,
+      manifest: {
+        immutableInputGlobs: ["trigger/**"],
+        globalAllowedWriteGlobs: ["frontend/**"],
+      } as ImpactManifest,
+      auditInput: input,
+      patchOutput: {
+        schemaVersion: "design-validation/patch-output/v2",
+        sectionId: "S12",
+        fingerprint,
+        status: "PATCH",
+        requirementIds: ["S12-CONTAINER-1024"],
+        evidenceRefs: [],
+        readSet: [{ path: "frontend/styles.css", baseHash: sha256(source) }],
+        writeSet: [{ path: "frontend/styles.css", baseHash: sha256(source) }],
+        reason: "Apply the exact grounded width.",
+        diff,
+      },
+      scratchDirectory: path.join(root, "scratch"),
+    });
+    assert.equal(guarded.patchHash, sha256(diff));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

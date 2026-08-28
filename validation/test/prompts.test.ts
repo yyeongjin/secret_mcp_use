@@ -101,8 +101,52 @@ test("patch prompt includes only finding-referenced files and exact physical lin
   };
   assert.deepEqual(prompt.files.map((file) => file.path), ["frontend/styles.css"]);
   assert.deepEqual(prompt.files[0].canonicalLines[0], { line: 1, text: "body { color: black; }" });
-  assert.deepEqual(prompt.files[0].targetLineHints, [{ line: 1, text: "body { color: black; }" }]);
+  assert.deepEqual(prompt.files[0].targetLineHints, [
+    { line: 1, text: "body { color: black; }" },
+    { line: 2, text: "" },
+  ]);
   assert.equal(prompt.maxDiffLines, 120);
+});
+
+test("patch hints include exact surrounding context for selectors and viewport values", () => {
+  const content = [
+    "@media (max-width: 1024px) {",
+    "  .hero { height: 580px; }",
+    "}",
+    "",
+    "@media (max-width: 768px) {",
+    "  .main-container { width: calc(100% - 32px); }",
+    "}",
+    "",
+  ].join("\n");
+  const input = {
+    ...auditInput,
+    node: { sectionId: "S12", fingerprint },
+    implementation: {
+      files: [{
+        path: "frontend/styles.css",
+        contentHash: cssHash,
+        byteLength: content.length,
+        encoding: "utf8",
+        content,
+      }],
+    },
+  } as NodeAuditInput;
+  const output = {
+    ...auditOutput,
+    sectionId: "S12",
+    findings: [{
+      ...auditOutput.findings[0],
+      requirementId: "S12-CONTAINER-1024",
+      componentId: "main-container",
+      finding: "Main container width at 1024px should be `calc(100%-64px)`.",
+    }],
+  } as NodeAuditOutput;
+  const prompt = JSON.parse(patchUserPrompt({ auditInput: input, auditOutput: output })) as {
+    files: Array<{ targetLineHints: Array<{ line: number; text: string }> }>;
+  };
+  assert.ok(prompt.files[0].targetLineHints.some(({ line }) => line === 1));
+  assert.ok(prompt.files[0].targetLineHints.some(({ line }) => line === 6));
 });
 
 test("patch preflight independently owns one Requirement ID", () => {

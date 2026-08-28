@@ -297,17 +297,28 @@ function targetLineHints(
       needles.add(match[0]);
     }
     for (const match of findingText.matchAll(/(?:--|aria-)[A-Za-z0-9_-]+/g)) needles.add(match[0]);
+    for (const match of findingText.matchAll(/\b\d+(?:\.\d+)?(?:px|rem|em|vw|vh|%)\b/gi)) {
+      needles.add(match[0]);
+    }
   }
   const normalizedNeedles = [...needles]
     .map((value) => value.trim().replace(/^['"]|['"]$/g, ""))
     .filter((value) => value.length >= 3);
-  return file.content.split("\n")
-    .map((text, index) => ({ line: index + 1, text }))
-    .filter(({ text }) => normalizedNeedles.some((needle) => text.includes(needle)))
-    .slice(0, 40);
+  const lines = file.content.split("\n");
+  const hintedIndexes = new Set<number>();
+  lines.forEach((text, index) => {
+    if (!normalizedNeedles.some((needle) => text.includes(needle))) return;
+    for (let candidate = Math.max(0, index - 6); candidate <= Math.min(lines.length - 1, index + 6); candidate += 1) {
+      hintedIndexes.add(candidate);
+    }
+  });
+  return [...hintedIndexes]
+    .sort((left, right) => left - right)
+    .slice(0, 80)
+    .map((index) => ({ line: index + 1, text: lines[index] }));
 }
 
-function patchFilePayload(
+export function patchFilePayload(
   file: NodeAuditInput["implementation"]["files"][number],
   findings: NodeAuditOutput["findings"],
 ) {

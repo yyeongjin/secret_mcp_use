@@ -38,6 +38,7 @@ test("PATCH_REQUIRED scheduling cannot regain dependency or write-set wait gates
   assert.match(source, /result\.ok && result\.output\.status === "UNKNOWN"/);
   assert.match(source, /isUnknownRequirementId\(finding\.requirementId\)/);
   assert.doesNotMatch(source, /result\.output\.status === "UNKNOWN" &&\s*Boolean\(result\.completion\.warning\)/);
+  assert.doesNotMatch(source, /PASS_PENDING_DEPENDENCY/);
 });
 
 test("audit retries cannot be configured below five independent calls", async () => {
@@ -70,4 +71,6 @@ test("the normative pipeline document permanently forbids dependency blocking", 
   assert.match(document, /최대 5개씩 자동 병합해 대표 PR 하나로 정리/);
   assert.match(document, /대표 PR을 `main` 또는 이전 Section 대표 브랜치로 자동 병합하는 것은 금지/);
   assert.match(document, /UNKNOWN` finding.*patch 후보나 PR 큐에 절대 넣지 않는다/);
+  assert.doesNotMatch(document, /PASS_PENDING_DEPENDENCY/);
+  assert.doesNotMatch(document, /BLOCKED_DEPENDENCY/);
 });

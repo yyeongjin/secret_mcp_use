@@ -57,6 +57,7 @@ import {
   auditUserPrompt,
   documentAuditUserPrompt,
   focusedPatchFiles,
+  patchFilePayload,
   patchConflictPreflightUserPrompt,
   patchPreflightUserPrompt,
   patchRetryUserPrompt,
@@ -471,27 +472,20 @@ function buildNodeRunSummaries(args: {
 }
 
 function buildNodeStates(
-  inputs: Map<SectionId, NodeAuditInput>,
   resolved: Map<SectionId, ResolvedNode>,
 ): Array<{ sectionId: SectionId; state: string }> {
   return SECTION_IDS.map((sectionId) => {
     const item = resolved.get(sectionId);
     if (!item) return { sectionId, state: "FAILED_SCHEMA" };
     if (item.status === "CACHED_PASS") return { sectionId, state: "CACHED_PASS" };
-    const dependenciesPassing = inputs.get(sectionId)?.node.dependsOn.every(
-      (dependencyId) => resolved.get(dependencyId)?.output.status === "PASS",
-    ) ?? false;
-    const state = auditExecutionState(item.output.status, dependenciesPassing);
+    const state = auditExecutionState(item.output.status);
     return { sectionId, state };
   });
 }
 
 export function auditExecutionState(
   status: NodeAuditOutput["status"],
-  dependenciesPassing: boolean,
 ): string {
-  if (status === "PASS") return dependenciesPassing ? "PASS" : "PASS_PENDING_DEPENDENCY";
-  if (status === "PATCH_REQUIRED") return "PATCH_REQUIRED";
   return status;
 }
 
@@ -1259,7 +1253,7 @@ async function runPatches(args: {
               designIndexFragment: currentInput.contract.designIndexFragment,
               documentAudit: currentInput.contract.documentAudit,
               evidence: currentInput.evidence,
-              files: patchFiles,
+              files: patchFiles.map((file) => patchFilePayload(file, remainingFindings)),
               allowedWriteGlobs: currentInput.policy.allowedWriteGlobs,
               payload: currentInput.payload,
             };
@@ -2315,7 +2309,7 @@ async function runTrigger(args: {
   const orderedOutputs = SECTION_IDS.map((sectionId) => resolved.get(sectionId)?.output).filter(
     (output): output is NodeAuditOutput => output !== undefined,
   );
-  let nodeStates = buildNodeStates(inputs, resolved);
+  let nodeStates = buildNodeStates(resolved);
   await writeJson(path.join(runDirectory, "audit-matrix.json"), {
     schemaVersion: "design-validation/audit-matrix/v2",
     runId,
@@ -2409,7 +2403,7 @@ async function runTrigger(args: {
     changeEvent: targetChangeEvent,
     documentOutputs,
   });
-  nodeStates = buildNodeStates(inputs, resolved);
+  nodeStates = buildNodeStates(resolved);
   await writeJson(path.join(runDirectory, "node-states.json"), {
     schemaVersion: "design-validation/node-states/v2",
     nodes: nodeStates,

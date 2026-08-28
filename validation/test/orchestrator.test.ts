@@ -25,9 +25,9 @@ import { SECTION_IDS } from "../src/types.ts";
 
 const fingerprint = `sha256:${"1".repeat(64)}` as Sha256;
 
-test("PATCH_REQUIRED is scheduled even when a DAG dependency is not PASS", () => {
-  assert.equal(auditExecutionState("PATCH_REQUIRED", false), "PATCH_REQUIRED");
-  assert.equal(auditExecutionState("PASS", false), "PASS_PENDING_DEPENDENCY");
+test("audit execution state never invents dependency wait states", () => {
+  assert.equal(auditExecutionState("PATCH_REQUIRED"), "PATCH_REQUIRED");
+  assert.equal(auditExecutionState("PASS"), "PASS");
 });
 
 function groundingInput(writes: string[]): NodeAuditInput {

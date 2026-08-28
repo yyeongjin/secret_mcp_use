@@ -603,7 +603,7 @@ export async function guardPatch(args: {
 
   const patchPath = path.join(args.scratchDirectory, `${args.auditInput.node.sectionId}.diff`);
   await writeFile(patchPath, args.patchOutput.diff, "utf8");
-  await runCommand("git", ["apply", "--check", "--whitespace=error-all", patchPath], {
+  await runCommand("git", ["apply", "--check", "--unidiff-zero", "--whitespace=error-all", patchPath], {
     cwd: args.config.repositoryRoot,
   });
   return {

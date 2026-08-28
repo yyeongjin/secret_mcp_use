@@ -66,7 +66,7 @@ export async function createPatchedWorktree(
   const worktreePath = worktree.path;
   const patchPath = path.join(worktreePath, ".section.patch");
   await writeFile(patchPath, patch.diff, "utf8");
-  await runCommand("git", ["apply", "--whitespace=error-all", patchPath], { cwd: worktreePath });
+  await runCommand("git", ["apply", "--unidiff-zero", "--whitespace=error-all", patchPath], { cwd: worktreePath });
   await rm(patchPath, { force: true });
 
   try {
