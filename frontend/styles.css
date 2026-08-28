@@ -34,6 +34,8 @@
     --gutter-mobile: 16px;
     --header-desktop: 68px;
     --button-height: 49px;
+    --space-5: 20px;
+    --space-7: 32px;
     --focus: 0 0 0 3px rgb(65 105 245 / 32%);
     --ease: cubic-bezier(.2, .8, .2, 1);
   }
