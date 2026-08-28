@@ -58,7 +58,7 @@
   .eyebrow { margin-bottom: 14px; color: var(--color-primary); font-size: 11px; font-weight: 700; line-height: 1.4; letter-spacing: 0; }
   .eyebrow--light { color: #fff; opacity: .72; }
   .section-heading h2 { font-size: 35px; font-weight: 500; line-height: 1.25; }
-  .section-heading > p:last-child { margin-top: 18px; color: var(--color-muted-dark); font-size: 14px; }
+  .section-heading > p:last-child { margin-top: 18px; color: var(--color-muted-dark); font-size: 14px; letter-spacing: -0.015em; }
   .section-heading--center { text-align: center; }
 }
 
