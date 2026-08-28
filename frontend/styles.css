@@ -31,9 +31,13 @@
     --container-main: 1012px;
     --container-shell: 1144px;
     --gutter-desktop: 24px;
+    --gutter-wide: 214px;
+    --gutter-medium: 134px;
     --gutter-mobile: 16px;
     --header-desktop: 68px;
     --button-height: 49px;
+    --outer-gutter: var(--gutter-wide);
+    --outer-gutter-medium: var(--gutter-medium);
     --space-5: 20px;
     --space-7: 32px;
     --space-8: 40px;
@@ -202,6 +206,9 @@
     .hero h1 { font-size: 46px; }
     .games__grid { grid-template-columns: 38% 1fr; gap: 42px; }
     .footer-sitemap { grid-template-columns: repeat(4, 1fr); row-gap: 28px; padding-right: 120px; }
+    .main-container { padding-inline: var(--outer-gutter); }
+    .site-footer__inner { padding-inline: var(--outer-gutter); }
+    .recruitment__copy { padding-inline: var(--outer-gutter); }
   }
 
   @media (max-width: 768px) {
@@ -232,6 +239,9 @@
     .recruitment__loop { width: 340px; height: 320px; }
     .footer-sitemap { grid-template-columns: repeat(4, 1fr); padding-right: 0; }
     .footer-social { position: static; margin-top: 32px; }
+    .main-container { padding-inline: var(--outer-gutter-medium); }
+    .site-footer__inner { padding-inline: var(--outer-gutter-medium); }
+    .recruitment__copy { padding-inline: var(--outer-gutter-medium); }
   }
 
   @media (max-width: 390px) {
@@ -266,6 +276,9 @@
     .brand--footer { font-size: 31px; }
     .related-sites { width: 100%; }
     .back-to-top { width: 34px; height: 34px; right: 14px; bottom: 14px; }
+    .main-container { padding-inline: var(--space-8); }
+    .site-footer__inner { padding-inline: var(--space-8); }
+    .recruitment__copy { padding-inline: var(--space-8); }
   }
 
   @media (max-width: 360px) {
