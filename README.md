@@ -72,7 +72,7 @@ Open **Settings → Secrets and variables → Actions → Variables → New repo
 | `PIPELINE_TRIGGER_GLOB` | `trigger/DESIGN_INDEX_gdweb-*.md` | Immutable input documents that start a work-specific run |
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | Preserves valid cached PASS results during ordinary code validation |
 | `PIPELINE_DRY_RUN` | `false` | Allows verified patches to be published after temporary-worktree validation |
-| `PIPELINE_CREATE_PRS` | `true` | Publishes idempotent stacked draft PRs for verified Section child diffs; all non-PR results stay in Checks and run artifacts, never GitHub Issues |
+| `PIPELINE_CREATE_PRS` | `true` | Publishes idempotent stacked draft PRs for verified Stage 2 Section child diffs; Stage 1 `DOCUMENT_GAP` results become Section-specific Issues, while other non-PR results stay in Checks and run artifacts |
 | `PIPELINE_AUDIT_ATTEMPTS` | `5` (minimum) | Maximum same-Section independent audit attempts for transport/schema defects and ambiguous or blocked judgments |
 | `PIPELINE_PATCH_ATTEMPTS` | `8` | Maximum independently seeded patch candidates, including full verification retries, for one `PATCH_REQUIRED` Section |
 | `PIPELINE_PR_MERGE_BATCH_SIZE` | `5` | Number of verified child PRs recursively merged deepest-first into one Section branch; valid range is 1-10 |
