@@ -11,6 +11,7 @@ import {
   isDocumentGapOnlyPatchFailure,
   nextPatchRequirementFindings,
   patchOutputNeedsIndependentRetry,
+  recoverAssignedEmptyNonPass,
   rejectedPatchSummaryForRetry,
 } from "../src/orchestrator.ts";
 import { quarantineAuditOutput } from "../src/nvidia.ts";
@@ -313,6 +314,125 @@ test("a schema-valid model-owned UNKNOWN retries only the same isolated Section"
   ]);
   assert.equal(result.ok, true);
   if (result.ok) assert.equal(result.output.status, "PASS");
+});
+
+test("an empty model-owned blocked judgment is bound to its assigned leaf", () => {
+  const input = groundingInput([]);
+  input.node.leaf = {
+    requirementId: "S18-IMPL-U0001-R001",
+    sectionId: "S18",
+    statement: "- **INFERRED:** Compare text sizes within one pixel.",
+  } as NonNullable<NodeAuditInput["node"]["leaf"]>;
+  const quarantined = {
+    ...quarantineAuditOutput("S18", fingerprint) as NodeAuditOutput,
+    publicOutput: {
+      transportStatus: "QUARANTINED",
+      modelStatus: "BLOCKED_MISSING_EVIDENCE",
+    },
+  };
+
+  const recovered = recoverAssignedEmptyNonPass(input, quarantined);
+
+  assert.equal(recovered.output.status, "BLOCKED_MISSING_EVIDENCE");
+  assert.equal(recovered.output.findings[0].requirementId, "S18-IMPL-U0001-R001");
+  assert.equal(recovered.output.findings[0].status, "INSUFFICIENT_EVIDENCE");
+  assert.match(recovered.warning ?? "", /preserved the model-owned/);
+});
+
+test("the last UNKNOWN cannot overwrite an earlier grounded blocked leaf judgment", async () => {
+  const input = groundingInput([]);
+  input.node.leaf = {
+    requirementId: "S18-IMPL-U0002-R001",
+    sectionId: "S18",
+    statement: "- **INFERRED:** Compare pale decoration colors with DeltaE.",
+  } as NonNullable<NodeAuditInput["node"]["leaf"]>;
+  const blocked = {
+    schemaVersion: "design-validation/audit-output/v2",
+    sectionId: "S18",
+    fingerprint,
+    status: "BLOCKED_MISSING_EVIDENCE",
+    findings: [{
+      requirementId: "S18-IMPL-U0002-R001",
+      pageId: null,
+      componentId: null,
+      status: "INSUFFICIENT_EVIDENCE",
+      finding: "The supplied boundary does not contain rendered color measurements.",
+      evidenceRefs: [],
+      implementationRefs: [],
+      proposedValue: null,
+    }],
+    publicOutput: {},
+  } satisfies NodeAuditOutput;
+  let count = 0;
+  const client = {
+    async completeJson(args: { requestId: string }) {
+      count += 1;
+      const parsed = count === 1
+        ? blocked
+        : { ...quarantineAuditOutput("S18", fingerprint) as NodeAuditOutput, publicOutput: {} };
+      return { parsed, raw: {}, rawHash: fingerprint, requestId: args.requestId, usage: {} };
+    },
+  } as unknown as NvidiaClient;
+  const validate = Object.assign((value: unknown) => typeof value === "object" && value !== null, {
+    errors: null,
+  });
+
+  const result = await callAudit({
+    client,
+    input,
+    kind: "audit",
+    requestId: "run:audit:S18:leaf",
+    maxAttempts: 3,
+    validate: validate as never,
+    outputSchema: {},
+  });
+
+  assert.equal(count, 3);
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.output.status, "BLOCKED_MISSING_EVIDENCE");
+});
+
+test("a literal UNKNOWN source leaf resolves as missing evidence after bounded independent attempts", async () => {
+  const input = groundingInput([]);
+  input.node.leaf = {
+    requirementId: "S18-IMPL-U0003-R001",
+    sectionId: "S18",
+    statement: "- **UNKNOWN — HIGH confidence:** Whether hero media auto-plays.",
+  } as NonNullable<NodeAuditInput["node"]["leaf"]>;
+  let count = 0;
+  const client = {
+    async completeJson(args: { requestId: string }) {
+      count += 1;
+      return {
+        parsed: { ...quarantineAuditOutput("S18", fingerprint) as NodeAuditOutput, publicOutput: {} },
+        raw: {},
+        rawHash: fingerprint,
+        requestId: args.requestId,
+        usage: {},
+      };
+    },
+  } as unknown as NvidiaClient;
+  const validate = Object.assign((value: unknown) => typeof value === "object" && value !== null, {
+    errors: null,
+  });
+
+  const result = await callAudit({
+    client,
+    input,
+    kind: "audit",
+    requestId: "run:audit:S18:unknown-leaf",
+    maxAttempts: 3,
+    validate: validate as never,
+    outputSchema: {},
+  });
+
+  assert.equal(count, 3);
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.output.status, "BLOCKED_MISSING_EVIDENCE");
+    assert.equal(result.output.findings[0].requirementId, "S18-IMPL-U0003-R001");
+    assert.equal(result.output.publicOutput.adjudication, "literal-unknown-source");
+  }
 });
 
 test("ambiguous audit and blocked patch outputs require independent replacement candidates", () => {

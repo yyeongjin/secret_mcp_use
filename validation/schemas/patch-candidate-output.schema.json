@@ -3,7 +3,7 @@
   "$id": "design-validation/patch-candidate-output/v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "addressedRequirementIds", "reason", "diff"],
+  "required": ["status", "addressedRequirementIds", "reason", "diff", "replacements"],
   "properties": {
     "status": { "enum": ["PATCH", "BLOCKED_MISSING_VALUE", "BLOCKED_PATCH_TOO_LARGE", "BLOCKED_AUDIT_CONFLICT"] },
     "addressedRequirementIds": {
@@ -15,6 +15,20 @@
     "diff": {
       "type": "string",
       "pattern": "^(?:diff --git a/[^\\n]+ b/[^\\n]+[\\s\\S]*)?$"
+    },
+    "replacements": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "before", "after"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "before": { "type": "string", "minLength": 1 },
+          "after": { "type": "string" }
+        }
+      }
     }
   }
 }

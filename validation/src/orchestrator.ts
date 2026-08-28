@@ -704,6 +704,98 @@ async function writeDocumentGapReport(
   await writeFile(pathname, `${lines.join("\n")}\n`, "utf8");
 }
 
+function modelOwnedEmptyFindingStatus(
+  output: DocumentAuditOutput | NodeAuditOutput,
+): "BLOCKED_MISSING_EVIDENCE" | "BLOCKED_CONTRACT_CONFLICT" | null {
+  if (output.status !== "UNKNOWN" || output.publicOutput.transportStatus !== "QUARANTINED") return null;
+  return output.publicOutput.modelStatus === "BLOCKED_MISSING_EVIDENCE" ||
+      output.publicOutput.modelStatus === "BLOCKED_CONTRACT_CONFLICT"
+    ? output.publicOutput.modelStatus
+    : null;
+}
+
+function assignedLeafFinding(
+  input: DocumentAuditInput | NodeAuditInput,
+  status: "BLOCKED_MISSING_EVIDENCE" | "BLOCKED_CONTRACT_CONFLICT",
+): NodeAuditOutput["findings"][number] | null {
+  const leaf = input.node.leaf;
+  if (!leaf) return null;
+  const finding = status === "BLOCKED_CONTRACT_CONFLICT"
+    ? `The isolated model classified the assigned source leaf as a contract conflict: ${leaf.statement}`
+    : `The isolated model classified the assigned source leaf as unsupported by the supplied evidence boundary: ${leaf.statement}`;
+  return {
+    requirementId: leaf.requirementId,
+    pageId: null,
+    componentId: null,
+    status: "INSUFFICIENT_EVIDENCE",
+    finding,
+    evidenceRefs: [],
+    implementationRefs: [],
+    proposedValue: null,
+  };
+}
+
+export function recoverAssignedEmptyNonPass<T extends DocumentAuditOutput | NodeAuditOutput>(
+  input: DocumentAuditInput | NodeAuditInput,
+  output: T,
+): { output: T; warning?: string } {
+  const status = modelOwnedEmptyFindingStatus(output);
+  const finding = status ? assignedLeafFinding(input, status) : null;
+  if (!status || !finding) return { output };
+  return {
+    output: {
+      ...output,
+      status,
+      findings: [finding],
+      publicOutput: {
+        ...output.publicOutput,
+        emptyFindingRecovered: true,
+      },
+    } as T,
+    warning: `${input.node.sectionId} preserved the model-owned ${status} judgment and bound its omitted finding to ${finding.requirementId}.`,
+  };
+}
+
+function explicitlyUnknownSourceLeaf(input: DocumentAuditInput | NodeAuditInput): boolean {
+  const statement = input.node.leaf?.statement ?? "";
+  return /^\s*(?:[-*]\s*)?(?:\[[ xX]\]\s*)?\*\*UNKNOWN\b/i.test(statement);
+}
+
+function resolveLiteralUnknownSource<T extends DocumentAuditOutput | NodeAuditOutput>(
+  input: DocumentAuditInput | NodeAuditInput,
+  output: T,
+): { output: T; warning?: string } {
+  if (output.status !== "UNKNOWN" || !explicitlyUnknownSourceLeaf(input)) return { output };
+  const finding = assignedLeafFinding(input, "BLOCKED_MISSING_EVIDENCE");
+  if (!finding) return { output };
+  return {
+    output: {
+      ...output,
+      status: "BLOCKED_MISSING_EVIDENCE",
+      findings: [finding],
+      publicOutput: {
+        ...output.publicOutput,
+        adjudication: "literal-unknown-source",
+      },
+    } as T,
+    warning: `${finding.requirementId} remained inconclusive after every independent attempt; the immutable source leaf explicitly declares its value UNKNOWN.`,
+  };
+}
+
+function lastGroundedDocumentAttempt(
+  attempts: DocumentAuditCallAttempt[],
+): DocumentAuditCallAttempt | undefined {
+  return [...attempts].reverse().find((attempt) => (
+    attempt.output?.status !== undefined && attempt.output.status !== "UNKNOWN" && attempt.completion
+  ));
+}
+
+function lastGroundedAuditAttempt(attempts: AuditCallAttempt[]): AuditCallAttempt | undefined {
+  return [...attempts].reverse().find((attempt) => (
+    attempt.output?.status !== undefined && attempt.output.status !== "UNKNOWN" && attempt.completion
+  ));
+}
+
 export async function callDocumentAudit(args: {
   client: NvidiaClient;
   input: DocumentAuditInput;
@@ -743,7 +835,12 @@ export async function callDocumentAudit(args: {
         sectionId,
         args.input.node.fingerprint,
       );
-      output = completion.parsed;
+      const recovered = recoverAssignedEmptyNonPass(args.input, completion.parsed);
+      output = recovered.output;
+      assertDocumentAuditOutput(args.validate, output, sectionId, args.input.node.fingerprint);
+      if (recovered.warning) {
+        validatedCompletion = { ...completion, parsed: output, warning: recovered.warning };
+      }
     } catch (error) {
       output = quarantineDocumentAuditOutput(sectionId, args.input.node.fingerprint) as DocumentAuditOutput;
       assertDocumentAuditOutput(args.validate, output, sectionId, args.input.node.fingerprint);
@@ -753,8 +850,31 @@ export async function callDocumentAudit(args: {
         warning: `${errorMessage(error)} The response was quarantined as UNKNOWN.`,
       };
     }
+    if (attempt === args.maxAttempts) {
+      const literalUnknown = resolveLiteralUnknownSource(args.input, output);
+      if (literalUnknown.warning) {
+        output = literalUnknown.output;
+        validatedCompletion = {
+          ...validatedCompletion,
+          parsed: output,
+          warning: [validatedCompletion.warning, literalUnknown.warning].filter(Boolean).join(" "),
+        };
+      }
+    }
     attempts.push({ attempt, requestId, completion: validatedCompletion, output });
     if (auditOutputNeedsIndependentRetry(output as unknown as NodeAuditOutput) && attempt < args.maxAttempts) continue;
+    if (output.status === "UNKNOWN") {
+      const grounded = lastGroundedDocumentAttempt(attempts);
+      if (grounded?.completion && grounded.output) {
+        return {
+          ok: true,
+          sectionId,
+          completion: grounded.completion,
+          output: grounded.output,
+          attempts,
+        };
+      }
+    }
     return { ok: true, sectionId, completion: validatedCompletion, output, attempts };
   }
   return { ok: false, sectionId, error: lastError, attempts };
@@ -838,7 +958,8 @@ export async function callAudit(args: {
         sectionId,
         args.input.node.fingerprint,
       );
-      const pathGrounded = groundOwnedNewImplementationPaths(args.input, completion.parsed);
+      const recovered = recoverAssignedEmptyNonPass(args.input, completion.parsed);
+      const pathGrounded = groundOwnedNewImplementationPaths(args.input, recovered.output);
       const initiallyGrounded = enforcePatchGrounding(args.input, pathGrounded.output);
       const augmented = args.kind === "audit"
         ? augmentAuditWithExactCssFindings(args.input, initiallyGrounded.output)
@@ -848,6 +969,7 @@ export async function callAudit(args: {
       output = grounded.output;
       const warnings = [
         completion.warning,
+        recovered.warning,
         pathGrounded.addedRequirementIds.length > 0
           ? `Assigned owned new test paths for grounded omissions: ${pathGrounded.addedRequirementIds.join(", ")}.`
           : undefined,
@@ -871,6 +993,17 @@ export async function callAudit(args: {
       validatedCompletion = { ...completion, parsed: output, warning };
     }
 
+    if (attempt === args.maxAttempts) {
+      const literalUnknown = resolveLiteralUnknownSource(args.input, output);
+      if (literalUnknown.warning) {
+        output = literalUnknown.output;
+        validatedCompletion = {
+          ...validatedCompletion,
+          parsed: output,
+          warning: [validatedCompletion.warning, literalUnknown.warning].filter(Boolean).join(" "),
+        };
+      }
+    }
     attempts.push({
       attempt,
       requestId,
@@ -878,6 +1011,18 @@ export async function callAudit(args: {
       output,
     });
     if (auditOutputNeedsIndependentRetry(output) && attempt < args.maxAttempts) continue;
+    if (output.status === "UNKNOWN") {
+      const grounded = lastGroundedAuditAttempt(attempts);
+      if (grounded?.completion && grounded.output) {
+        return {
+          ok: true,
+          sectionId,
+          completion: grounded.completion,
+          output: grounded.output,
+          attempts,
+        };
+      }
+    }
     return {
       ok: true,
       sectionId,

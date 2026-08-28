@@ -25,6 +25,7 @@ export interface GuardedPatch {
 export function isRetryablePatchCandidateError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   if (message.startsWith("COMMENT_ONLY_PATCH:")) return true;
+  if (message.startsWith("Exact replacement ") || message === "PATCH produced no changed lines.") return true;
   if (
     message === "Malformed unified diff file headers." ||
     message === "Patch contains no changed files." ||
@@ -334,6 +335,110 @@ function declaredPaths(value: unknown): string[] {
   });
 }
 
+interface ExactReplacement {
+  path: string;
+  before: string;
+  after: string;
+}
+
+function exactReplacements(value: unknown): ExactReplacement[] {
+  if (!Array.isArray(value)) return [];
+  if (value.length > 10) throw new Error("A patch candidate may contain at most 10 exact replacements.");
+  const replacements = value.map((candidate, index) => {
+    const record = asRecord(candidate);
+    if (
+      !record ||
+      typeof record.path !== "string" || record.path.trim() === "" ||
+      typeof record.before !== "string" || record.before === "" ||
+      typeof record.after !== "string"
+    ) {
+      throw new Error(`Exact replacement ${index + 1} is incomplete.`);
+    }
+    if (record.before === record.after) {
+      throw new Error(`Exact replacement ${index + 1} is a no-op.`);
+    }
+    return {
+      path: path.posix.normalize(record.path.trim()),
+      before: record.before,
+      after: record.after,
+    };
+  });
+  const duplicatePaths = replacements
+    .map((replacement) => replacement.path)
+    .filter((candidate, index, paths) => paths.indexOf(candidate) !== index);
+  if (duplicatePaths.length > 0) {
+    throw new Error(`Use one exact replacement per file: ${[...new Set(duplicatePaths)].join(", ")}.`);
+  }
+  return replacements;
+}
+
+function splitFileLines(content: string): string[] {
+  const lines = content.replaceAll("\r\n", "\n").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+function replacementFileDiff(pathname: string, before: string, after: string): string {
+  const oldLines = splitFileLines(before);
+  const newLines = splitFileLines(after);
+  let prefix = 0;
+  while (
+    prefix < oldLines.length &&
+    prefix < newLines.length &&
+    oldLines[prefix] === newLines[prefix]
+  ) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < oldLines.length - prefix &&
+    suffix < newLines.length - prefix &&
+    oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
+  ) suffix += 1;
+  if (prefix === oldLines.length && prefix === newLines.length) {
+    throw new Error(`Exact replacement produced no file change for ${pathname}.`);
+  }
+
+  const contextBefore = Math.min(3, prefix);
+  const contextAfter = Math.min(3, suffix);
+  const oldChangedEnd = oldLines.length - suffix;
+  const newChangedEnd = newLines.length - suffix;
+  const oldStartIndex = prefix - contextBefore;
+  const newStartIndex = prefix - contextBefore;
+  const oldCount = contextBefore + (oldChangedEnd - prefix) + contextAfter;
+  const newCount = contextBefore + (newChangedEnd - prefix) + contextAfter;
+  const body = [
+    ...oldLines.slice(oldStartIndex, prefix).map((line) => ` ${line}`),
+    ...oldLines.slice(prefix, oldChangedEnd).map((line) => `-${line}`),
+    ...newLines.slice(prefix, newChangedEnd).map((line) => `+${line}`),
+    ...oldLines.slice(oldChangedEnd, oldChangedEnd + contextAfter).map((line) => ` ${line}`),
+  ];
+  return [
+    `diff --git a/${pathname} b/${pathname}`,
+    `--- a/${pathname}`,
+    `+++ b/${pathname}`,
+    `@@ -${oldStartIndex + 1},${oldCount} +${newStartIndex + 1},${newCount} @@`,
+    ...body,
+    "",
+  ].join("\n");
+}
+
+function exactReplacementDiff(
+  replacements: ExactReplacement[],
+  baseFiles: ReadonlyMap<string, string>,
+): string {
+  return replacements.map((replacement) => {
+    const source = baseFiles.get(replacement.path);
+    if (source === undefined) {
+      throw new Error(`Exact replacement references a file outside the isolated input: ${replacement.path}.`);
+    }
+    const first = source.indexOf(replacement.before);
+    const last = source.lastIndexOf(replacement.before);
+    if (first < 0) throw new Error(`Exact replacement before text was not found in ${replacement.path}.`);
+    if (first !== last) throw new Error(`Exact replacement before text is ambiguous in ${replacement.path}.`);
+    const updated = `${source.slice(0, first)}${replacement.after}${source.slice(first + replacement.before.length)}`;
+    return replacementFileDiff(replacement.path, source, updated);
+  }).join("");
+}
+
 export function canonicalizePatchOutput(args: {
   value: unknown;
   auditInput: NodeAuditInput;
@@ -381,13 +486,22 @@ export function canonicalizePatchOutput(args: {
       file.content === null ? [] : [[file.path, file.content] as const]
     )),
   );
+  const replacements = exactReplacements(source.replacements);
   const rawDiff = typeof source.diff === "string" ? source.diff : "";
+  if (status !== "PATCH" && replacements.length > 0) {
+    throw new Error(`${status} must not include exact replacements.`);
+  }
+  if (status === "PATCH" && rawDiff.trim() !== "" && replacements.length > 0) {
+    throw new Error("PATCH must use either a unified diff or exact replacements, not both.");
+  }
   const diff = status === "PATCH"
-    ? relocateUnifiedDiffHunks(
-      normalizeUnifiedDiffMechanics(restoreOmittedAdditionPrefixes(rawDiff, baseTextByPath)),
-      baseTextByPath,
-    )
+    ? replacements.length > 0
+      ? exactReplacementDiff(replacements, baseTextByPath)
+      : relocateUnifiedDiffHunks(normalizeUnifiedDiffMechanics(rawDiff), baseTextByPath)
     : rawDiff;
+  if (status === "PATCH" && diff.trim() === "") {
+    throw new Error("PATCH produced no changed lines.");
+  }
   let changedPaths: string[] = [];
   if (status === "PATCH" && diff.trim() !== "") {
     changedPaths = inspectUnifiedDiff(diff).changedPaths;

@@ -287,7 +287,13 @@ export function normalizeCompletionOutput(
         ? findings
         : [{ ...unknownFinding(sectionId), implementationRefs: [] }],
       publicOutput: emptyNonPass
-        ? { ...normalizePublicOutput(source.publicOutput), transportStatus: "QUARANTINED" }
+        ? {
+          ...normalizePublicOutput(source.publicOutput),
+          transportStatus: "QUARANTINED",
+          ...(status === "BLOCKED_MISSING_EVIDENCE" || status === "BLOCKED_CONTRACT_CONFLICT"
+            ? { modelStatus: status }
+            : {}),
+        }
         : normalizePublicOutput(source.publicOutput),
     };
   }
@@ -323,7 +329,13 @@ export function normalizeCompletionOutput(
       status: normalizedStatus,
       findings: normalizedStatus === "PASS" || findings.length > 0 ? findings : [unknownFinding(sectionId)],
       publicOutput: emptyNonPass
-        ? { ...publicOutput, transportStatus: "QUARANTINED" }
+        ? {
+          ...publicOutput,
+          transportStatus: "QUARANTINED",
+          ...(status === "BLOCKED_MISSING_EVIDENCE" || status === "BLOCKED_CONTRACT_CONFLICT"
+            ? { modelStatus: status }
+            : {}),
+        }
         : publicOutput,
     };
   }
@@ -332,6 +344,7 @@ export function normalizeCompletionOutput(
     addressedRequirementIds: source.addressedRequirementIds,
     reason: source.reason,
     diff: source.diff,
+    replacements: source.replacements,
   };
 }
 

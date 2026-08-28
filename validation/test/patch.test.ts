@@ -346,6 +346,96 @@ test("patch metadata is derived from the isolated audit input", () => {
   assert.match(output.diff, /^diff --git a\/frontend\/styles\.css b\/frontend\/styles\.css/m);
 });
 
+test("exact before/after replacements become a valid repository diff", () => {
+  const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;
+  const baseHash = sha256(".hero__image { object-position: 58% 48%; }\n");
+  const auditInput = {
+    node: { sectionId: "S11", fingerprint },
+    implementation: {
+      files: [{
+        path: "frontend/styles.css",
+        contentHash: baseHash,
+        byteLength: 45,
+        encoding: "utf8",
+        content: ".hero__image { object-position: 58% 48%; }\n",
+      }],
+    },
+    policy: { allowedWriteGlobs: ["frontend/**"] },
+  } as unknown as NodeAuditInput;
+  const auditOutput = {
+    findings: [{
+      requirementId: "S11-HERO-FOCAL",
+      evidenceRefs: ["E-D01"],
+      implementationRefs: ["frontend/styles.css"],
+    }],
+  } as unknown as NodeAuditOutput;
+
+  const output = canonicalizePatchOutput({
+    value: {
+      status: "PATCH",
+      addressedRequirementIds: ["S11-HERO-FOCAL"],
+      reason: "Apply the documented focal point.",
+      diff: "",
+      replacements: [{
+        path: "frontend/styles.css",
+        before: "object-position: 58% 48%",
+        after: "object-position: 62% 43%",
+      }],
+    },
+    auditInput,
+    auditOutput,
+  });
+
+  assert.match(output.diff, /^-\.hero__image \{ object-position: 58% 48%; \}$/m);
+  assert.match(output.diff, /^\+\.hero__image \{ object-position: 62% 43%; \}$/m);
+  assert.deepEqual(inspectUnifiedDiff(output.diff), {
+    changedPaths: ["frontend/styles.css"],
+    additions: 1,
+    deletions: 1,
+  });
+});
+
+test("patch canonicalization does not guess omitted change markers", () => {
+  const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;
+  const source = ".hero__image { object-position: 58% 48%; }\n";
+  const auditInput = {
+    node: { sectionId: "S11", fingerprint },
+    implementation: { files: [{
+      path: "frontend/styles.css",
+      contentHash: sha256(source),
+      byteLength: Buffer.byteLength(source),
+      encoding: "utf8",
+      content: source,
+    }] },
+    policy: { allowedWriteGlobs: ["frontend/**"] },
+  } as unknown as NodeAuditInput;
+  const auditOutput = {
+    findings: [{
+      requirementId: "S11-HERO-FOCAL",
+      evidenceRefs: [],
+      implementationRefs: ["frontend/styles.css"],
+    }],
+  } as unknown as NodeAuditOutput;
+
+  assert.throws(() => canonicalizePatchOutput({
+    value: {
+      status: "PATCH",
+      addressedRequirementIds: ["S11-HERO-FOCAL"],
+      reason: "Claims a change but omits every +/- marker.",
+      diff: [
+        "diff --git a/frontend/styles.css b/frontend/styles.css",
+        "--- a/frontend/styles.css",
+        "+++ b/frontend/styles.css",
+        "@@ -1 +1 @@",
+        ".hero__image { object-position: 58% 48%; }",
+      ].join("\n"),
+      replacements: [],
+    },
+    auditInput,
+    auditOutput,
+  }), /no changed lines/);
+});
+
 test("a patch cannot claim an unknown or empty Requirement ID set", () => {
   const baseHash = `sha256:${"a".repeat(64)}` as Sha256;
   const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;

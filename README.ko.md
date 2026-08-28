@@ -67,8 +67,8 @@ unset NVIDIA_API_KEY
 | `NVIDIA_REASONING_BUDGET` | `0` | thinking을 끈 상태에서 별도 reasoning 예산 사용 방지 |
 | `NVIDIA_TEMPERATURE` | `1.0` | 해당 모델의 권장 sampling temperature |
 | `NVIDIA_TOP_P` | `0.95` | 해당 모델의 권장 top-p 값 |
-| `NVIDIA_RPM_LIMIT` | `40` | 저장소 측 rate limiter 값이며 계정 제한이 더 낮으면 함께 낮춤 |
-| `NVIDIA_AUDIT_CONCURRENCY` | `8` | stateless worker 동시성. 공용 40 RPM 시작 제한기가 요청 시작 시점은 계속 제어함 |
+| `NVIDIA_RPM_LIMIT` | `36` | provider의 40 RPM rolling-window 상한에 여유를 둔 저장소 측 rate limiter 값 |
+| `NVIDIA_AUDIT_CONCURRENCY` | `8` | stateless worker 동시성. 공용 36 RPM 시작 제한기가 요청 시작 시점은 계속 제어함 |
 | `NVIDIA_MAX_RETRIES` | `8` | network 오류, HTTP 429 또는 HTTP 5xx 뒤 논리 요청 하나에 허용하는 transport 재시도 횟수 |
 | `PIPELINE_TRIGGER_GLOB` | `trigger/DESIGN_INDEX_gdweb-*.md` | 작품별 run을 시작하는 불변 입력 문서 경로 |
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | 일반 코드 검증에서 유효한 PASS cache를 유지 |
@@ -93,7 +93,7 @@ gh variable set NVIDIA_ENABLE_THINKING --body 'false' --repo "$REPO"
 gh variable set NVIDIA_REASONING_BUDGET --body '0' --repo "$REPO"
 gh variable set NVIDIA_TEMPERATURE --body '1.0' --repo "$REPO"
 gh variable set NVIDIA_TOP_P --body '0.95' --repo "$REPO"
-gh variable set NVIDIA_RPM_LIMIT --body '40' --repo "$REPO"
+gh variable set NVIDIA_RPM_LIMIT --body '36' --repo "$REPO"
 gh variable set NVIDIA_AUDIT_CONCURRENCY --body '8' --repo "$REPO"
 gh variable set NVIDIA_MAX_RETRIES --body '8' --repo "$REPO"
 gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' --repo "$REPO"

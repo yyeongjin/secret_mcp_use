@@ -25,10 +25,13 @@
 13. HTTP 429의 `Retry-After`는 모든 worker가 공유하는 cooldown이다. 이미 rate limiter queue에 들어간 worker도 전송 직전에 cooldown을 다시 확인하며 더 긴 cooldown을 짧은 간격 값으로 덮어쓰지 않는다.
 14. 1차 Section에 `UNKNOWN` 또는 `FAILED_SCHEMA`가 하나라도 있으면 Section report 하위 PR, 대표 report PR과 대표 Issue를 하나도 발행하지 않고 workflow를 실패시킨다. 미판정 결과를 문서 누락 보고서로 공개해서는 안 된다.
 15. GitHub가 막 생성된 child PR의 mergeability를 계산하는 동안 반환하는 405 `Pull Request is not mergeable`은 제한된 횟수로 다시 조회·병합한다. 보호 규칙 실패처럼 실제로 병합할 수 없는 오류는 재시도 대상으로 넓히지 않는다.
+16. 모델이 `BLOCKED_MISSING_EVIDENCE` 또는 `BLOCKED_CONTRACT_CONFLICT`를 반환하면서 `findings`만 비운 경우, 그 상태를 마지막 `UNKNOWN`으로 덮어쓰지 않는다. 오케스트레이터는 모델의 원래 상태, 해당 leaf의 고유 Requirement ID와 원문을 묶어 누락된 finding envelope만 결정적으로 복원하며, 값·좌표·색상·동작을 새로 만들지 않는다. 모든 독립 시도 뒤에는 마지막 응답이 아니라 마지막 schema-valid grounded 판정을 사용한다.
+17. 원문 leaf가 `**UNKNOWN**`으로 값을 명시한 경우 최소 5회의 독립 요청을 모두 수행한다. 전부 미판정이어도 이를 구현값으로 추측하거나 일반 모델 `UNKNOWN`으로 남기지 않고 `BLOCKED_MISSING_EVIDENCE`로 확정한다. 이 상태는 code PR을 만들지 않지만 다른 leaf, Section, PR 생성을 중단시키지 않는다. 원문에 `UNKNOWN` 선언이 없는 미판정은 계속 workflow 실패다.
+18. patch 모델은 기존 파일 수정에 대해 repository path와 원본에서 정확히 한 번 일치하는 `before`, 완전한 `after`를 반환할 수 있다. 오케스트레이터가 이를 실제 unified diff로 변환한 뒤 기존 guard·test·재감사·회귀 검사를 전부 수행한다. 자유형 diff와 exact replacement를 한 후보에서 함께 쓰거나, 원본 줄과 다른 `before`, 중복 anchor, no-op replacement, 변경 표식이 없는 설명성 diff는 후보 실패다. 오케스트레이터가 모델이 쓰지 않은 변경 줄을 추측해 복원하면 안 된다.
 
 ## 문서 상태
 
-- 상태: V4 Bottom-up 전수 leaf 감사와 1차 통합 문서 PR/대표 Issue 로컬 구현·검증 완료, GitHub 원격 E2E 검증 대기
+- 상태: V4 Bottom-up 전수 leaf 감사, 1차 통합 문서 PR/대표 Issue와 2차 재귀 correction PR의 첫 GitHub 원격 E2E 완료. 첫 실행에서 확인된 빈 non-PASS finding, 마지막 UNKNOWN 덮어쓰기와 자유형 diff 누락 표식 문제를 재현 테스트와 함께 보강했으며 재검증 진행 중
 - 실행 대상 저장소: `secret_mcp_use` 하나만 사용
 - 상위 생성기: `secret_mcp`는 작품별 `DESIGN_INDEX`, Request Contract와 Evidence를 생성해 전달하는 역할만 담당
 - 입력: `secret_mcp`가 생성한 작품별 `DESIGN_INDEX`, 공통 Specification, 작품별 Request Contract, Evidence와 `secret_mcp_use`의 프론트엔드 소스
@@ -63,9 +66,10 @@ logical leaf request
 ```
 
 - 기본 transport 재시도 횟수는 `NVIDIA_MAX_RETRIES=8`이며 논리 leaf 독립 재시도 예산인 `PIPELINE_AUDIT_ATTEMPTS`와 구분한다.
-- rate limiter는 최초 호출과 모든 transport 재시도를 합친 전체 물리 시작 횟수를 `NVIDIA_RPM_LIMIT` 이하로 직렬화한다.
+- rate limiter는 최초 호출과 모든 transport 재시도를 합친 전체 물리 시작 횟수를 `NVIDIA_RPM_LIMIT` 이하로 직렬화한다. provider 상한 40 RPM의 rolling-window 경계 여유를 위해 저장소 기본값은 36 RPM이다.
 - 429가 발생하면 현재 실행의 모든 worker가 가장 긴 활성 cooldown을 공유한다.
-- transport 및 schema 재시도를 소진한 leaf는 `UNKNOWN`이다. Stage 1에 이런 leaf가 있으면 보고서 PR과 Issue를 생성하지 않으며, Stage 2에 있으면 code PR을 생성하지 않고 전체 workflow를 실패시킨다.
+- transport 및 schema 재시도를 소진한 leaf는 `UNKNOWN`이다. Stage 1에 이런 leaf가 있으면 보고서 PR과 Issue를 생성하지 않으며, Stage 2에 있으면 code PR을 생성하지 않고 전체 workflow를 실패시킨다. 단, 원문 자체가 명시적으로 `UNKNOWN`인 leaf는 모든 독립 시도 뒤 `BLOCKED_MISSING_EVIDENCE`로 확정하므로 이 미판정 범주와 구분한다.
+- 모델이 non-PASS 상태를 반환했지만 finding 배열만 비운 응답은 그 모델 상태를 버리지 않는다. leaf ID와 원문을 사용해 envelope를 복원하고 모든 시도를 계속한 뒤, 뒤쪽의 비어 있는 `UNKNOWN` 응답이 앞선 grounded 판정을 덮지 못하게 한다.
 - Stage 1 게시가 시작된 뒤 GitHub mergeability 계산이 늦는 경우 child PR을 다시 조회하고 제한적으로 병합을 재시도한다. 최대 횟수를 소진하면 대표 PR이나 Issue를 만들지 않고 실패시킨다.
 
 ## V4 입력 계약
@@ -235,6 +239,8 @@ S09 aggregate
 -> 같은 leaf 하나의 독립 preflight
 -> 이미 구현됨: AUDIT_RECLASSIFIED, PR 없음
 -> 실제 누락: 같은 leaf와 관련 파일만 patch API로 전달
+-> exact before/after 또는 unified diff 후보
+-> orchestrator가 실제 unified diff로 정규화
 -> unified diff guard
 -> typecheck/unit/Playwright/accessibility
 -> 같은 leaf patched-code re-audit
@@ -245,6 +251,8 @@ S09 aggregate
 - preflight와 patch 생성에 Section 전체 DESIGN_INDEX를 다시 전달하지 않는다.
 - 한 leaf 응답에 여러 독립 finding이 있으면 `...-01`, `...-02`로 재귀 분할해 각각 호출한다.
 - 한 Requirement 실패가 뒤 Requirement 호출을 막지 않는다.
+- 기존 파일은 exact replacement를 우선한다. `before`는 supplied base file에서 정확히 한 번 일치해야 하며 `after`는 해당 Requirement 하나만 구현해야 한다.
+- 모델이 변경 설명만 하고 실제 `+/-` 줄 또는 exact replacement를 생략하면 후보를 거부한다. 원본 문맥을 근거로 모델이 쓰지 않은 추가 줄을 추측하지 않는다.
 - 실제 diff가 19개 Section 모두에서 나오면 Section 대표 PR도 19개가 남아야 한다.
 - 같은 파일을 연속 수정하면 직전 child commit에서 source slice와 fingerprint를 다시 계산한다.
 - 하위 code PR 역시 최대 5개씩 deepest-first Section branch로 자동 병합한다.
@@ -297,7 +305,8 @@ validator contract hash
 1차 Specification leaf: 327
 2차 DESIGN_INDEX leaf: 761
 최소 primary 요청: 1,088
-40 RPM 이론상 최소 전송 시간: 약 27.2분
+provider 상한 40 RPM 이론상 최소 전송 시간: 약 27.2분
+저장소 기본 36 RPM 이론상 최소 전송 시간: 약 30.2분
 ```
 
 이는 고정 계약 수치가 아니다. 문서 내용이 늘거나 줄면 leaf와 요청 수도 자동으로 바뀐다. 재시도, preflight, patch, patched-code re-audit와 regression audit는 1,088회에 추가된다.

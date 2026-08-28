@@ -67,8 +67,8 @@ Open **Settings → Secrets and variables → Actions → Variables → New repo
 | `NVIDIA_REASONING_BUDGET` | `0` | Prevents a separate reasoning budget when thinking is disabled |
 | `NVIDIA_TEMPERATURE` | `1.0` | Sampling temperature recommended for this model |
 | `NVIDIA_TOP_P` | `0.95` | Top-p value recommended for this model |
-| `NVIDIA_RPM_LIMIT` | `40` | Repository-side rate limiter; lower this if the account limit is lower |
-| `NVIDIA_AUDIT_CONCURRENCY` | `8` | Concurrent stateless workers; the shared 40 RPM start limiter still controls request starts |
+| `NVIDIA_RPM_LIMIT` | `36` | Repository-side limiter with headroom below the provider's 40 RPM rolling-window limit |
+| `NVIDIA_AUDIT_CONCURRENCY` | `8` | Concurrent stateless workers; the shared 36 RPM start limiter still controls request starts |
 | `NVIDIA_MAX_RETRIES` | `8` | Transport retries per logical request after network errors, HTTP 429, or HTTP 5xx responses |
 | `PIPELINE_TRIGGER_GLOB` | `trigger/DESIGN_INDEX_gdweb-*.md` | Immutable input documents that start a work-specific run |
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | Preserves valid cached PASS results during ordinary code validation |
@@ -94,7 +94,7 @@ gh variable set NVIDIA_ENABLE_THINKING --body 'false' --repo "$REPO"
 gh variable set NVIDIA_REASONING_BUDGET --body '0' --repo "$REPO"
 gh variable set NVIDIA_TEMPERATURE --body '1.0' --repo "$REPO"
 gh variable set NVIDIA_TOP_P --body '0.95' --repo "$REPO"
-gh variable set NVIDIA_RPM_LIMIT --body '40' --repo "$REPO"
+gh variable set NVIDIA_RPM_LIMIT --body '36' --repo "$REPO"
 gh variable set NVIDIA_AUDIT_CONCURRENCY --body '8' --repo "$REPO"
 gh variable set NVIDIA_MAX_RETRIES --body '8' --repo "$REPO"
 gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' --repo "$REPO"

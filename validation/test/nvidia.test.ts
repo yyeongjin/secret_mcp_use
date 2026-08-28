@@ -290,6 +290,7 @@ test("quarantines a non-PASS response that has no requirement-level finding", ()
   assert.equal(normalized.status, "UNKNOWN");
   assert.equal(normalized.findings.length, 1);
   assert.equal(normalized.publicOutput.transportStatus, "QUARANTINED");
+  assert.equal(normalized.publicOutput.modelStatus, "BLOCKED_MISSING_EVIDENCE");
 });
 
 test("repairs JSON syntax defects before the unchanged schema validation boundary", () => {

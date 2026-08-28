@@ -67,7 +67,9 @@ test("every physical NVIDIA retry obeys one shared RPM and 429 cooldown", async 
   assert.match(source, /Math\.max\(0, this\.nextStart, this\.cooldownUntil\) - Date\.now\(\)/);
   assert.match(completeJson, /response\.status === 429\) this\.limiter\.defer\(retryDelay\)/);
   assert.match(config, /maxRetries: integer\(process\.env\.NVIDIA_MAX_RETRIES, 8, 0\)/);
+  assert.match(config, /rpmLimit: integer\(process\.env\.NVIDIA_RPM_LIMIT, 36, 1\)/);
   assert.match(workflow, /NVIDIA_MAX_RETRIES:.*'8'/);
+  assert.match(workflow, /NVIDIA_RPM_LIMIT:.*'36'/);
 });
 
 test("recursive child consolidation cannot merge a Section representative into main", async () => {
@@ -128,4 +130,22 @@ test("V4 audits source leaves bottom-up and publishes one verbatim Stage 1 repor
   assert.match(document, /최대 55,000 UTF-8 byte 단위 댓글/);
   assert.match(document, /1차 Section에 `UNKNOWN` 또는 `FAILED_SCHEMA`가 하나라도 있으면/);
   assert.match(document, /모든 물리 HTTP 시작에 적용/);
+  assert.match(document, /마지막 `UNKNOWN`으로 덮어쓰지 않는다/);
+  assert.match(document, /exact before\/after 또는 unified diff 후보/);
+});
+
+test("patch candidates use exact replacements without guessing omitted code", async () => {
+  const patch = await readFile(new URL("../src/patch.ts", import.meta.url), "utf8");
+  const schema = await readFile(
+    new URL("../schemas/patch-candidate-output.schema.json", import.meta.url),
+    "utf8",
+  );
+  const canonicalStart = patch.indexOf("export function canonicalizePatchOutput");
+  const canonicalEnd = patch.indexOf("async function exists", canonicalStart);
+  const canonical = patch.slice(canonicalStart, canonicalEnd);
+
+  assert.match(schema, /"replacements"/);
+  assert.match(canonical, /exactReplacementDiff/);
+  assert.doesNotMatch(canonical, /restoreOmittedAdditionPrefixes/);
+  assert.match(canonical, /PATCH produced no changed lines/);
 });
