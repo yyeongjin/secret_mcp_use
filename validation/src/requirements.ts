@@ -320,7 +320,9 @@ export function documentLeafInput(
     contract: {
       ...base.contract,
       specificationGlobalRules: leaf.sourceKind === "global-rule" ? leaf.statement : "",
-      specificationFragment: leaf.sourceKind === "section" ? leaf.statement : "",
+      // The input schema requires a non-empty owned fragment. A global-rule
+      // leaf is duplicated here, but remains the same single atomic source leaf.
+      specificationFragment: leaf.statement,
       designIndexFragment: leaf.sourceKind === "global-rule" && completeDesignIndex
         ? completeDesignIndex
         : base.contract.designIndexFragment,

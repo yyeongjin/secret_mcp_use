@@ -69,6 +69,35 @@ test("every leaf receives a distinct deterministic fingerprint and single-owner 
   assert.equal(input.contract.designIndexFragment, inventory.leaves[0].statement);
 });
 
+test("a Stage 1 global-rule leaf satisfies the non-empty owned-fragment contract", () => {
+  const inventory = buildRequirementInventory({
+    stage: "document",
+    sectionId: "S01",
+    fragments: [{
+      sourcePath: "DESIGN_INDEX_SPECIFICATION.md",
+      sourceKind: "global-rule",
+      source: "**English** | [한국어](DESIGN_INDEX_SPECIFICATION.ko.md)\n",
+      baseOffset: 0,
+      baseLine: 1,
+      idPrefix: "G1-",
+    }],
+  });
+  const base = {
+    node: { sectionId: "S01", name: "Scope", fingerprint: sha256("parent") },
+    contract: {
+      specificationGlobalRules: "all global rules",
+      specificationFragment: "### 1. Scope",
+      designIndexFragment: "## 1. Scope",
+      designIndexSource: { sectionHash: sha256("design") },
+    },
+    payload: {},
+  } as unknown as DocumentAuditInput;
+  const input = documentLeafInput(base, inventory.leaves[0], "complete DESIGN_INDEX");
+  assert.equal(input.contract.specificationGlobalRules, inventory.leaves[0].statement);
+  assert.equal(input.contract.specificationFragment, inventory.leaves[0].statement);
+  assert.equal(input.contract.designIndexFragment, "complete DESIGN_INDEX");
+});
+
 test("parent PASS fingerprints are bound to the exact leaf inventory", () => {
   const first = buildRequirementInventory({
     stage: "document",
