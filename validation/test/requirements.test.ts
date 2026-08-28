@@ -98,6 +98,22 @@ test("a Stage 1 global-rule leaf satisfies the non-empty owned-fragment contract
   assert.equal(input.contract.designIndexFragment, "complete DESIGN_INDEX");
 });
 
+test("a Stage 1 global-rule leaf may inspect the whole DESIGN_INDEX boundary", async () => {
+  const { assertIsolatedDocumentAuditInput } = await import("../src/input.ts");
+  const leaf = {
+    sourceKind: "global-rule",
+  } as DocumentAuditInput["node"]["leaf"];
+  const input = {
+    node: { sectionId: "S01", leaf },
+    contract: {
+      specificationFragment: "Global rule",
+      designIndexFragment: "## 1. Scope\nA\n## 2. Evidence\nB\n",
+      requestContract: null,
+    },
+  } as unknown as DocumentAuditInput;
+  assert.doesNotThrow(() => assertIsolatedDocumentAuditInput(input));
+});
+
 test("parent PASS fingerprints are bound to the exact leaf inventory", () => {
   const first = buildRequirementInventory({
     stage: "document",

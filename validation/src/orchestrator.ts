@@ -2167,18 +2167,24 @@ async function runTrigger(args: {
     input: DocumentAuditInput;
     result: DocumentAuditCallResult;
   }> = [];
+  const documentLeafTasks = SECTION_IDS.flatMap((sectionId) => (
+    documentInventories.get(sectionId)!.leaves.map((leaf) => {
+      const baseInput = documentInputs.get(sectionId);
+      if (!baseInput) throw new Error(`Missing ${sectionId} document input.`);
+      const input = documentLeafInput(baseInput, leaf, trigger.source);
+      assertContract(args.validators.documentInput, input, `${leaf.requirementId} document leaf input`);
+      assertIsolatedDocumentAuditInput(input);
+      return { sectionId, leaf, input };
+    })
+  ));
   const executeDocumentAudit = async (task: {
     sectionId: SectionId;
     leaf: AtomicRequirementLeaf;
+    input: DocumentAuditInput;
   }): Promise<(typeof documentCallResults)[number]> => {
-    const baseInput = documentInputs.get(task.sectionId);
-    if (!baseInput) throw new Error(`Missing ${task.sectionId} document input.`);
-    const input = documentLeafInput(baseInput, task.leaf, trigger.source);
-    assertContract(args.validators.documentInput, input, `${task.leaf.requirementId} document leaf input`);
-    assertIsolatedDocumentAuditInput(input);
     const result = await callDocumentAudit({
       client: args.client,
-      input,
+      input: task.input,
       requestId: primaryAuditRequestId(
         runId,
         "document-audit",
@@ -2191,17 +2197,15 @@ async function runTrigger(args: {
     });
     await saveDocumentAuditCall(
       nodesDirectory,
-      input,
+      task.input,
       result,
       path.join(nodesDirectory, task.sectionId, "document-leaves", task.leaf.requirementId),
     );
-    return { leaf: task.leaf, input, result };
+    return { leaf: task.leaf, input: task.input, result };
   };
   if (fullAudit) {
     documentCallResults.push(...await runWithConcurrency(
-      SECTION_IDS.flatMap((sectionId) => (
-        documentInventories.get(sectionId)!.leaves.map((leaf) => ({ sectionId, leaf }))
-      )),
+      documentLeafTasks,
       args.config.nvidia.concurrency,
       executeDocumentAudit,
     ));
@@ -2225,7 +2229,7 @@ async function runTrigger(args: {
         });
       } else {
         documentCallResults.push(...await runWithConcurrency(
-          documentInventories.get(sectionId)!.leaves.map((leaf) => ({ sectionId, leaf })),
+          documentLeafTasks.filter((task) => task.sectionId === sectionId),
           args.config.nvidia.concurrency,
           executeDocumentAudit,
         ));
@@ -2424,14 +2428,25 @@ async function runTrigger(args: {
     input: NodeAuditInput;
     result: AuditCallResult;
   }> = [];
+  const implementationLeafTasks = SECTION_IDS.flatMap((sectionId) => (
+    implementationInventories.get(sectionId)!.leaves.map((leaf) => {
+      const baseInput = inputs.get(sectionId);
+      if (!baseInput) throw new Error(`Missing ${sectionId} implementation input.`);
+      const input = implementationLeafInput(baseInput, leaf);
+      assertContract(args.validators.input, input, `${leaf.requirementId} implementation leaf input`);
+      assertIsolatedAuditInput(input);
+      return { sectionId, leaf, input };
+    })
+  ));
 
   const executeAudit = async (task: {
     sectionId: SectionId;
     leaf: AtomicRequirementLeaf;
+    input: NodeAuditInput;
   }): Promise<(typeof callResults)[number]> => {
     const scheduledSectionInput = inputs.get(task.sectionId);
     if (!scheduledSectionInput) throw new Error(`Missing ${task.sectionId} input.`);
-    const scheduledInput = implementationLeafInput(scheduledSectionInput, task.leaf);
+    const scheduledInput = task.input;
     let workspace: Awaited<ReturnType<typeof isolatedAuditInput>> | undefined;
     try {
       workspace = await isolatedAuditInput({
@@ -2489,9 +2504,7 @@ async function runTrigger(args: {
 
   if (fullAudit) {
     callResults.push(...await runWithConcurrency(
-      SECTION_IDS.flatMap((sectionId) => (
-        implementationInventories.get(sectionId)!.leaves.map((leaf) => ({ sectionId, leaf }))
-      )),
+      implementationLeafTasks,
       args.config.nvidia.concurrency,
       executeAudit,
     ));
@@ -2519,7 +2532,7 @@ async function runTrigger(args: {
         continue;
       }
       callResults.push(...await runWithConcurrency(
-        implementationInventories.get(sectionId)!.leaves.map((leaf) => ({ sectionId, leaf })),
+        implementationLeafTasks.filter((task) => task.sectionId === sectionId),
         args.config.nvidia.concurrency,
         executeAudit,
       ));

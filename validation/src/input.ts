@@ -240,12 +240,18 @@ export async function buildDocumentAuditInputs(
 
 export function assertIsolatedDocumentAuditInput(input: DocumentAuditInput): void {
   const ownNumber = Number(input.node.sectionId.slice(1));
-  const numberedHeadings = [
+  const ownedBoundaryHeadings = [
     ...input.contract.specificationFragment.matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
-    ...input.contract.designIndexFragment.matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
     ...(input.contract.requestContract?.fragment ?? "").matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
   ].map((match) => Number(match[1]));
-  if (numberedHeadings.some((number) => number !== ownNumber)) {
+  const designIndexHeadings = [
+    ...input.contract.designIndexFragment.matchAll(/^#{1,6}\s+(\d+)\.\s+/gm),
+  ].map((match) => Number(match[1]));
+  const isGlobalRuleLeaf = input.node.leaf?.sourceKind === "global-rule";
+  if (
+    ownedBoundaryHeadings.some((number) => number !== ownNumber) ||
+    (!isGlobalRuleLeaf && designIndexHeadings.some((number) => number !== ownNumber))
+  ) {
     throw new Error(`${input.node.sectionId} document input contains another numbered Section.`);
   }
   if ("implementation" in input) {
