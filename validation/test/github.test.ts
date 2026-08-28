@@ -5,6 +5,7 @@ import {
   buildNodeCheckOutput,
   buildPullRequestBody,
   buildSectionPullRequestBody,
+  isRetryableChildMergeError,
   isAutomationPullRequestForBase,
   pullRequestTitle,
   recursiveMergeOrder,
@@ -124,6 +125,15 @@ test("child PRs are recursively merged deepest-first toward the Section branch",
     () => recursiveMergeOrder([{ ...pulls[0], baseBranch: "main" }], "auto/target/S05/hash"),
     /INVALID_CHILD_CHAIN/,
   );
+});
+
+test("recursive merge retries only GitHub branch-recalculation races", () => {
+  assert.equal(isRetryableChildMergeError(new Error(
+    'GitHub API PUT /repos/example/repo/pulls/41/merge failed with 405: {"message":"Base branch was modified. Review and try the merge again."}',
+  )), true);
+  assert.equal(isRetryableChildMergeError(new Error(
+    'GitHub API PUT /repos/example/repo/pulls/41/merge failed with 405: {"message":"Pull Request is not mergeable"}',
+  )), false);
 });
 
 test("the Section PR is the only human merge boundary", () => {

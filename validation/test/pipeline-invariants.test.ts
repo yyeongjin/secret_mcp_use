@@ -54,6 +54,10 @@ test("recursive child consolidation cannot merge a Section representative into m
   assert.match(mergeBatch, /sectionBranch === args\.config\.github\.baseBranch/);
   assert.match(mergeBatch, /expected\.baseBranch === args\.config\.github\.baseBranch/);
   assert.match(mergeBatch, /recursiveMergeOrder/);
+  assert.match(mergeBatch, /CHILD_MERGE_MAX_ATTEMPTS/);
+  assert.match(mergeBatch, /pull\.mergeable === null/);
+  assert.match(mergeBatch, /sha: pull\.head\.sha/);
+  assert.match(mergeBatch, /isRetryableChildMergeError/);
   assert.match(github, /return \[\.\.\.pulls\]\.reverse\(\)/);
 });
 

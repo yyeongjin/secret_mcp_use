@@ -16,6 +16,8 @@ interface PullRequestResponse {
   state: string;
   body?: string | null;
   merged_at?: string | null;
+  mergeable?: boolean | null;
+  mergeable_state?: string;
   head?: { ref: string; sha: string };
   base?: { ref: string; sha: string };
 }
@@ -115,6 +117,18 @@ interface TargetCheckSummary {
   targetId: string;
   triggerPath: string;
   nodes: NodeCheckSummary[];
+}
+
+const CHILD_MERGE_MAX_ATTEMPTS = 8;
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+export function isRetryableChildMergeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /GitHub API PUT .*\/pulls\/\d+\/merge failed with (?:405|409):/.test(message) &&
+    /Base branch was modified|mergeability|try the merge again/i.test(message);
 }
 
 async function githubRequest<T>(
@@ -617,43 +631,63 @@ export async function mergeChildPullRequestBatch(args: {
   }
   const mergedPullNumbers: number[] = [];
   for (const expected of recursiveMergeOrder(args.pulls, args.sectionBranch)) {
-    const pull = await githubRequest<PullRequestResponse>(
-      args.config,
-      "GET",
-      `/repos/${args.config.repository}/pulls/${expected.number}`,
-    );
-    if (pull.merged_at) {
-      mergedPullNumbers.push(pull.number);
-      continue;
-    }
-    if (pull.state !== "open") {
-      throw new Error(`Child PR #${pull.number} is ${pull.state}; recursive consolidation requires an open or merged PR.`);
-    }
-    if (pull.head?.ref !== expected.branch || pull.base?.ref !== expected.baseBranch) {
-      throw new Error(
-        `Child PR #${pull.number} changed shape: ${pull.head?.ref ?? "unknown"} -> ${pull.base?.ref ?? "unknown"}.`,
+    let merged = false;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= CHILD_MERGE_MAX_ATTEMPTS; attempt += 1) {
+      const pull = await githubRequest<PullRequestResponse>(
+        args.config,
+        "GET",
+        `/repos/${args.config.repository}/pulls/${expected.number}`,
       );
+      if (pull.merged_at) {
+        merged = true;
+        break;
+      }
+      if (pull.state !== "open") {
+        throw new Error(`Child PR #${pull.number} is ${pull.state}; recursive consolidation requires an open or merged PR.`);
+      }
+      if (pull.head?.ref !== expected.branch || pull.base?.ref !== expected.baseBranch) {
+        throw new Error(
+          `Child PR #${pull.number} changed shape: ${pull.head?.ref ?? "unknown"} -> ${pull.base?.ref ?? "unknown"}.`,
+        );
+      }
+      if (
+        expected.baseBranch === args.config.github.baseBranch ||
+        !expected.branch.startsWith("auto/") ||
+        !expected.baseBranch.startsWith("auto/")
+      ) {
+        throw new Error(`Refusing to auto-merge child PR #${pull.number} outside the Section automation tree.`);
+      }
+      if (pull.mergeable === null || pull.mergeable_state === "unknown") {
+        await wait(Math.min(5000, attempt * 1000));
+        continue;
+      }
+      try {
+        const merge = await githubRequest<PullRequestMergeResponse>(
+          args.config,
+          "PUT",
+          `/repos/${args.config.repository}/pulls/${pull.number}/merge`,
+          {
+            sha: pull.head.sha,
+            merge_method: "merge",
+            commit_title: `chore(${args.sectionId.toLowerCase()}): consolidate ${expected.patchNodeId}`,
+          },
+        );
+        if (!merge.merged) throw new Error(`GitHub did not merge child PR #${pull.number}: ${merge.message}`);
+        merged = true;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (!isRetryableChildMergeError(error) || attempt === CHILD_MERGE_MAX_ATTEMPTS) throw error;
+        await wait(Math.min(5000, attempt * 1000));
+      }
     }
-    if (
-      expected.baseBranch === args.config.github.baseBranch ||
-      !expected.branch.startsWith("auto/") ||
-      !expected.baseBranch.startsWith("auto/")
-    ) {
-      throw new Error(`Refusing to auto-merge child PR #${pull.number} outside the Section automation tree.`);
+    if (!merged) {
+      throw lastError instanceof Error
+        ? lastError
+        : new Error(`Child PR #${expected.number} did not become mergeable after ${CHILD_MERGE_MAX_ATTEMPTS} attempts.`);
     }
-    const merge = await githubRequest<PullRequestMergeResponse>(
-      args.config,
-      "PUT",
-      `/repos/${args.config.repository}/pulls/${pull.number}/merge`,
-      {
-        merge_method: "merge",
-        commit_title: `chore(${args.sectionId.toLowerCase()}): consolidate ${expected.patchNodeId}`,
-      },
-    );
-    if (!merge.merged) {
-      throw new Error(`GitHub did not merge child PR #${pull.number}: ${merge.message}`);
-    }
-    mergedPullNumbers.push(pull.number);
+    mergedPullNumbers.push(expected.number);
     await runCommand("git", ["push", "--quiet", "origin", "--delete", expected.branch], {
       cwd: args.config.repositoryRoot,
       allowFailure: true,
