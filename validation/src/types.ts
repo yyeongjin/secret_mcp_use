@@ -34,13 +34,69 @@ export interface MarkdownSection {
   hash: Sha256;
   startOffset: number;
   endOffset: number;
+  startLine: number;
+  endLine: number;
+}
+
+export interface MarkdownSourceFragment {
+  source: string;
+  startOffset: number;
+  endOffset: number;
+  startLine: number;
+}
+
+export type RequirementStage = "document" | "implementation";
+
+export interface RequirementSourceSpan {
+  sourceUnitId: string;
+  sectionId: SectionId;
+  sourcePath: string;
+  sourceKind: "global-rule" | "document-preamble" | "section";
+  contentKind: "leaf" | "heading" | "fence" | "table-separator" | "thematic-break" | "whitespace";
+  startOffset: number;
+  endOffset: number;
+  startLine: number;
+  endLine: number;
+  raw: string;
+  contentHash: Sha256;
+}
+
+export interface AtomicRequirementLeaf {
+  requirementId: string;
+  stage: RequirementStage;
+  sectionId: SectionId;
+  sourceUnitId: string;
+  sourcePath: string;
+  sourceKind: RequirementSourceSpan["sourceKind"];
+  startOffset: number;
+  endOffset: number;
+  startLine: number;
+  endLine: number;
+  statement: string;
+  sourceHash: Sha256;
+  fingerprint: Sha256;
+}
+
+export interface RequirementInventory {
+  schemaVersion: "design-validation/requirement-inventory/v1";
+  stage: RequirementStage;
+  sectionId: SectionId;
+  sourcePaths: string[];
+  spans: RequirementSourceSpan[];
+  leaves: AtomicRequirementLeaf[];
+  coveredBytes: number;
+  totalBytes: number;
+  uncoveredRanges: Array<{ start: number; end: number }>;
+  inventoryHash: Sha256;
 }
 
 export interface SpecificationSnapshot {
   path: string;
   documentHash: Sha256;
+  source: string;
   globalRules: string;
   globalRulesHash: Sha256;
+  globalFragments: MarkdownSourceFragment[];
   sections: Map<SectionId, MarkdownSection>;
 }
 
@@ -48,6 +104,8 @@ export interface TriggerSnapshot {
   path: string;
   referenceId: `gdweb-${string}`;
   documentHash: Sha256;
+  source: string;
+  preambleFragments: MarkdownSourceFragment[];
   sections: Map<SectionId, MarkdownSection>;
 }
 
@@ -137,6 +195,7 @@ export interface NodeAuditInput {
     requirementIds: string[];
     fingerprint: Sha256;
     dependsOn: SectionId[];
+    leaf?: AtomicRequirementLeaf;
   };
   contract: {
     specificationSource: {
@@ -192,6 +251,7 @@ export interface DocumentAuditInput {
     sectionId: SectionId;
     name: string;
     fingerprint: Sha256;
+    leaf?: AtomicRequirementLeaf;
   };
   contract: {
     specificationSource: NodeAuditInput["contract"]["specificationSource"];

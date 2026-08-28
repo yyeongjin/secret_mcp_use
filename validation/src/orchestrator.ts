@@ -7,11 +7,16 @@ import {
   resolveCachedPassForNode,
 } from "./cache.ts";
 import { buildChangeEvent, directDirtySections } from "./change.ts";
-import { sha256 } from "./hash.ts";
+import {
+  buildDocumentGapReportBundle,
+  type DocumentGapReportBundle,
+  type DocumentLeafReportRecord,
+} from "./document-reports.ts";
+import { hashJson, sha256 } from "./hash.ts";
 import {
   mergeChildPullRequestBatch,
   prepareSectionBranch,
-  publishDocumentGapIssues,
+  publishDocumentGapReports,
   publishNodeCheckRuns,
   publishPatchPullRequest,
   publishSectionPullRequest,
@@ -66,6 +71,17 @@ import {
   regressionAuditUserPrompt,
 } from "./prompts.ts";
 import {
+  aggregateDocumentLeafOutputs,
+  aggregateImplementationLeafOutputs,
+  assertWholeDocumentCoverage,
+  bindDocumentRequirementInventory,
+  bindImplementationRequirementInventory,
+  buildDocumentRequirementInventory,
+  buildImplementationRequirementInventory,
+  documentLeafInput,
+  implementationLeafInput,
+} from "./requirements.ts";
+import {
   assertAuditOutput,
   assertContract,
   assertDocumentAuditOutput,
@@ -74,6 +90,7 @@ import {
   type JsonSchema,
 } from "./schema.ts";
 import type {
+  AtomicRequirementLeaf,
   ChangeEvent,
   DocumentAuditInput,
   DocumentAuditOutput,
@@ -83,6 +100,7 @@ import type {
   PassAttestation,
   PipelineConfig,
   PullRequestManifest,
+  RequirementInventory,
   ResolvedNode,
   ResolvedDocumentNode,
   SectionId,
@@ -214,6 +232,7 @@ export interface NodeRunSummary {
   documentAuditStatus: DocumentAuditOutput["status"] | "FAILED_SCHEMA";
   documentAuditAttempts: number;
   documentFindings: DocumentAuditOutput["findings"];
+  documentOutput: DocumentAuditOutput | null;
   auditStatus: NodeAuditOutput["status"] | "FAILED_SCHEMA";
   executionState: string;
   auditAttempts: number;
@@ -235,6 +254,7 @@ export interface WorkRunSummary {
   implementationAuditCalls: number;
   implementationAuditRequests: number;
   totalLogicalAuditRequests: number;
+  documentReport: DocumentGapReportBundle;
   auditCalls: number;
   auditRequests: number;
   patchCalls: number;
@@ -264,22 +284,34 @@ export function primaryAuditRequestId(
   runId: string,
   stage: PrimaryAuditStage,
   sectionId: SectionId,
+  requirementId?: string,
 ): string {
-  return `${runId}:${stage}:${sectionId}`;
+  return [runId, stage, sectionId, requirementId].filter(Boolean).join(":");
 }
 
-export function fullAuditRequestPlan(runId: string): Array<{
+export function fullAuditRequestPlan(
+  runId: string,
+  inventories: {
+    document: Map<SectionId, RequirementInventory>;
+    implementation: Map<SectionId, RequirementInventory>;
+  },
+): Array<{
   stage: PrimaryAuditStage;
   sectionId: SectionId;
+  requirementId: string;
   requestId: string;
 }> {
-  return (["document-audit", "implementation-audit"] as const).flatMap((stage) => (
-    SECTION_IDS.map((sectionId) => ({
-      stage,
-      sectionId,
-      requestId: primaryAuditRequestId(runId, stage, sectionId),
-    }))
-  ));
+  return (["document-audit", "implementation-audit"] as const).flatMap((stage) => {
+    const inventory = stage === "document-audit" ? inventories.document : inventories.implementation;
+    return SECTION_IDS.flatMap((sectionId) => (
+      (inventory.get(sectionId)?.leaves ?? []).map((leaf) => ({
+        stage,
+        sectionId,
+        requirementId: leaf.requirementId,
+        requestId: primaryAuditRequestId(runId, stage, sectionId, leaf.requirementId),
+      }))
+    ));
+  });
 }
 
 async function writeJson(pathname: string, value: unknown): Promise<void> {
@@ -415,6 +447,17 @@ function countStatuses(values: string[]): Record<string, number> {
   }, {});
 }
 
+function attemptsBySection<T extends { leaf: AtomicRequirementLeaf; result: { attempts: unknown[] } }>(
+  records: T[],
+): Map<SectionId, number> {
+  return new Map(SECTION_IDS.map((sectionId) => [
+    sectionId,
+    records
+      .filter((record) => record.leaf.sectionId === sectionId)
+      .reduce((total, record) => total + record.result.attempts.length, 0),
+  ]));
+}
+
 function blockedNodes(outputs: NodeAuditOutput[]): WorkRunSummary["blocked"] {
   return outputs
     .filter((output) => [
@@ -461,6 +504,7 @@ function buildNodeRunSummaries(args: {
       documentAuditStatus: documentOutput?.status ?? "FAILED_SCHEMA",
       documentAuditAttempts: args.documentAuditAttempts.get(sectionId) ?? 0,
       documentFindings: documentOutput?.findings ?? [],
+      documentOutput: documentOutput ?? null,
       auditStatus: output?.status ?? "FAILED_SCHEMA",
       executionState: states.get(sectionId) ?? "FAILED_SCHEMA",
       auditAttempts: args.auditAttempts.get(sectionId) ?? 0,
@@ -720,8 +764,9 @@ async function saveDocumentAuditCall(
   nodesDirectory: string,
   input: DocumentAuditInput,
   result: DocumentAuditCallResult,
+  artifactDirectory?: string,
 ): Promise<void> {
-  const nodeDirectory = path.join(nodesDirectory, input.node.sectionId);
+  const nodeDirectory = artifactDirectory ?? path.join(nodesDirectory, input.node.sectionId);
   await mkdir(nodeDirectory, { recursive: true });
   await writeJson(path.join(nodeDirectory, "document-audit-input.json"), input);
   for (const attempt of result.attempts) {
@@ -848,8 +893,9 @@ async function saveAuditCall(
   nodesDirectory: string,
   input: NodeAuditInput,
   result: AuditCallResult,
+  artifactDirectory?: string,
 ): Promise<void> {
-  const nodeDirectory = path.join(nodesDirectory, input.node.sectionId);
+  const nodeDirectory = artifactDirectory ?? path.join(nodesDirectory, input.node.sectionId);
   await mkdir(nodeDirectory, { recursive: true });
   await writeJson(path.join(nodeDirectory, "audit-input.json"), input);
   for (const attempt of result.attempts) {
@@ -899,6 +945,7 @@ async function isolatedAuditInput(args: {
   changeEvent: ChangeEvent;
   documentOutputs: Map<SectionId, DocumentAuditOutput>;
   expectedFingerprint: string;
+  leaf?: AtomicRequirementLeaf;
 }): Promise<{ input: NodeAuditInput; cleanup: () => Promise<void> }> {
   const worktree = await createAuditWorktree(args.config, args.sectionId);
   try {
@@ -920,11 +967,20 @@ async function isolatedAuditInput(args: {
       args.changeEvent,
       args.documentOutputs,
     );
-    const input = inputs.get(args.sectionId);
-    if (!input) throw new Error(`Isolated workspace did not build ${args.sectionId}.`);
-    if (input.node.fingerprint !== args.expectedFingerprint) {
+    const sectionInput = inputs.get(args.sectionId);
+    const triggerSection = trigger.sections.get(args.sectionId);
+    if (!sectionInput || !triggerSection) throw new Error(`Isolated workspace did not build ${args.sectionId}.`);
+    const inventory = buildImplementationRequirementInventory({
+      sectionId: args.sectionId,
+      triggerPath: trigger.path,
+      section: triggerSection,
+      preambleFragments: trigger.preambleFragments,
+    });
+    const boundSectionInput = bindImplementationRequirementInventory(sectionInput, inventory);
+    if (boundSectionInput.node.fingerprint !== args.expectedFingerprint) {
       throw new Error(`${args.sectionId} isolated workspace fingerprint differs from the scheduler input.`);
     }
+    const input = args.leaf ? implementationLeafInput(boundSectionInput, args.leaf) : boundSectionInput;
     assertIsolatedAuditInput(input);
     return { input, cleanup: worktree.cleanup };
   } catch (error) {
@@ -954,7 +1010,7 @@ async function patchedInputs(args: {
     patchedConfig.specificationPath,
   );
   const trigger = await readTrigger(patchedConfig.repositoryRoot, args.triggerPath);
-  return buildAuditInputs(
+  const inputs = await buildAuditInputs(
     patchedConfig,
     args.manifest,
     specification,
@@ -965,6 +1021,19 @@ async function patchedInputs(args: {
     args.changeEvent,
     args.documentOutputs,
   );
+  for (const sectionId of SECTION_IDS) {
+    const input = inputs.get(sectionId);
+    const section = trigger.sections.get(sectionId);
+    if (!input || !section) throw new Error(`Patched workspace did not build ${sectionId}.`);
+    const inventory = buildImplementationRequirementInventory({
+      sectionId,
+      triggerPath: trigger.path,
+      section,
+      preambleFragments: trigger.preambleFragments,
+    });
+    inputs.set(sectionId, bindImplementationRequirementInventory(input, inventory));
+  }
+  return inputs;
 }
 
 async function runPatches(args: {
@@ -985,6 +1054,7 @@ async function runPatches(args: {
   runId: string;
   changeEvent: ChangeEvent;
   documentOutputs: Map<SectionId, DocumentAuditOutput>;
+  implementationInventories: Map<SectionId, RequirementInventory>;
 }): Promise<{ records: PatchRecord[]; patchCalls: number; reauditCalls: number }> {
   const records: PatchRecord[] = [];
   let patchCalls = 0;
@@ -1131,11 +1201,6 @@ async function runPatches(args: {
           completedRequirementIds,
         );
         if (remainingFindings.length === 0) break;
-        let remainingAuditOutput: NodeAuditOutput = {
-          ...resolved.output,
-          fingerprint: currentInput.node.fingerprint,
-          findings: remainingFindings,
-        };
         const patchNodeId = `${sectionId}-${childIndex}`;
         let retryContext: {
           output: NodePatchOutput;
@@ -1144,6 +1209,29 @@ async function runPatches(args: {
         let childPublished = false;
         let childResolvedWithoutPatch = false;
         const requirementId = remainingFindings[0].requirementId;
+        const requirementLeaf = args.implementationInventories.get(sectionId)?.leaves.find((leaf) => (
+          requirementId === leaf.requirementId || requirementId.startsWith(`${leaf.requirementId}-`)
+        ));
+        if (!requirementLeaf) {
+          const attemptRecord: PatchAttemptRecord = {
+            attempt: 0,
+            patchNodeId,
+            status: "BLOCKED_MODEL",
+            reason: `${patchNodeId} has no owned bottom-up source leaf for ${requirementId}.`,
+          };
+          attempts.push(attemptRecord);
+          requirementFailures.push({ requirementId, record: { sectionId, ...attemptRecord, attempts } });
+          failedRequirementIds.add(requirementId);
+          childIndex += 1;
+          continue;
+        }
+        const sectionParentInput = currentInputs.get(sectionId) ?? input;
+        currentInput = implementationLeafInput(sectionParentInput, requirementLeaf);
+        let remainingAuditOutput: NodeAuditOutput = {
+          ...resolved.output,
+          fingerprint: currentInput.node.fingerprint,
+          findings: remainingFindings,
+        };
 
         const preflight = await callAudit({
           client: args.client,
@@ -1494,8 +1582,9 @@ async function runPatches(args: {
               changeEvent: args.changeEvent,
               documentOutputs: args.documentOutputs,
             });
-            const nextInput = nextInputs.get(sectionId);
-            if (!nextInput) throw new Error(`Patched input is missing ${sectionId}.`);
+            const nextSectionInput = nextInputs.get(sectionId);
+            if (!nextSectionInput) throw new Error(`Patched input is missing ${sectionId}.`);
+            const nextInput = implementationLeafInput(nextSectionInput, requirementLeaf);
             const addressedFindings = remainingFindings.filter(
               (finding) => output.requirementIds.includes(finding.requirementId),
             );
@@ -2036,6 +2125,36 @@ async function runTrigger(args: {
   if (documentInputs.size !== 19 || SECTION_IDS.some((id) => !documentInputs.has(id))) {
     throw new Error("Stage 1 document audit fan-out is not the exact S01-S19 set.");
   }
+  const documentInventories = new Map<SectionId, RequirementInventory>();
+  for (const sectionId of SECTION_IDS) {
+    const specificationSection = args.specification.sections.get(sectionId);
+    if (!specificationSection) throw new Error(`Missing Specification ${sectionId}.`);
+    const inventory = buildDocumentRequirementInventory({
+      sectionId,
+      specificationPath: args.specification.path,
+      globalRules: args.specification.globalRules,
+      globalFragments: args.specification.globalFragments,
+      section: specificationSection,
+    });
+    documentInventories.set(sectionId, inventory);
+    documentInputs.set(
+      sectionId,
+      bindDocumentRequirementInventory(documentInputs.get(sectionId)!, inventory),
+    );
+    await writeJson(
+      path.join(nodesDirectory, sectionId, "document-requirement-inventory.json"),
+      inventory,
+    );
+  }
+  await writeJson(path.join(runDirectory, "document-source-coverage.json"), {
+    schemaVersion: "design-validation/source-coverage/v1",
+    stage: 1,
+    ...assertWholeDocumentCoverage({
+      sourcePath: args.specification.path,
+      source: args.specification.source,
+      inventories: documentInventories,
+    }),
+  });
   for (const [sectionId, input] of documentInputs) {
     assertContract(args.validators.documentInput, input, `${sectionId} document audit input`);
     assertIsolatedDocumentAuditInput(input);
@@ -2043,24 +2162,46 @@ async function runTrigger(args: {
 
   const documentCached = new Map<SectionId, ResolvedDocumentNode>();
   const documentResolved = new Map<SectionId, ResolvedDocumentNode>();
-  const documentCallResults: DocumentAuditCallResult[] = [];
-  const executeDocumentAudit = async (sectionId: SectionId): Promise<DocumentAuditCallResult> => {
-    const input = documentInputs.get(sectionId);
-    if (!input) return { ok: false, sectionId, error: `Missing ${sectionId} document input.`, attempts: [] };
+  const documentCallResults: Array<{
+    leaf: AtomicRequirementLeaf;
+    input: DocumentAuditInput;
+    result: DocumentAuditCallResult;
+  }> = [];
+  const executeDocumentAudit = async (task: {
+    sectionId: SectionId;
+    leaf: AtomicRequirementLeaf;
+  }): Promise<(typeof documentCallResults)[number]> => {
+    const baseInput = documentInputs.get(task.sectionId);
+    if (!baseInput) throw new Error(`Missing ${task.sectionId} document input.`);
+    const input = documentLeafInput(baseInput, task.leaf, trigger.source);
+    assertContract(args.validators.documentInput, input, `${task.leaf.requirementId} document leaf input`);
+    assertIsolatedDocumentAuditInput(input);
     const result = await callDocumentAudit({
       client: args.client,
       input,
-      requestId: primaryAuditRequestId(runId, "document-audit", sectionId),
+      requestId: primaryAuditRequestId(
+        runId,
+        "document-audit",
+        task.sectionId,
+        task.leaf.requirementId,
+      ),
       maxAttempts: args.config.auditAttempts,
       validate: args.validators.documentAudit,
       outputSchema: args.validators.documentAuditSchema,
     });
-    await saveDocumentAuditCall(nodesDirectory, input, result);
-    return result;
+    await saveDocumentAuditCall(
+      nodesDirectory,
+      input,
+      result,
+      path.join(nodesDirectory, task.sectionId, "document-leaves", task.leaf.requirementId),
+    );
+    return { leaf: task.leaf, input, result };
   };
   if (fullAudit) {
     documentCallResults.push(...await runWithConcurrency(
-      SECTION_IDS,
+      SECTION_IDS.flatMap((sectionId) => (
+        documentInventories.get(sectionId)!.leaves.map((leaf) => ({ sectionId, leaf }))
+      )),
       args.config.nvidia.concurrency,
       executeDocumentAudit,
     ));
@@ -2083,23 +2224,61 @@ async function runTrigger(args: {
           attestationHash: cachedDocument.attestation?.attestationHash ?? null,
         });
       } else {
-        documentCallResults.push(await executeDocumentAudit(sectionId));
+        documentCallResults.push(...await runWithConcurrency(
+          documentInventories.get(sectionId)!.leaves.map((leaf) => ({ sectionId, leaf })),
+          args.config.nvidia.concurrency,
+          executeDocumentAudit,
+        ));
       }
     }
   }
-  for (const result of documentCallResults) {
-    const input = documentInputs.get(result.sectionId)!;
-    const output = result.ok
-      ? result.output
-      : quarantineDocumentAuditOutput(result.sectionId, input.node.fingerprint) as DocumentAuditOutput;
-    documentResolved.set(result.sectionId, {
+  for (const sectionId of SECTION_IDS.filter((id) => !documentCached.has(id))) {
+    const baseInput = documentInputs.get(sectionId)!;
+    const inventory = documentInventories.get(sectionId)!;
+    const records = documentCallResults.filter((record) => record.leaf.sectionId === sectionId);
+    if (records.length !== inventory.leaves.length) {
+      throw new Error(`Stage 1 ${sectionId} audited ${records.length}/${inventory.leaves.length} leaves.`);
+    }
+    const output = aggregateDocumentLeafOutputs({
+      sectionId,
+      fingerprint: baseInput.node.fingerprint,
+      results: records.map((record) => ({
+        leaf: record.leaf,
+        output: record.result.ok
+          ? record.result.output
+          : quarantineDocumentAuditOutput(
+            sectionId,
+            record.input.node.fingerprint,
+          ) as DocumentAuditOutput,
+      })),
+    });
+    assertDocumentAuditOutput(
+      args.validators.documentAudit,
+      output,
+      sectionId,
+      baseInput.node.fingerprint,
+    );
+    documentResolved.set(sectionId, {
       status: "FRESH",
       output,
-      rawResponseHash: result.ok ? result.completion.rawHash : sha256(result.error),
+      rawResponseHash: hashJson(records.map((record) => (
+        record.result.ok ? record.result.completion.rawHash : sha256(record.result.error)
+      ))),
     });
-    if (!result.ok) {
-      await writeJson(path.join(nodesDirectory, result.sectionId, "document-audit-output.json"), output);
-    }
+    await writeJson(path.join(nodesDirectory, sectionId, "document-audit-output.json"), output);
+    await writeJson(path.join(nodesDirectory, sectionId, "document-leaf-aggregation.json"), {
+      schemaVersion: "design-validation/leaf-aggregation/v1",
+      stage: 1,
+      sectionId,
+      inventoryHash: inventory.inventoryHash,
+      expectedLeaves: inventory.leaves.length,
+      resolvedLeaves: records.length,
+      status: output.status,
+      childStatuses: records.map((record) => ({
+        requirementId: record.leaf.requirementId,
+        status: record.result.ok ? record.result.output.status : "UNKNOWN",
+      })),
+    });
   }
   if (documentResolved.size !== 19) {
     throw new Error(`Stage 1 resolved ${documentResolved.size}/19 Sections.`);
@@ -2114,6 +2293,51 @@ async function runTrigger(args: {
   const documentOutputs = new Map(
     SECTION_IDS.map((sectionId) => [sectionId, documentResolved.get(sectionId)!.output] as const),
   );
+  const documentLeafReportRecords: DocumentLeafReportRecord[] = documentCallResults.map((record) => {
+    const output = record.result.ok
+      ? record.result.output
+      : quarantineDocumentAuditOutput(
+        record.leaf.sectionId,
+        record.input.node.fingerprint,
+      ) as DocumentAuditOutput;
+    return {
+      leaf: record.leaf,
+      requestId: record.result.attempts.at(-1)?.requestId ?? primaryAuditRequestId(
+        runId,
+        "document-audit",
+        record.leaf.sectionId,
+        record.leaf.requirementId,
+      ),
+      attemptRequestIds: record.result.attempts.map((attempt) => attempt.requestId),
+      output,
+      outputHash: hashJson(output),
+      rawResponseHash: record.result.ok
+        ? record.result.completion.rawHash
+        : sha256(record.result.error),
+    };
+  });
+  const documentReportBundle = buildDocumentGapReportBundle({
+    targetId,
+    triggerPath: trigger.path,
+    runId,
+    outputs: SECTION_IDS.map((sectionId) => documentOutputs.get(sectionId)!),
+    leafRecords: documentLeafReportRecords,
+  });
+  const documentReportsDirectory = path.join(runDirectory, "document-reports");
+  await mkdir(path.join(documentReportsDirectory, "sections"), { recursive: true });
+  await writeFile(
+    path.join(documentReportsDirectory, "DOCUMENT_GAPS.md"),
+    documentReportBundle.combinedContent,
+    "utf8",
+  );
+  await writeJson(path.join(documentReportsDirectory, "manifest.json"), documentReportBundle.manifest);
+  for (const report of documentReportBundle.sectionReports) {
+    await writeFile(
+      path.join(documentReportsDirectory, "sections", `${report.sectionId}.md`),
+      report.content,
+      "utf8",
+    );
+  }
 
   const inputs = await buildAuditInputs(
     effectiveConfig,
@@ -2129,6 +2353,35 @@ async function runTrigger(args: {
   if (inputs.size !== 19 || SECTION_IDS.some((id) => !inputs.has(id))) {
     throw new Error("Stage 2 implementation audit fan-out is not the exact S01-S19 set.");
   }
+  const implementationInventories = new Map<SectionId, RequirementInventory>();
+  for (const sectionId of SECTION_IDS) {
+    const triggerSection = trigger.sections.get(sectionId);
+    if (!triggerSection) throw new Error(`Missing DESIGN_INDEX ${sectionId}.`);
+    const inventory = buildImplementationRequirementInventory({
+      sectionId,
+      triggerPath: trigger.path,
+      section: triggerSection,
+      preambleFragments: trigger.preambleFragments,
+    });
+    implementationInventories.set(sectionId, inventory);
+    inputs.set(
+      sectionId,
+      bindImplementationRequirementInventory(inputs.get(sectionId)!, inventory),
+    );
+    await writeJson(
+      path.join(nodesDirectory, sectionId, "implementation-requirement-inventory.json"),
+      inventory,
+    );
+  }
+  await writeJson(path.join(runDirectory, "implementation-source-coverage.json"), {
+    schemaVersion: "design-validation/source-coverage/v1",
+    stage: 2,
+    ...assertWholeDocumentCoverage({
+      sourcePath: trigger.path,
+      source: trigger.source,
+      inventories: implementationInventories,
+    }),
+  });
   for (const [sectionId, input] of inputs) {
     assertContract(args.validators.input, input, `${sectionId} implementation audit input`);
     assertIsolatedAuditInput(input);
@@ -2166,11 +2419,19 @@ async function runTrigger(args: {
 
   const cached = new Map<SectionId, Extract<ResolvedNode, { status: "CACHED_PASS" }>>();
   const resolved = new Map<SectionId, ResolvedNode>();
-  const callResults: AuditCallResult[] = [];
+  const callResults: Array<{
+    leaf: AtomicRequirementLeaf;
+    input: NodeAuditInput;
+    result: AuditCallResult;
+  }> = [];
 
-  const executeAudit = async (sectionId: SectionId): Promise<AuditCallResult> => {
-    const scheduledInput = inputs.get(sectionId);
-    if (!scheduledInput) return { ok: false, sectionId, error: `Missing ${sectionId} input.`, attempts: [] };
+  const executeAudit = async (task: {
+    sectionId: SectionId;
+    leaf: AtomicRequirementLeaf;
+  }): Promise<(typeof callResults)[number]> => {
+    const scheduledSectionInput = inputs.get(task.sectionId);
+    if (!scheduledSectionInput) throw new Error(`Missing ${task.sectionId} input.`);
+    const scheduledInput = implementationLeafInput(scheduledSectionInput, task.leaf);
     let workspace: Awaited<ReturnType<typeof isolatedAuditInput>> | undefined;
     try {
       workspace = await isolatedAuditInput({
@@ -2178,44 +2439,62 @@ async function runTrigger(args: {
         manifest: args.manifest,
         contractSchemaHash: args.contractSchemaHash,
         triggerPath: args.triggerPath,
-        sectionId,
+        sectionId: task.sectionId,
         runId,
         requestedAt,
         changeEvent: targetChangeEvent,
         documentOutputs,
-        expectedFingerprint: scheduledInput.node.fingerprint,
+        expectedFingerprint: scheduledSectionInput.node.fingerprint,
+        leaf: task.leaf,
       });
       const result = await callAudit({
         client: args.client,
         input: workspace.input,
         kind: "audit",
-        requestId: primaryAuditRequestId(runId, "implementation-audit", sectionId),
+        requestId: primaryAuditRequestId(
+          runId,
+          "implementation-audit",
+          task.sectionId,
+          task.leaf.requirementId,
+        ),
         maxAttempts: args.config.auditAttempts,
         validate: args.validators.audit,
         outputSchema: args.validators.auditSchema,
       });
-      await saveAuditCall(nodesDirectory, workspace.input, result);
-      return result;
+      await saveAuditCall(
+        nodesDirectory,
+        workspace.input,
+        result,
+        path.join(nodesDirectory, task.sectionId, "implementation-leaves", task.leaf.requirementId),
+      );
+      return { leaf: task.leaf, input: workspace.input, result };
     } catch (error) {
-      const result: AuditCallFailure = { ok: false, sectionId, error: errorMessage(error), attempts: [] };
-      await saveAuditCall(nodesDirectory, scheduledInput, result);
-      return result;
+      const result: AuditCallFailure = {
+        ok: false,
+        sectionId: task.sectionId,
+        error: errorMessage(error),
+        attempts: [],
+      };
+      await saveAuditCall(
+        nodesDirectory,
+        scheduledInput,
+        result,
+        path.join(nodesDirectory, task.sectionId, "implementation-leaves", task.leaf.requirementId),
+      );
+      return { leaf: task.leaf, input: scheduledInput, result };
     } finally {
       await workspace?.cleanup();
     }
   };
 
   if (fullAudit) {
-    const results = await runWithConcurrency(SECTION_IDS, args.config.nvidia.concurrency, executeAudit);
-    callResults.push(...results);
-    for (const result of results) {
-      if (!result.ok) continue;
-      resolved.set(result.sectionId, {
-        status: "FRESH",
-        output: result.output,
-        rawResponseHash: result.completion.rawHash,
-      });
-    }
+    callResults.push(...await runWithConcurrency(
+      SECTION_IDS.flatMap((sectionId) => (
+        implementationInventories.get(sectionId)!.leaves.map((leaf) => ({ sectionId, leaf }))
+      )),
+      args.config.nvidia.concurrency,
+      executeAudit,
+    ));
   } else {
     for (const sectionId of topologicalSections(args.manifest)) {
       const input = inputs.get(sectionId);
@@ -2239,16 +2518,71 @@ async function runTrigger(args: {
         });
         continue;
       }
-      const result = await executeAudit(sectionId);
-      callResults.push(result);
-      if (result.ok) {
-        resolved.set(sectionId, {
-          status: "FRESH",
-          output: result.output,
-          rawResponseHash: result.completion.rawHash,
-        });
-      }
+      callResults.push(...await runWithConcurrency(
+        implementationInventories.get(sectionId)!.leaves.map((leaf) => ({ sectionId, leaf })),
+        args.config.nvidia.concurrency,
+        executeAudit,
+      ));
+      const records = callResults.filter((record) => record.leaf.sectionId === sectionId);
+      const output = aggregateImplementationLeafOutputs({
+        sectionId,
+        fingerprint: input.node.fingerprint,
+        results: records.map((record) => ({
+          leaf: record.leaf,
+          output: record.result.ok
+            ? record.result.output
+            : quarantineAuditOutput(sectionId, record.input.node.fingerprint) as NodeAuditOutput,
+        })),
+      });
+      resolved.set(sectionId, {
+        status: "FRESH",
+        output,
+        rawResponseHash: hashJson(records.map((record) => (
+          record.result.ok ? record.result.completion.rawHash : sha256(record.result.error)
+        ))),
+      });
     }
+  }
+
+  for (const sectionId of SECTION_IDS.filter((id) => !cached.has(id))) {
+    const baseInput = inputs.get(sectionId)!;
+    const inventory = implementationInventories.get(sectionId)!;
+    const records = callResults.filter((record) => record.leaf.sectionId === sectionId);
+    if (records.length !== inventory.leaves.length) {
+      throw new Error(`Stage 2 ${sectionId} audited ${records.length}/${inventory.leaves.length} leaves.`);
+    }
+    const output = aggregateImplementationLeafOutputs({
+      sectionId,
+      fingerprint: baseInput.node.fingerprint,
+      results: records.map((record) => ({
+        leaf: record.leaf,
+        output: record.result.ok
+          ? record.result.output
+          : quarantineAuditOutput(sectionId, record.input.node.fingerprint) as NodeAuditOutput,
+      })),
+    });
+    assertAuditOutput(args.validators.audit, output, sectionId, baseInput.node.fingerprint);
+    resolved.set(sectionId, {
+      status: "FRESH",
+      output,
+      rawResponseHash: hashJson(records.map((record) => (
+        record.result.ok ? record.result.completion.rawHash : sha256(record.result.error)
+      ))),
+    });
+    await writeJson(path.join(nodesDirectory, sectionId, "audit-output.json"), output);
+    await writeJson(path.join(nodesDirectory, sectionId, "implementation-leaf-aggregation.json"), {
+      schemaVersion: "design-validation/leaf-aggregation/v1",
+      stage: 2,
+      sectionId,
+      inventoryHash: inventory.inventoryHash,
+      expectedLeaves: inventory.leaves.length,
+      resolvedLeaves: records.length,
+      status: output.status,
+      childStatuses: records.map((record) => ({
+        requirementId: record.leaf.requirementId,
+        status: record.result.ok ? record.result.output.status : "UNKNOWN",
+      })),
+    });
   }
 
   await writeJson(path.join(runDirectory, "document-audit-batch-manifest.json"), {
@@ -2259,19 +2593,28 @@ async function runTrigger(args: {
     mode,
     comparison: "Specification -> DESIGN_INDEX",
     expectedSections: SECTION_IDS,
-    requests: SECTION_IDS.map((sectionId) => ({
-      requestId: primaryAuditRequestId(runId, "document-audit", sectionId),
-      sectionId,
-      status: documentCached.has(sectionId) ? "CACHED_PASS" : "COMPLETED",
-      inputPath: `nodes/${sectionId}/document-audit-input.json`,
-      outputPath: `nodes/${sectionId}/document-audit-output.json`,
-    })),
+    requests: SECTION_IDS.flatMap((sectionId) => (
+      documentInventories.get(sectionId)!.leaves.map((leaf) => ({
+        requestId: primaryAuditRequestId(runId, "document-audit", sectionId, leaf.requirementId),
+        sectionId,
+        requirementId: leaf.requirementId,
+        status: documentCached.has(sectionId) ? "CACHED_PASS" : "COMPLETED",
+        inputPath: documentCached.has(sectionId)
+          ? `nodes/${sectionId}/document-audit-input.json`
+          : `nodes/${sectionId}/document-leaves/${leaf.requirementId}/document-audit-input.json`,
+        outputPath: documentCached.has(sectionId)
+          ? `nodes/${sectionId}/document-audit-output.json`
+          : `nodes/${sectionId}/document-leaves/${leaf.requirementId}/document-audit-output.json`,
+      }))
+    )),
   });
   await writeJson(path.join(runDirectory, "document-audit-matrix.json"), {
     schemaVersion: "design-validation/document-audit-matrix/v1",
     runId,
     sections: SECTION_IDS.map((sectionId) => documentOutputs.get(sectionId)),
-    errors: documentCallResults.filter((result) => !result.ok),
+    errors: documentCallResults
+      .filter((record) => !record.result.ok)
+      .map((record) => ({ requirementId: record.leaf.requirementId, result: record.result })),
   });
   await writeDocumentGapReport(
     path.join(runDirectory, "DOCUMENT_GAP_REPORT.md"),
@@ -2291,20 +2634,27 @@ async function runTrigger(args: {
       globalRulesHash: args.specification.globalRulesHash,
     },
     expectedSections: SECTION_IDS,
-    requests: SECTION_IDS.map((sectionId) => ({
-      requestId: primaryAuditRequestId(runId, "implementation-audit", sectionId),
-      sectionId,
-      status: cached.has(sectionId)
-        ? "CACHED_PASS"
-        : resolved.has(sectionId)
-          ? "COMPLETED"
-          : "FAILED",
-      inputPath: `nodes/${sectionId}/audit-input.json`,
-      outputPath: `nodes/${sectionId}/audit-output.json`,
-    })),
+    requests: SECTION_IDS.flatMap((sectionId) => (
+      implementationInventories.get(sectionId)!.leaves.map((leaf) => ({
+        requestId: primaryAuditRequestId(runId, "implementation-audit", sectionId, leaf.requirementId),
+        sectionId,
+        requirementId: leaf.requirementId,
+        status: cached.has(sectionId)
+          ? "CACHED_PASS"
+          : resolved.has(sectionId)
+            ? "COMPLETED"
+            : "FAILED",
+        inputPath: cached.has(sectionId)
+          ? `nodes/${sectionId}/audit-input.json`
+          : `nodes/${sectionId}/implementation-leaves/${leaf.requirementId}/audit-input.json`,
+        outputPath: cached.has(sectionId)
+          ? `nodes/${sectionId}/audit-output.json`
+          : `nodes/${sectionId}/implementation-leaves/${leaf.requirementId}/audit-output.json`,
+      }))
+    )),
   });
 
-  const failures = callResults.filter((result): result is AuditCallFailure => !result.ok);
+  const failures = callResults.filter((record) => !record.result.ok);
 
   const orderedOutputs = SECTION_IDS.map((sectionId) => resolved.get(sectionId)?.output).filter(
     (output): output is NodeAuditOutput => output !== undefined,
@@ -2314,7 +2664,7 @@ async function runTrigger(args: {
     schemaVersion: "design-validation/audit-matrix/v2",
     runId,
     sections: orderedOutputs,
-    errors: failures,
+    errors: failures.map((record) => ({ requirementId: record.leaf.requirementId, result: record.result })),
   });
   await writeJson(path.join(runDirectory, "node-states.json"), {
     schemaVersion: "design-validation/node-states/v2",
@@ -2337,12 +2687,13 @@ async function runTrigger(args: {
       cachedPasses: cached.size,
       documentCachedPasses: documentCached.size,
       documentAuditRequests: documentCallResults.length,
-      documentAuditCalls: documentCallResults.reduce((count, result) => count + result.attempts.length, 0),
+      documentAuditCalls: documentCallResults.reduce((count, record) => count + record.result.attempts.length, 0),
       implementationAuditRequests: callResults.length,
-      implementationAuditCalls: callResults.reduce((count, result) => count + result.attempts.length, 0),
+      implementationAuditCalls: callResults.reduce((count, record) => count + record.result.attempts.length, 0),
       totalLogicalAuditRequests: documentCallResults.length + callResults.length,
+      documentReport: documentReportBundle,
       auditRequests: callResults.length,
-      auditCalls: callResults.reduce((count, result) => count + result.attempts.length, 0),
+      auditCalls: callResults.reduce((count, record) => count + record.result.attempts.length, 0),
       patchCalls: 0,
       reauditCalls: 0,
       statusCounts: countStatuses(orderedOutputs.map((output) => output.status)),
@@ -2351,20 +2702,22 @@ async function runTrigger(args: {
         manifest: args.manifest,
         documentInputs,
         documentOutputs: [...documentOutputs.values()],
-        documentAuditAttempts: new Map(documentCallResults.map((result) => [result.sectionId, result.attempts.length])),
+        documentAuditAttempts: attemptsBySection(documentCallResults),
         inputs,
         outputs: orderedOutputs,
         nodeStates,
-        auditAttempts: new Map(callResults.map((result) => [result.sectionId, result.attempts.length])),
+        auditAttempts: attemptsBySection(callResults),
         patches,
       }),
       patches,
       blocked: blockedNodes(orderedOutputs),
       errors: [
         ...documentCallResults
-          .filter((result): result is DocumentAuditCallFailure => !result.ok)
-          .map((failure) => `${failure.sectionId} document audit: ${failure.error}`),
-        ...failures.map((failure) => `${failure.sectionId} implementation audit: ${failure.error}`),
+          .filter((record) => !record.result.ok)
+          .map((record) => `${record.leaf.requirementId} document audit: ${record.result.ok ? "" : record.result.error}`),
+        ...failures.map((record) => (
+          `${record.leaf.requirementId} implementation audit: ${record.result.ok ? "" : record.result.error}`
+        )),
       ],
     };
     await writeJson(path.join(runDirectory, "summary.json"), failedSummary);
@@ -2402,6 +2755,7 @@ async function runTrigger(args: {
     runId,
     changeEvent: targetChangeEvent,
     documentOutputs,
+    implementationInventories,
   });
   nodeStates = buildNodeStates(resolved);
   await writeJson(path.join(runDirectory, "node-states.json"), {
@@ -2427,12 +2781,13 @@ async function runTrigger(args: {
     cachedPasses: cached.size,
     documentCachedPasses: documentCached.size,
     documentAuditRequests: documentCallResults.length,
-    documentAuditCalls: documentCallResults.reduce((count, result) => count + result.attempts.length, 0),
+    documentAuditCalls: documentCallResults.reduce((count, record) => count + record.result.attempts.length, 0),
     implementationAuditRequests: callResults.length,
-    implementationAuditCalls: callResults.reduce((count, result) => count + result.attempts.length, 0),
+    implementationAuditCalls: callResults.reduce((count, record) => count + record.result.attempts.length, 0),
     totalLogicalAuditRequests: documentCallResults.length + callResults.length,
+    documentReport: documentReportBundle,
     auditRequests: callResults.length,
-    auditCalls: callResults.reduce((count, result) => count + result.attempts.length, 0),
+    auditCalls: callResults.reduce((count, record) => count + record.result.attempts.length, 0),
     patchCalls: patchResult.patchCalls,
     reauditCalls: patchResult.reauditCalls,
     statusCounts: countStatuses(orderedOutputs.map((output) => output.status)),
@@ -2441,29 +2796,25 @@ async function runTrigger(args: {
       manifest: args.manifest,
       documentInputs,
       documentOutputs: [...documentOutputs.values()],
-      documentAuditAttempts: new Map(documentCallResults.map((result) => [result.sectionId, result.attempts.length])),
+      documentAuditAttempts: attemptsBySection(documentCallResults),
       inputs,
       outputs: orderedOutputs,
       nodeStates,
-      auditAttempts: new Map(callResults.map((result) => [result.sectionId, result.attempts.length])),
+      auditAttempts: attemptsBySection(callResults),
       patches: patchResult.records,
     }),
     patches: patchResult.records,
     blocked: blockedNodes(orderedOutputs),
     errors: [
       ...documentCallResults
-        .filter((result): result is DocumentAuditCallFailure => !result.ok)
-        .map((failure) => `${failure.sectionId} document audit: ${failure.error}`),
+        .filter((record) => !record.result.ok)
+        .map((record) => `${record.leaf.requirementId} document audit: ${record.result.ok ? "" : record.result.error}`),
       ...documentCallResults
-        .filter((result): result is DocumentAuditCallSuccess => (
-          result.ok && result.output.status === "UNKNOWN"
-        ))
-        .map((result) => `${result.sectionId} document audit: isolated retries ended without a final grounded judgment.`),
+        .filter((record) => record.result.ok && record.result.output.status === "UNKNOWN")
+        .map((record) => `${record.leaf.requirementId} document audit: isolated retries ended without a final grounded judgment.`),
       ...callResults
-        .filter((result): result is AuditCallSuccess => (
-          result.ok && result.output.status === "UNKNOWN"
-        ))
-        .map((result) => `${result.sectionId}: isolated implementation-audit retries ended without a final grounded judgment.`),
+        .filter((record) => record.result.ok && record.result.output.status === "UNKNOWN")
+        .map((record) => `${record.leaf.requirementId}: isolated implementation-audit retries ended without a final grounded judgment.`),
       ...patchResult.records
         .filter((record) => [
           "BLOCKED_MODEL",
@@ -2538,19 +2889,21 @@ export async function runPipeline(config: PipelineConfig): Promise<WorkRunSummar
     createPrs: config.createPrs,
     summaries,
   });
-  const documentGapIssues = await publishDocumentGapIssues({ config, summaries });
-  const expectedDocumentGapIssues = summaries.reduce(
-    (count, summary) => count + summary.nodes.filter(
-      (node) => node.documentAuditStatus === "DOCUMENT_GAP",
-    ).length,
-    0,
-  );
-  if (!config.dryRun && config.github.token && documentGapIssues.length !== expectedDocumentGapIssues) {
+  const documentGapReports = await publishDocumentGapReports({ config, summaries });
+  const expectedDocumentGapReports = summaries.filter((summary) => (
+    summary.nodes.some((node) => node.documentAuditStatus !== "PASS")
+  )).length;
+  if (
+    !config.dryRun &&
+    config.createPrs &&
+    config.github.token &&
+    documentGapReports.length !== expectedDocumentGapReports
+  ) {
     throw new Error(
-      `Stage 1 publication invariant failed: expected ${expectedDocumentGapIssues} document-gap Issues, published ${documentGapIssues.length}.`,
+      `Stage 1 publication invariant failed: expected ${expectedDocumentGapReports} representative report PRs and Issues, published ${documentGapReports.length}.`,
     );
   }
-  await writeJson(path.join(config.outputRoot, "document-gap-issues.json"), documentGapIssues);
+  await writeJson(path.join(config.outputRoot, "document-gap-reports.json"), documentGapReports);
   const stateRunId = `${config.runId ?? `local-${Date.now()}`}.${config.runAttempt ?? "1"}`;
   for (const summary of summaries) {
     await writeJson(

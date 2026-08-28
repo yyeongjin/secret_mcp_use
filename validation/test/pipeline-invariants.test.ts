@@ -35,7 +35,7 @@ test("PATCH_REQUIRED scheduling cannot regain dependency or write-set wait gates
   assert.match(runPatches, /prMergeBatchSize/);
   assert.match(runPatches, /publishSectionPullRequest/);
   assert.doesNotMatch(runPatches, /unresolvedSectionFindings/);
-  assert.match(source, /result\.ok && result\.output\.status === "UNKNOWN"/);
+  assert.match(source, /record\.result\.ok && record\.result\.output\.status === "UNKNOWN"/);
   assert.match(source, /isUnknownRequirementId\(finding\.requirementId\)/);
   assert.doesNotMatch(source, /result\.output\.status === "UNKNOWN" &&\s*Boolean\(result\.completion\.warning\)/);
   assert.doesNotMatch(source, /PASS_PENDING_DEPENDENCY/);
@@ -77,4 +77,28 @@ test("the normative pipeline document permanently forbids dependency blocking", 
   assert.match(document, /UNKNOWN` finding.*patch 후보나 PR 큐에 절대 넣지 않는다/);
   assert.doesNotMatch(document, /PASS_PENDING_DEPENDENCY/);
   assert.doesNotMatch(document, /BLOCKED_DEPENDENCY/);
+});
+
+test("V4 audits source leaves bottom-up and publishes one verbatim Stage 1 report boundary", async () => {
+  const orchestrator = await readFile(new URL("../src/orchestrator.ts", import.meta.url), "utf8");
+  const github = await readFile(new URL("../src/github.ts", import.meta.url), "utf8");
+  const document = await readFile(
+    new URL("../../IDEA_VALIDATION_AND_PR_PIPELINE.ko.md", import.meta.url),
+    "utf8",
+  );
+  assert.match(orchestrator, /buildDocumentRequirementInventory/);
+  assert.match(orchestrator, /buildImplementationRequirementInventory/);
+  assert.match(orchestrator, /aggregateDocumentLeafOutputs/);
+  assert.match(orchestrator, /aggregateImplementationLeafOutputs/);
+  assert.match(orchestrator, /document-leaves/);
+  assert.match(orchestrator, /implementation-leaves/);
+  assert.match(github, /publishDocumentGapReports/);
+  assert.match(github, /chunkVerbatimReport/);
+  assert.match(github, /documentReportMarker/);
+  assert.match(github, /issues\?state=all&per_page=100/);
+  assert.match(github, /issue\.state === "open" && issue\.body\?\.includes\(marker\)/);
+  assert.doesNotMatch(github, /publishDocumentGapIssues/);
+  assert.match(document, /모든 leaf가 PASS일 때만 Section이 PASS/);
+  assert.match(document, /대표 Issue는 작품당 하나만 연다/);
+  assert.match(document, /최대 55,000 UTF-8 byte 단위 댓글/);
 });

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  buildDocumentGapIssueBody,
   buildNodeCheckOutput,
   buildPullRequestBody,
   buildSectionPullRequestBody,
@@ -186,33 +185,6 @@ test("a partial Section correction becomes a child PR with explicit descendant s
   assert.match(body, /## Deferred to descendant child PRs/);
   assert.match(body, /S05-NAV-FOCUS-002/);
   assert.match(body, /run-123:patch:S05-1:attempt:1/);
-});
-
-test("a Stage 1 document gap produces Section-specific Issue content", () => {
-  const node = {
-    sectionId: "S05",
-    name: "Navigation and Header",
-    fingerprint: hash,
-    documentFingerprint: hash,
-    documentAuditStatus: "DOCUMENT_GAP",
-    documentAuditAttempts: 1,
-    documentFindings: [{ ...auditOutput.findings[0], implementationRefs: [] }],
-    auditStatus: "PASS",
-    executionState: "PASS",
-    auditAttempts: 1,
-    requirementIds: [],
-    findings: [],
-    patch: { status: "NOT_REQUIRED", reason: "PASS" },
-  };
-  const body = buildDocumentGapIssueBody({
-    summary: { runId: "run-123", targetId: "target", triggerPath: "trigger/input.md", nodes: [node] },
-    node,
-  });
-  assert.match(body, /Missing DESIGN_INDEX instructions/);
-  assert.match(body, /run-123:document-audit:S05/);
-  assert.match(body, /Frontend source included: `false`/);
-  assert.match(body, /design-validation-document-gap: target:S05/);
-  assert.match(body, /Stage 2 runs independently and is not blocked/);
 });
 
 test("PASS nodes do not request a correction PR", () => {

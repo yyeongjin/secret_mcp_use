@@ -1,4 +1,6 @@
-# DESIGN_INDEX 독립 검증 및 DAG 기반 PR 자동 보정 파이프라인
+# DESIGN_INDEX Bottom-up 독립 검증 및 DAG 기반 PR 자동 보정 파이프라인
+
+> **V4 최우선 규칙:** S01-S19는 결과 집계용 부모 노드다. 모델이 Section 전체를 먼저 읽고 누락 후보를 선택하게 해서는 안 된다. Specification과 DESIGN_INDEX의 모든 비구조 원문 source span을 결정적 코드가 leaf Requirement로 만들고, 모든 leaf를 별도 NVIDIA 요청으로 검사한 뒤 자식 결과를 bottom-up으로 합산해야 한다. 검사되지 않은 leaf, 원문에 연결되지 않은 leaf, `UNKNOWN` leaf가 하나라도 있으면 Section과 작품 전체를 `PASS`로 만들 수 없다. 이 규칙과 충돌하는 아래 V3 설명은 구현 이력일 뿐 규범으로 사용할 수 없다.
 
 > **절대 차단 금지 규칙:** `dependsOn`, 선행 Section의 `PASS` 여부, 선행 PR의 병합 여부, 같은 파일의 write-set 중복은 `PATCH_REQUIRED` Section의 patch API 호출이나 PR 생성을 차단하는 조건으로 사용할 수 없다. DAG와 write-set은 전체 correction을 결정적으로 직렬화하고 각 PR의 `baseBranch`와 `baseCommit`을 고르는 입력이다. 2차 감사에서 근거 있는 `PATCH_REQUIRED`로 판정된 모든 Requirement는 같은 실행 안에서 별도 preflight와 patch 요청을 받으며, 검증된 실제 코드 diff마다 하위 PR을 생성한다. 하위 PR은 최대 5개 단위로 가장 깊은 자식부터 Section 브랜치까지 자동 병합하고 삭제하며, 최종 `S0x` 대표 draft PR만 사람의 병합 결정을 위해 남긴다. 대표 PR을 `main` 또는 이전 Section 대표 브랜치로 자동 병합하는 것은 금지한다. `PATCH_WAITING_DEPENDENCY`, `WAITING_DEPENDENCY`, `WAITING_WRITE_LOCK`으로 수정 필요 항목을 보류하는 구현은 이 문서의 위반이다.
 
@@ -13,18 +15,271 @@
 3. 같은 파일을 수정하는 후속 Requirement는 직전 검증 commit을 base로 입력과 fingerprint를 다시 만들고 하위 PR을 생성해야 한다. 최대 5개의 하위 PR이 완성되면 깊이 우선 역순으로 Section 브랜치에 자동 병합한 뒤 다음 묶음을 시작한다.
 4. `runPatches`에 dependency wait, write-set wait 또는 `claimedPaths` 기반 중단을 다시 도입하는 변경은 CI invariant test가 거부해야 한다.
 5. 이 규칙을 바꾸려면 먼저 이 파일의 절대 차단 금지 규칙과 해당 CI test를 명시적으로 함께 변경해야 하며, README만 바꿔 동작을 변경할 수 없다.
-6. 1차 `DOCUMENT_GAP` Section 수가 `D`이면 같은 실행에서 Section별 GitHub Issue `D`개를 생성하거나 동일 key의 기존 열린 Issue를 갱신해야 한다.
+6. 1차 `DOCUMENT_GAP` Section 수가 `D`이면 Section별 원문 보고서 하위 PR `D`개를 생성하고 최대 5개씩 report 대표 브랜치로 자동 병합해야 한다. 최종 출력은 원문을 결정적으로 이어 붙인 통합 문서 draft PR 하나와 작품별 대표 GitHub Issue 하나다.
 7. 2차 상위 감사와 Requirement별 독립 preflight 뒤 `PATCH_REQUIRED`로 확정된 Section 수가 `N`이면 최종적으로 열린 Section 대표 PR도 `N`개여야 한다. 19개 Section이 모두 실제 코드 누락이면 S01-S19 대표 PR 19개가 남는다.
 8. 한 Section에 Requirement ID가 여러 개면 `SXX-1...SXX-K`로 재귀 분할하고 Requirement마다 별도 NVIDIA 호출과 일시적인 하위 PR을 만든다. 하위 PR은 최대 5개씩 역순 자동 병합하므로 호출 수와 생성 이력은 Requirement 수만큼 늘어도 최종 사람이 검토할 열린 PR은 Section당 하나다. 환경변수로 묶음 크기를 조정할 수 있지만 1~10만 허용한다.
+9. 원문 parser는 heading, fence, 표 구분선과 공백을 구조 span으로 기록하고 나머지 모든 문단 줄, 목록 항목, 표 행과 code payload를 감사 leaf로 기록한다. 모든 byte는 구조 span 또는 leaf span에 귀속되어야 하며 미귀속 범위가 있으면 provider 호출 전에 실패한다.
+10. 1차와 2차의 호출 수는 19로 고정하지 않는다. 1차는 Specification leaf 전체, 2차는 DESIGN_INDEX leaf 전체를 각각 독립 호출한다. 19개 Section 호출은 V4에서 모델 호출 단위가 아니라 집계 단위다.
+11. 1차 Section 보고서와 통합 문서는 모델이 요약하지 않는다. 원문 leaf 결과, request ID, source span과 hash를 Section 번호순으로 이어 붙이며, GitHub 본문 한도를 넘으면 같은 대표 Issue의 순번 댓글로 나누고 재결합 hash를 검증한다.
 
 ## 문서 상태
 
-- 상태: V3 재귀 하위 PR 자동 정리와 Section 대표 PR 구현
+- 상태: V4 Bottom-up 전수 leaf 감사와 1차 통합 문서 PR/대표 Issue 로컬 구현·검증 완료, GitHub 원격 E2E 검증 대기
 - 실행 대상 저장소: `secret_mcp_use` 하나만 사용
 - 상위 생성기: `secret_mcp`는 작품별 `DESIGN_INDEX`, Request Contract와 Evidence를 생성해 전달하는 역할만 담당
 - 입력: `secret_mcp`가 생성한 작품별 `DESIGN_INDEX`, 공통 Specification, 작품별 Request Contract, Evidence와 `secret_mcp_use`의 프론트엔드 소스
-- 출력: 1차 문서 누락의 Section별 GitHub Issue, 2차 코드 누락의 동적 최소 수정 하위 PR 이력과 Section 대표 PR, 19개 상위 항목의 독립 검증 증명서와 재실행 시 사용할 정적 PASS 상태
-- 핵심 변경: S01-S19는 상위 감사 DAG로 유지한다. `S09-1`, `S09-2` 같은 하위 실행 노드는 독립 검증 후 최대 5개씩 깊은 자식부터 Section 브랜치에 자동 병합되며, 사용자에게는 `S09` 대표 draft PR 하나가 최종 검토 단위로 남는다.
+- 출력: 1차 문서 누락의 Section 원문 보고서 하위 PR, 통합 문서 대표 PR과 작품별 대표 Issue 하나, 2차 코드 누락의 동적 최소 수정 하위 PR과 Section 대표 PR, 모든 leaf의 독립 증명서
+- 핵심 변경: S01-S19는 집계 DAG로만 유지한다. 모든 원문 leaf가 독립 검증된 뒤 Section 상태를 계산하며, 1차 문서 PR과 2차 코드 PR의 하위 노드는 최대 5개씩 깊은 자식부터 대표 브랜치로 자동 병합한다.
+
+## V4 전체 실행 구조
+
+```text
+Specification 원문 -> 모든 source span -> 모든 leaf 독립 감사
+        -> Section 원문 보고서 PR -> 최대 5개씩 자동 병합
+        -> DOCUMENT_GAPS.md 대표 draft PR -> 작품별 대표 Issue 하나
+
+DESIGN_INDEX 원문 -> 모든 source span -> 모든 leaf 독립 구현 감사
+        -> 실제 누락 leaf별 patch/검증/하위 PR
+        -> 최대 5개씩 자동 병합 -> Section 대표 draft PR
+```
+
+Section 최종 상태는 결정적 집계기만 계산한다. 모든 자식이 PASS일 때만 부모가 PASS이며, 모델 응답 하나가 다른 leaf를 생략하거나 부모 상태를 덮어쓸 수 없다. 1차 보고서 결합은 byte 보존 assembler가 수행하고, 과거 revision의 원문과 hash를 수정하지 않는다.
+
+## V4 입력 계약
+
+작품 하나의 실행 입력은 다음 다섯 묶음이다.
+
+```text
+DESIGN_INDEX_SPECIFICATION.md
+trigger/DESIGN_INDEX_gdweb-<id>.md
+trigger/request-contracts/<work>/...
+trigger/evidence/<work>/...
+frontend/**
+```
+
+- Specification은 1차 감사에서만 요구사항 원문으로 사용한다.
+- `trigger/DESIGN_INDEX_gdweb-<id>.md`는 1차의 검사 대상이고 2차의 요구사항 원문이다.
+- frontend는 2차의 검사 대상이며 1차 요청에는 절대 포함하지 않는다.
+- Request Contract와 Evidence는 해당 작품과 해당 Section의 보조 근거로만 전달한다.
+- trigger와 두 Specification은 읽기 전용이다. report PR과 code PR 어느 쪽도 이 파일을 수정할 수 없다.
+- `## Page P-01`처럼 번호가 없는 같은 깊이의 페이지 heading은 `## 6. Page-by-Page Specifications`의 자식이다. 다음 `## 7.`처럼 1~19 번호가 붙은 heading만 다음 Section 경계다.
+
+## V4 source span과 leaf 생성
+
+Markdown parser는 원문을 실제 byte offset과 line으로 inventory한다.
+
+```json
+{
+  "requirementId": "S06-IMPL-U0037-R001",
+  "stage": "implementation",
+  "sectionId": "S06",
+  "sourcePath": "trigger/DESIGN_INDEX_gdweb-26357.md",
+  "sourceKind": "section",
+  "startOffset": 12345,
+  "endOffset": 12411,
+  "startLine": 271,
+  "endLine": 271,
+  "statement": "- Hero height: 674 px.",
+  "sourceHash": "sha256:...",
+  "fingerprint": "sha256:..."
+}
+```
+
+결정 규칙:
+
+1. heading, code fence marker, 표 구분선, thematic break와 공백은 구조 span으로 기록한다.
+2. 문단 줄, 목록 항목, 표 데이터 행과 fenced code payload는 모두 leaf다.
+3. 각 fragment의 첫 byte부터 마지막 byte까지 span이 연속되어야 한다.
+4. `coveredBytes !== totalBytes` 또는 `uncoveredRanges.length > 0`이면 NVIDIA 호출 전에 실패한다.
+5. 공통 Specification 전역 규칙은 작품 전체 DESIGN_INDEX와 한 번씩 비교하며 S01 root에 귀속한다. 이를 S01-S19마다 19번 중복 호출하지 않는다.
+6. Specification의 번호 Section leaf는 같은 번호 DESIGN_INDEX Section과 비교한다.
+7. DESIGN_INDEX의 번호 Section leaf는 같은 Section이 소유한 frontend source slice와 비교한다.
+8. leaf fingerprint는 Section fingerprint, source path, source hash와 validator contract hash에 의해 결정된다.
+
+## 1차 문서 감사 입력과 출력
+
+1차의 모델 요청 하나는 Specification leaf 하나만 소유한다.
+
+```json
+{
+  "task": "stage-1-audit-one-atomic-specification-leaf-for-document-completeness",
+  "ownedRequirementId": "S06-DOC-U0012-R001",
+  "specificationLeaf": "원문 한 항목",
+  "designIndexBoundary": "같은 Section 또는 전역 규칙이면 작품 전체 문서",
+  "sourceCodeIncluded": false,
+  "includeContext": "none"
+}
+```
+
+허용 출력은 다음뿐이다.
+
+```text
+PASS
+DOCUMENT_GAP
+BLOCKED_MISSING_EVIDENCE
+BLOCKED_CONTRACT_CONFLICT
+UNKNOWN
+```
+
+- 모델은 다른 leaf를 발견하거나 같이 보고하면 안 된다.
+- finding의 Requirement ID는 소유 leaf ID와 같아야 한다.
+- 값, 색상, 좌표, 폰트와 breakpoint를 추측해 제안하면 안 된다.
+- frontend 파일명, 소스 코드와 diff를 출력하면 안 된다.
+- `UNKNOWN`은 최소 5회의 같은 leaf 독립 재시도 뒤에도 해소되지 않으면 실행 실패다.
+
+### 1차 bottom-up 집계
+
+```text
+leaf outputs -> Section aggregate -> work aggregate
+```
+
+- 모든 leaf가 PASS일 때만 Section이 PASS다.
+- `DOCUMENT_GAP` leaf 하나라도 있으면 Section은 DOCUMENT_GAP이다.
+- `BLOCKED_*` 또는 `UNKNOWN`은 더 높은 실패 우선순위로 보존한다.
+- 모델에게 child 결과를 다시 주고 요약시키지 않는다.
+- 집계기는 child 수, PASS 수, 각 Requirement ID와 상태를 기계적으로 기록한다.
+
+### 1차 report PR 트리
+
+Section 비-PASS 결과가 14개인 예시는 다음과 같다.
+
+```text
+report-root branch
+  batch 1: S01 -> S02 -> S03 -> S04 -> S05
+           S05부터 S01까지 deepest-first 자동 병합
+  batch 2: S06 -> S07 -> S08 -> S09 -> S10
+           S10부터 S06까지 deepest-first 자동 병합
+  batch 3: S11 -> S12 -> S13 -> S14 -> DOCUMENT-GAPS
+           DOCUMENT-GAPS부터 S11까지 deepest-first 자동 병합
+  final: report-root -> main draft PR 1개
+```
+
+- Section report child PR 하나는 `reports/document-gaps/<target>/<hash>/sections/SXX.md` 하나만 추가한다.
+- `DOCUMENT-GAPS` child는 `DOCUMENT_GAPS.md`와 `manifest.json`을 추가한다.
+- child PR은 최대 5개씩 자동 병합하고 child branch를 삭제한다.
+- 대표 report draft PR은 자동 병합하지 않는다.
+- `DOCUMENT_GAPS.md`는 Section report bytes를 Section 번호순으로 BEGIN/END marker 사이에 그대로 이어 붙인다.
+- Section report는 검증된 normalized JSON을 그대로 담고 원문 hash와 byte length를 기록한다.
+- 대표 Issue는 작품당 하나만 연다. 본문 한도를 넘으면 최대 55,000 UTF-8 byte 단위 댓글로 나누며 댓글 payload를 순서대로 연결하면 원본 `DOCUMENT_GAPS.md`가 복원되어야 한다.
+- 기존 V3 Section Issue는 본문을 바꾸지 않는다. 대표 Issue에 기존 본문을 verbatim block으로 복제하고 hash를 남긴 뒤, 기존 Issue에 대표 Issue 포인터 댓글을 추가하고 닫는다.
+
+## 2차 구현 감사 입력과 출력
+
+2차의 primary 모델 요청 하나는 DESIGN_INDEX leaf 하나만 소유한다.
+
+```json
+{
+  "task": "stage-2-audit-one-atomic-design-index-leaf-against-implementation",
+  "ownedRequirementId": "S09-IMPL-U0041-R001",
+  "designIndexLeaf": "--color-primary: #4169F5",
+  "implementation": ["해당 Section 소유 source slice"],
+  "specificationTextIncluded": false,
+  "includeContext": "none"
+}
+```
+
+허용 출력은 다음뿐이다.
+
+```text
+PASS
+PATCH_REQUIRED
+BLOCKED_MISSING_EVIDENCE
+BLOCKED_CONTRACT_CONFLICT
+UNKNOWN
+```
+
+- 정확한 leaf 값 또는 동작이 코드에 없거나 틀릴 때만 `PATCH_REQUIRED`다.
+- DESIGN_INDEX 자체에 값이 없으면 code patch로 만들지 않는다.
+- 현재 코드가 동등한 방식으로 이미 충족하면 PASS다.
+- `implementationRefs`는 실제 repository-relative path만 허용한다.
+- 모든 primary leaf가 판정된 뒤에만 Section 상태를 집계한다.
+
+## 2차 재귀 patch와 PR
+
+Section aggregate가 여러 finding을 가지면 각 Requirement를 다시 leaf 원문에 연결한다.
+
+```text
+S09 aggregate
+  S09-1: S09-IMPL-U0041-R001
+  S09-2: S09-IMPL-U0062-R001
+  S09-3: S09-IMPL-U0062-R001-02
+```
+
+각 하위 노드의 순서:
+
+```text
+현재 누적 parent source 재구성
+-> 같은 leaf 하나의 독립 preflight
+-> 이미 구현됨: AUDIT_RECLASSIFIED, PR 없음
+-> 실제 누락: 같은 leaf와 관련 파일만 patch API로 전달
+-> unified diff guard
+-> typecheck/unit/Playwright/accessibility
+-> 같은 leaf patched-code re-audit
+-> 기존 PASS Section regression audit
+-> 검증된 child PR
+```
+
+- preflight와 patch 생성에 Section 전체 DESIGN_INDEX를 다시 전달하지 않는다.
+- 한 leaf 응답에 여러 독립 finding이 있으면 `...-01`, `...-02`로 재귀 분할해 각각 호출한다.
+- 한 Requirement 실패가 뒤 Requirement 호출을 막지 않는다.
+- 실제 diff가 19개 Section 모두에서 나오면 Section 대표 PR도 19개가 남아야 한다.
+- 같은 파일을 연속 수정하면 직전 child commit에서 source slice와 fingerprint를 다시 계산한다.
+- 하위 code PR 역시 최대 5개씩 deepest-first Section branch로 자동 병합한다.
+- 최종 Section 대표 draft PR만 사람이 병합하거나 거부한다.
+
+## PASS cache와 재실행
+
+정적 PASS 재사용 키에는 최소 다음 값이 들어간다.
+
+```text
+stage
+target ID
+Section ID
+Section fingerprint
+leaf inventory hash
+Specification 또는 DESIGN_INDEX source hash
+implementation file hashes
+Evidence/Request Contract hashes
+model contract hash
+validator contract hash
+```
+
+- fingerprint가 완전히 같고 이전 Section의 모든 leaf PASS 증명이 있을 때만 Section 전체를 `CACHED_PASS`로 재사용한다.
+- Specification 내용이 바뀌면 해당 source hash와 inventory hash가 바뀌므로 1차를 다시 실행한다.
+- DESIGN_INDEX가 바뀌면 1차와 2차를 모두 새 leaf 목록으로 실행한다.
+- frontend만 바뀌면 1차 PASS는 재사용할 수 있고 영향 Section의 2차만 다시 실행할 수 있다.
+- 이전 PASS 증명서가 V4 leaf coverage를 증명하지 못하면 재사용하지 않는다.
+- 변경되지 않은 PASS leaf를 정적으로 표시할 수 있지만, 미검사 leaf를 PASS로 간주할 수 없다.
+
+## 실행 완료 조건
+
+다음 조건을 모두 만족해야 workflow가 성공이다.
+
+1. S01-S19 구조가 각각 정확히 한 번 존재한다.
+2. 모든 source byte가 structural span 또는 leaf에 귀속된다.
+3. 실행 대상으로 선택된 모든 leaf가 API 결과 또는 유효한 V4 PASS cache를 가진다.
+4. `UNKNOWN` leaf가 없다.
+5. 1차 비-PASS Section이 있으면 Section report child PR, 대표 report PR과 대표 Issue 게시가 완전하다.
+6. 2차 `PATCH_REQUIRED` Requirement는 전부 preflight를 받는다.
+7. 실제 누락으로 확정된 Requirement는 검증된 diff PR을 가지며, 실패 항목이 있으면 workflow가 실패한다.
+8. 모든 child PR은 최대 5개 묶음으로 상위 branch에 정리되고 최종 대표 PR만 열린다.
+9. trigger와 Specification diff가 0이다.
+10. artifact에 inventory, leaf input/output, request ID, retry, aggregate, report hash, patch guard와 PR manifest가 모두 존재한다.
+
+## 현재 예시 작품의 동적 요청 수
+
+`trigger/DESIGN_INDEX_gdweb-26357.md`와 현재 Specification을 V4 parser로 계산한 값은 다음과 같다.
+
+```text
+1차 Specification leaf: 327
+2차 DESIGN_INDEX leaf: 761
+최소 primary 요청: 1,088
+40 RPM 이론상 최소 전송 시간: 약 27.2분
+```
+
+이는 고정 계약 수치가 아니다. 문서 내용이 늘거나 줄면 leaf와 요청 수도 자동으로 바뀐다. 재시도, preflight, patch, patched-code re-audit와 regression audit는 1,088회에 추가된다.
+
+## V3 보존 기록 (비규범)
 
 ## V3 전체 실행 구조
 

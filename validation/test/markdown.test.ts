@@ -31,6 +31,19 @@ test("duplicate or missing numbered Sections fail before any API work", () => {
   assert.throws(() => extractNumberedSections(source, 2), /expected S01-S19/);
 });
 
+test("unnumbered page headings remain inside their numbered parent Section", () => {
+  const source = Array.from({ length: 19 }, (_, index) => (
+    index === 5
+      ? "## 6. Pages\n\n## Page P-01\n\nExact page contract.\n\n## Page P-02\n\nSecond page contract."
+      : `## ${index + 1}. Section\nBody ${index + 1}`
+  )).join("\n\n");
+  const sections = extractNumberedSections(source, 2).sections;
+  assert.match(sections.get("S06")!.fragment, /## Page P-01/);
+  assert.match(sections.get("S06")!.fragment, /Second page contract/);
+  assert.doesNotMatch(sections.get("S05")!.fragment, /Page P-01/);
+  assert.doesNotMatch(sections.get("S07")!.fragment, /Page P-02/);
+});
+
 test("trigger source remains unchanged by parser reads", async () => {
   const triggerPath = path.join(root, "trigger/DESIGN_INDEX_gdweb-26357.md");
   const before = await readFile(triggerPath, "utf8");

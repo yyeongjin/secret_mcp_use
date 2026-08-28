@@ -94,13 +94,16 @@ export function validatorContractHash(
   contractSchemaHash: Sha256,
 ): Sha256 {
   return hashJson({
-    schemaVersion: "design-validation/validator-contract/v2",
+    schemaVersion: "design-validation/validator-contract/v3",
+    auditUnit: "atomic-source-leaf/v4",
+    aggregationPolicy: "bottom-up-all-leaves/v1",
+    sourceOffsetUnit: "utf8-byte/v1",
     documentAuditPromptHash: sha256(DOCUMENT_AUDIT_SYSTEM_PROMPT),
     auditPromptHash: sha256(AUDIT_SYSTEM_PROMPT),
     patchPromptHash: sha256(PATCH_SYSTEM_PROMPT),
     patchRetryPromptHash: sha256(PATCH_RETRY_SYSTEM_PROMPT),
     regressionAuditPromptHash: sha256(REGRESSION_AUDIT_SYSTEM_PROMPT),
-    normalizerVersion: "nvidia-output-normalizer/v9-grounded-write-reference",
+    normalizerVersion: "nvidia-output-normalizer/v10-bottom-up-leaf",
     structuredOutputTransport: "nvidia-guided-json-compatible/v2",
     contractSchemaHash,
     impactManifest: manifest,

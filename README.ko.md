@@ -29,7 +29,7 @@
 
 ## NVIDIA 검증 파이프라인 설정
 
-검증 파이프라인은 NVIDIA API를 통해 [`nvidia/nemotron-3-super-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b)를 사용합니다. 모델 ID가 하나라고 해서 하나의 통합 LLM 작업으로 처리하지 않습니다. 작품 하나를 `S01`부터 `S19`까지 나눈 뒤 두 단계를 실행합니다. 1차는 현재 Specification과 같은 번호의 DESIGN_INDEX Section을 비교하는 독립 문서 완전성 요청 19개이며 소스코드를 포함하지 않습니다. 2차는 같은 번호의 DESIGN_INDEX Section과 해당 영역 소스코드를 비교하는 독립 구현 감사 요청 19개이며 Specification 본문을 포함하지 않습니다. 최초 또는 강제 전체 실행은 patch·재감사 호출 전에 정확히 38개의 독립 primary 요청을 예약합니다.
+검증 파이프라인은 NVIDIA API를 통해 [`nvidia/nemotron-3-super-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b)를 사용합니다. 모델 ID가 하나라고 해서 하나의 통합 LLM 작업으로 처리하지 않습니다. `S01-S19`는 모델 호출 단위가 아니라 결과 집계용 부모입니다. 결정적 코드가 Specification과 DESIGN_INDEX의 모든 비구조 source span을 원자 leaf Requirement로 만들고, 1차는 Specification leaf마다 소스코드 없는 독립 문서 완전성 요청을, 2차는 DESIGN_INDEX leaf마다 Specification 본문 없는 독립 구현 감사 요청을 보냅니다. 따라서 호출 수는 38로 고정되지 않고 현재 문서에서 계산됩니다. 현재 `gdweb-26357` 입력은 1차 327개와 2차 761개, 총 1,088개의 primary 요청을 재시도·preflight·patch·재감사 전에 예약합니다.
 
 전체 파이프라인 계약은 [IDEA_VALIDATION_AND_PR_PIPELINE.ko.md](IDEA_VALIDATION_AND_PR_PIPELINE.ko.md)에 기록되어 있습니다.
 
@@ -59,7 +59,7 @@ unset NVIDIA_API_KEY
 | Variable | 권장값 | 목적 |
 | --- | --- | --- |
 | `NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` | NVIDIA OpenAI 호환 API 기본 URL |
-| `NVIDIA_MODEL` | `nvidia/nemotron-3-super-120b-a12b` | Section별 독립 요청이 공통으로 사용할 모델 |
+| `NVIDIA_MODEL` | `nvidia/nemotron-3-super-120b-a12b` | 원자 leaf별 독립 요청이 공통으로 사용할 모델 |
 | `NVIDIA_CONTEXT_WINDOW_TOKENS` | `1000000` | 모델의 선언된 전체 context window |
 | `NVIDIA_MAX_INPUT_TOKENS` | `980000` | 출력과 메시지 template 공간을 남기는 runner 입력 예산 |
 | `NVIDIA_MAX_OUTPUT_TOKENS` | `4096` | 독립 요청 하나의 최대 출력량 |
@@ -68,12 +68,12 @@ unset NVIDIA_API_KEY
 | `NVIDIA_TEMPERATURE` | `1.0` | 해당 모델의 권장 sampling temperature |
 | `NVIDIA_TOP_P` | `0.95` | 해당 모델의 권장 top-p 값 |
 | `NVIDIA_RPM_LIMIT` | `40` | 저장소 측 rate limiter 값이며 계정 제한이 더 낮으면 함께 낮춤 |
-| `NVIDIA_AUDIT_CONCURRENCY` | `1` | 최초 실행용 안전한 동시성으로 요청 독립성은 병렬 실행을 요구하지 않음 |
+| `NVIDIA_AUDIT_CONCURRENCY` | `8` | stateless worker 동시성. 공용 40 RPM 시작 제한기가 요청 시작 시점은 계속 제어함 |
 | `PIPELINE_TRIGGER_GLOB` | `trigger/DESIGN_INDEX_gdweb-*.md` | 작품별 run을 시작하는 불변 입력 문서 경로 |
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | 일반 코드 검증에서 유효한 PASS cache를 유지 |
 | `PIPELINE_DRY_RUN` | `false` | 임시 worktree 검증을 통과한 patch 게시 허용 |
-| `PIPELINE_CREATE_PRS` | `true` | 검증된 Section 하위 diff를 멱등적인 stacked draft PR로 게시하고 PR이 아닌 모든 결과는 GitHub Issue 없이 Check와 실행 artifact에만 기록 |
-| `PIPELINE_AUDIT_ATTEMPTS` | `5` (최소값) | transport/schema 결함과 애매하거나 차단된 판정을 위한 동일 Section 독립 audit 최대 시도 횟수 |
+| `PIPELINE_CREATE_PRS` | `true` | 1차 원문 보고서 하위 PR·작품별 대표 보고서 PR과 이슈, 2차 검증 코드 diff의 멱등적인 stacked draft PR을 게시 |
+| `PIPELINE_AUDIT_ATTEMPTS` | `5` (최소값) | transport/schema 결함과 애매하거나 차단된 판정을 위한 동일 leaf 독립 audit 최대 시도 횟수 |
 | `PIPELINE_PATCH_ATTEMPTS` | `8` | `PATCH_REQUIRED` Section 하나에 허용하는 전체 검증 재시도를 포함한 독립 seed patch 후보 최대 횟수 |
 
 이 값들은 runner 설정이며 전부 NVIDIA 요청에 그대로 전달되는 필드는 아닙니다. 특히 `NVIDIA_MAX_INPUT_TOKENS`는 HTTP 요청을 보내기 전에 runner가 검사합니다. 입력을 100만 token으로 가득 채우지 않고 `980000`으로 제한해 system message, chat template과 최대 4,096 output token을 위한 약 20,000 token의 여유를 둡니다.
@@ -93,7 +93,7 @@ gh variable set NVIDIA_REASONING_BUDGET --body '0' --repo "$REPO"
 gh variable set NVIDIA_TEMPERATURE --body '1.0' --repo "$REPO"
 gh variable set NVIDIA_TOP_P --body '0.95' --repo "$REPO"
 gh variable set NVIDIA_RPM_LIMIT --body '40' --repo "$REPO"
-gh variable set NVIDIA_AUDIT_CONCURRENCY --body '1' --repo "$REPO"
+gh variable set NVIDIA_AUDIT_CONCURRENCY --body '8' --repo "$REPO"
 gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' --repo "$REPO"
 gh variable set PIPELINE_FORCE_FULL_AUDIT --body 'false' --repo "$REPO"
 gh variable set PIPELINE_DRY_RUN --body 'false' --repo "$REPO"
@@ -111,29 +111,29 @@ gh variable list --repo yyeongjin/secret_mcp_use
 
 ### 3. 이미 통과한 작업 건너뛰기
 
-변경되지 않은 Section을 검사할지 판단하기 위해 NVIDIA 요청을 보내면 안 됩니다. 그 순간 이미 API 호출을 소모하기 때문입니다. 어떤 요청도 보내기 전에 결정적 오케스트레이터 코드가 Section마다 fingerprint 두 개를 계산합니다. 1차 문서 fingerprint는 Specification 규칙, 같은 번호의 불변 trigger fragment, Evidence, Request Contract, validator 계약과 모델 설정을 포함합니다. 2차 구현 fingerprint는 불변 DESIGN_INDEX fragment, 같은 Section의 1차 결과 digest, 소유 frontend 소스 hash, Evidence, validator 계약, 모델 설정과 의존 증명서를 포함합니다.
+변경되지 않은 작업을 검사할지 판단하기 위해 NVIDIA 요청을 보내면 안 됩니다. 그 순간 이미 API 호출을 소모하기 때문입니다. 어떤 요청도 보내기 전에 결정적 오케스트레이터 코드가 모든 source span을 inventory하고 byte 전체 coverage를 증명한 뒤 각 leaf와 `S01-S19` 집계 부모의 fingerprint를 계산합니다. 1차 leaf fingerprint는 정확한 Specification source span, 비교 경계, Evidence, Request Contract, validator 계약과 모델 설정을 포함합니다. 2차 leaf fingerprint는 정확한 DESIGN_INDEX source span, 소유 frontend 소스 hash, 같은 Section의 1차 lineage, Evidence, validator 계약과 모델 설정을 포함합니다.
 
-그다음 같은 `targetId`, `sectionId`, fingerprint를 가진 불변 PASS 증명서가 있는지 확인합니다.
+그다음 같은 작품, Stage, Section, inventory, 원문과 구현 fingerprint를 가진 불변 PASS 증명서가 있는지 확인합니다.
 
 ```text
-일치하는 1차 PASS 증명서 -> document CACHED_PASS -> 1차 호출 0회
-일치하는 2차 PASS 증명서 -> implementation CACHED_PASS -> 2차 호출 0회 -> patch 없음 -> PR 없음
-증명서가 없거나 불일치   -> 해당 Stage와 Section만 독립 NVIDIA 요청 1회
+1차 leaf 증명서 전체 일치 -> document CACHED_PASS -> 1차 호출 0회
+2차 leaf 증명서 전체 일치 -> implementation CACHED_PASS -> 2차 호출 0회 -> patch 없음 -> 코드 PR 없음
+leaf 증명서 누락 또는 불일치 -> 영향받은 leaf inventory를 각각 독립 감사
 ```
 
-시각적으로 비슷해 보인다는 추측이나 모델의 기억만으로는 건너뛸 수 없습니다. 구현되어 보이더라도 유효한 PASS 증명서가 없는 Section은 최초 1회 검증합니다. 통과한 뒤에는 증명서가 이후 동일한 실행을 정적으로 만들고 API 호출도 발생하지 않습니다.
+시각적으로 비슷해 보인다는 추측이나 모델의 기억만으로는 건너뛸 수 없습니다. 검사하지 않았거나 원문에 연결되지 않았거나 `UNKNOWN`인 자식 leaf가 하나라도 있으면 부모 Section은 PASS가 될 수 없습니다. byte 전체 inventory의 결정적 bottom-up 집계만 이후 동일한 실행을 정적이고 호출 없이 만들 수 있습니다.
 
-fingerprint 입력 중 하나가 바뀌거나 증명서가 없거나 폐기된 경우, 또는 의존 증명서가 더 이상 유효하지 않으면 cache를 무효화합니다. `trigger/DESIGN_INDEX_gdweb-*.md`가 새로 추가되거나 외부에서 갱신되면 새로운 불변 계약 버전이므로 해당 작품에 대해 1차 19개와 2차 19개, 총 38개 전체 요청을 다시 실행합니다. `PIPELINE_FORCE_FULL_AUDIT=true`도 두 PASS cache를 모두 무시하므로 의도적인 전체 재검증 때만 사용해야 합니다. patch 실행 순서를 판단할 때는 유효한 영구 2차 PASS 증명서뿐 아니라 현재 실행의 2차 독립 감사에서 얻은 PASS도 인정합니다. 상위 PASS가 아직 저장되지 않았다는 이유만으로 하위 patch를 막지 않으며, PASS가 아닌 의존성은 계속 차단합니다.
+fingerprint 입력, leaf inventory, 증명서 또는 의존 증명서 중 하나라도 바뀌면 cache를 무효화합니다. `trigger/DESIGN_INDEX_gdweb-*.md`가 새로 추가되거나 외부에서 갱신되면 새로운 불변 계약 버전이므로 해당 작품의 현재 1차·2차 leaf 전체를 다시 실행합니다. `PIPELINE_FORCE_FULL_AUDIT=true`도 두 PASS cache를 모두 무시하므로 의도적인 전체 재검증 때만 사용해야 합니다. 의존성과 겹치는 write-set은 결정적 실행 순서와 parent commit을 정할 뿐, 근거 있는 `PATCH_REQUIRED` Requirement의 preflight·patch 호출·PR 생성을 차단하지 않습니다.
 
-Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마다 현재 `DESIGN_INDEX_SPECIFICATION.md`를 Markdown AST로 파싱해 현재 공통 규칙과 번호별 S01-S19 fragment를 추출합니다. 공통 규칙이 바뀌면 19개 Section fingerprint를 모두 무효화합니다. 번호가 붙은 fragment 하나가 바뀌면 해당 Section과 의존 증명서가 더 이상 유효하지 않은 DAG 후행 cache를 무효화합니다. 다른 Specification hash에서 생성한 과거 PASS는 재사용하지 않습니다. 번호 fragment가 빠지거나 중복되면 NVIDIA 요청 전에 실행을 중단하며, pipeline이 Specification을 수정해 구조를 보정하지 않습니다.
+Specification 내용은 runner에 하드코딩하지 않습니다. 매 실행마다 현재 `DESIGN_INDEX_SPECIFICATION.md`와 trigger 원문을 파싱하고 heading, fence marker, 표 구분선, thematic break와 공백을 구조 span으로, 나머지 문단 줄, 목록 항목, 표 행과 code payload를 audit leaf로 기록합니다. inventory는 byte offset 0부터 파일 끝까지 중복이나 미귀속 범위 없이 덮어야 합니다. 번호 Section 누락·중복, source coverage gap 또는 오래된 inventory가 있으면 NVIDIA 요청 전에 실행을 중단하며 pipeline이 Specification이나 trigger를 수정해 구조를 보정하지 않습니다.
 
-두 fan-out은 cache되지 않은 Stage와 Section마다 논리 요청 하나를 예약합니다. 최초 또는 강제 전체 실행은 `document-audit:S01-S19` 19개를 실행한 뒤 `implementation-audit:S01-S19` 19개를 실행합니다. 어떤 모델도 다른 Section의 입력이나 응답을 받지 않으며 1차에는 소스코드가, 2차에는 Specification 본문이 들어가지 않습니다. provider 응답이 잘렸거나 JSON이 깨졌거나 schema-invalid이거나 `UNKNOWN`, `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`이면 같은 Stage와 Section만 `PIPELINE_AUDIT_ATTEMPTS`까지 독립 재시도합니다. 실행 기록은 `documentAuditRequests`, `implementationAuditRequests`, `totalLogicalAuditRequests`와 추가 provider 호출 수를 구분합니다. 응답은 `nodes/SXX/document-audit-attempts/attempt-N/`과 `nodes/SXX/audit-attempts/attempt-N/`에 분리해 저장합니다.
+두 fan-out은 cache되지 않은 원자 leaf마다 논리 요청 하나를 예약합니다. 어떤 모델도 다른 leaf의 결과나 다른 Section의 자연어 출력을 받지 않으며 1차에는 소스코드가, 2차에는 Specification 본문이 들어가지 않습니다. provider 응답이 잘렸거나 JSON이 깨졌거나 schema-invalid이거나 `UNKNOWN`, `BLOCKED_MISSING_EVIDENCE`, `BLOCKED_CONTRACT_CONFLICT`이면 같은 Stage와 leaf만 `PIPELINE_AUDIT_ATTEMPTS`까지 독립 재시도합니다. 결정적 코드가 leaf 결과를 Section과 작품 상태로 bottom-up 집계하며 모델에게 결과 요약을 다시 요청하지 않습니다. 실행 기록은 `documentAuditRequests`, `implementationAuditRequests`, `totalLogicalAuditRequests`와 추가 provider 호출 수를 구분합니다. leaf별 입력과 출력은 `nodes/SXX/document-leaves/<requirement-id>/`와 `nodes/SXX/implementation-leaves/<requirement-id>/`에 분리해 저장합니다.
 
 ### 4. 최초 실행 안전 설정
 
 커밋된 push workflow는 `PIPELINE_DRY_RUN=false`, `PIPELINE_CREATE_PRS=true`로 실행합니다. 그렇더라도 모델 출력을 바로 게시할 수는 없습니다. 요청 격리, 응답 schema 검증, 불변 경로 거부, base hash 검증, write 소유권, diff 크기 제한, `git apply --check`, typecheck, 단위 테스트, 데스크톱·모바일 브라우저 테스트, 접근성 회귀 검사, 수정 Section 재감사, 영향받은 기존 PASS 회귀 감사, 열린 PR 충돌 검사와 멱등성 검사를 모두 통과한 하위 diff만 병합되지 않은 draft PR로 생성합니다. `git apply` 전에는 결정적 코드가 변경 없는 hunk 또는 완전히 동일한 no-op hunk 제거, 저장소 기준 경로 접두사 복원, 신뢰하지 않는 index metadata 제거와 hunk 개수 재계산만 수행할 수 있으며 의미 있는 추가·삭제 소스 줄은 바꾸지 않습니다. Requirement ID, Evidence ref, base hash와 read/write set은 모델이 중복 작성한 metadata를 신뢰하지 않고 격리 audit 입력과 검사한 diff에서 계산합니다.
 
-검증된 코드 PR은 해당 하위 correction에 배정된 Requirement ID를 본문 최상단에 표시하고, 변경 줄 수, 실제 request ID, guard 결과와 실행 artifact를 이어서 표시합니다. `S01-S19`는 상위 audit Section으로 그대로 유지합니다. 한 Section이 한 번의 제한된 patch 응답으로 처리하기 크면 patch 단계에서 `S09-1`, `S09-2`, `S09-3` 같은 하위 노드를 동적으로 만듭니다. 각 하위 노드는 그 시점에 아직 해결되지 않은 Requirement ID만 받고, 별도 NVIDIA 요청·guard·재감사를 수행합니다. 1차 `DOCUMENT_GAP`은 Section별 GitHub Issue로 게시합니다. 2차의 모든 근거 있는 `PATCH_REQUIRED`는 같은 실행에서 correction PR chain으로 게시하며 의존성과 write-set 중복은 stacked base만 정하고 생성을 차단하지 않습니다. 규범 계약은 `IDEA_VALIDATION_AND_PR_PIPELINE.ko.md`입니다.
+검증된 코드 PR은 해당 하위 correction에 배정된 Requirement ID를 본문 최상단에 표시하고, 변경 줄 수, 실제 request ID, guard 결과와 실행 artifact를 이어서 표시합니다. `S01-S19`는 상위 집계 Section으로 유지합니다. 1차는 비-PASS Section마다 원문 보고서 하위 PR을 만들고 최대 5개씩 가장 깊은 자식부터 자동 병합해 작품별 대표 보고서 draft PR 하나와 대표 이슈 하나를 남깁니다. `DOCUMENT_GAPS.md`는 각 Section 보고서를 byte 단위로 그대로 포함하며, 이슈 본문 한도를 넘으면 순번 댓글을 이어 붙여 같은 파일을 정확히 복원합니다. 기존 Section 이슈 본문도 대표 이슈에 원문 그대로 복제한 뒤 기존 이슈에는 포인터를 남기고 닫습니다. 2차는 `S09-1`, `S09-2`, `S09-3` 같은 코드 하위 노드를 동적으로 만들고 각 leaf Requirement를 별도 NVIDIA 요청·guard·재감사로 처리합니다. 코드 하위 PR도 최대 5개씩 자동 병합해 Section별 대표 draft PR 하나만 사람의 검토 경계로 남깁니다. 규범 계약은 `IDEA_VALIDATION_AND_PR_PIPELINE.ko.md`입니다.
 
 열린 자동화 PR은 `main`이 바뀌었다는 이유만으로 자동 종료하거나 branch를 삭제하지 않습니다. pipeline은 해당 PR을 stale로 표시하고 현재 base를 기준으로 새로운 독립 audit를 실행하며 PR 번호와 review 이력을 보존합니다. 대체 diff가 모든 guard를 통과한 경우에만 봇 소유 자동화 branch를 `--force-with-lease`로 갱신하고, 같은 PR의 제목, 본문, manifest와 diff를 최신 결과로 바꿉니다. 새 결과가 PASS이거나 차단되었거나 안전하게 patch할 수 없는 경우에도 PR은 사람의 판단을 위해 열린 상태로 남고 현재 피드백을 게시하며, 자동화가 사용자를 대신해 PR을 닫지 않습니다.
 
@@ -156,23 +156,25 @@ source value가 `UNKNOWN`, `TBD`, `N/A`, unspecified, unavailable, 빈 값 또�
 수동 입력의 의미는 다음과 같습니다.
 
 - `trigger_path`: 정확히 하나의 불변 `trigger/DESIGN_INDEX_gdweb-*.md` 입력입니다. push 실행은 일치하는 입력을 모두 찾고 fingerprint가 그대로인 작품은 건너뜁니다.
-- `force_full_audit`: 유효한 두 PASS cache를 무시하고 Stage별 19개씩 총 38개의 primary audit 요청을 전송합니다.
+- `force_full_audit`: 유효한 두 PASS cache를 무시하고 현재 1차·2차 원자 leaf마다 primary audit 요청 하나를 전송합니다.
 - `dry_run`: 제안 diff를 격리된 임시 worktree에만 적용하고 게시하지 않습니다.
-- `create_prs`: 모든 guard, 브라우저 테스트와 수정 코드 재감사를 통과한 뒤 멱등적인 draft PR을 게시합니다. 이때 `dry_run=false`여야 합니다.
+- `create_prs`: 1차 원문 보고서 트리와 대표 Issue를 게시하고, guard·브라우저 테스트·수정 코드 재감사를 통과한 모든 2차 patch를 멱등적인 draft PR로 게시합니다. 이때 `dry_run=false`여야 합니다.
 - 게시 PR은 workflow를 실행한 branch/ref를 대상으로 합니다. 따라서 `main` push는 `main`을 대상으로 하고, 명시적으로 dispatch한 검증 branch에서는 `main`을 변경하지 않고 게시를 시험할 수 있습니다.
 
 end-to-end 순서는 다음으로 고정합니다.
 
 ```text
 현재 Specification과 trigger 파싱
-  -> 1차 S01-S19 문서 fingerprint 계산
+  -> 모든 source byte를 구조 span 또는 원자 leaf로 inventory
+  -> Specification leaf마다 1차 fingerprint 계산
   -> API 호출 전에 유효한 불변 문서 PASS 증명서 재사용
-  -> 남은 Section마다 Specification-to-DESIGN_INDEX stateless 요청 하나 전송
-  -> 결정적 코드로 1차 JSON 출력 병합
-  -> 같은 Section의 1차 digest를 사용해 2차 S01-S19 구현 fingerprint 계산
+  -> 남은 leaf마다 Specification-to-DESIGN_INDEX stateless 요청 하나 전송
+  -> 결정적 코드로 1차 leaf를 bottom-up 집계
+  -> 원문 Section 보고서 하위 PR, 대표 보고서 PR과 대표 이슈 게시
+  -> 같은 Section의 1차 lineage를 사용해 DESIGN_INDEX leaf마다 2차 fingerprint 계산
   -> API 호출 전에 유효한 불변 구현 PASS 증명서 재사용
-  -> 남은 Section마다 DESIGN_INDEX-to-source stateless 요청 하나 전송
-  -> 결정적 코드로 2차 JSON 출력 병합
+  -> 남은 leaf마다 DESIGN_INDEX-to-source stateless 요청 하나 전송
+  -> 결정적 코드로 2차 leaf를 bottom-up 집계
   -> 모든 PATCH_REQUIRED finding이 해당 Section 소유의 supplied file을 지목하는지 검증
   -> 근거가 있는 PATCH_REQUIRED 노드만 별도 patch 요청 전송
   -> 같은 Section 안에서 서로 다른 seed의 후보를 PIPELINE_PATCH_ATTEMPTS 횟수까지 시도
@@ -213,7 +215,7 @@ npm run viewer
 PIPELINE_VIEWER_DATA_ROOT=/absolute/path/to/.validation-runs/current npm run viewer
 ```
 
-첫 번째 grid는 1차 문서 요청 19개, 두 번째 grid는 2차 구현 요청 19개를 표시합니다. 카운터는 실행 summary의 `documentAuditRequests`, `implementationAuditRequests`, `totalLogicalAuditRequests`를 그대로 사용합니다.
+첫 번째 grid는 모든 1차 문서 leaf 요청을, 두 번째 grid는 모든 2차 구현 leaf 요청을 표시하며 크기는 현재 문서에 따라 달라집니다. 카운터는 실행 summary의 `documentAuditRequests`, `implementationAuditRequests`, `totalLogicalAuditRequests`를 그대로 사용합니다.
 
 ## 프론트엔드 라이브 미리보기
 

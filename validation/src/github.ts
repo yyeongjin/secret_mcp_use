@@ -1,8 +1,13 @@
 import { sha256 } from "./hash.ts";
+import {
+  chunkVerbatimReport,
+  type DocumentGapReportBundle,
+} from "./document-reports.ts";
 import { runCommand } from "./process.ts";
 import type { GuardedPatch } from "./patch.ts";
 import type {
   AuditFinding,
+  DocumentAuditOutput,
   NodeAuditInput,
   NodeAuditOutput,
   PipelineConfig,
@@ -45,6 +50,15 @@ interface GitReferenceResponse {
   object: { sha: string };
 }
 
+interface GitCommitResponse {
+  sha: string;
+  tree: { sha: string };
+}
+
+interface GitObjectResponse {
+  sha: string;
+}
+
 type CheckConclusion = "success" | "neutral" | "failure";
 
 interface NodeCheckSummary {
@@ -55,6 +69,7 @@ interface NodeCheckSummary {
   documentAuditStatus?: string;
   documentAuditAttempts?: number;
   documentFindings?: AuditFinding[];
+  documentOutput?: DocumentAuditOutput | null;
   auditStatus: string;
   executionState: string;
   auditAttempts: number;
@@ -97,17 +112,17 @@ function buildDocumentNodeCheckOutput(args: {
       `- Status: \`${args.node.documentAuditStatus ?? "NOT_RUN"}\``,
       `- Provider calls: \`${args.node.documentAuditAttempts ?? 0}\``,
       `- Fingerprint: \`${args.node.documentFingerprint ?? "unavailable"}\``,
-      `- Independent request: \`${args.summary.runId}:document-audit:${args.node.sectionId}\``,
+      `- Independent request prefix: \`${args.summary.runId}:document-audit:${args.node.sectionId}:<leaf-id>\``,
       "- Source code included: `false`",
-      "- Writes and PR publication: `forbidden`",
-      `- Document-gap Issue: \`${args.node.documentAuditStatus === "DOCUMENT_GAP" ? "created or updated" : "not required"}\``,
+      "- Frontend writes: `forbidden`",
+      `- Verbatim report publication: \`${args.node.documentAuditStatus === "DOCUMENT_GAP" ? "included in representative report PR and Issue" : "not required"}\``,
     ].join("\n"),
     text: [
       "## Document completeness findings",
       "",
       renderFindings(args.node.documentFindings ?? []),
       "",
-      "Stage 1 reports immutable DESIGN_INDEX gaps as Section-specific GitHub Issues. It cannot create a code patch or PR.",
+      "Stage 1 cannot edit DESIGN_INDEX or frontend code. Non-PASS Section outputs are preserved verbatim in report-only child PRs, one representative report PR, and one representative Issue per work.",
     ].join("\n"),
   };
 }
@@ -116,10 +131,22 @@ interface TargetCheckSummary {
   runId: string;
   targetId: string;
   triggerPath: string;
+  documentReport?: DocumentGapReportBundle;
   nodes: NodeCheckSummary[];
 }
 
 const CHILD_MERGE_MAX_ATTEMPTS = 8;
+
+class GitHubApiError extends Error {
+  constructor(
+    readonly method: string,
+    readonly route: string,
+    readonly status: number,
+    responseText: string,
+  ) {
+    super(`GitHub API ${method} ${route} failed with ${status}: ${responseText.slice(0, 1000)}`);
+  }
+}
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -149,7 +176,7 @@ async function githubRequest<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new Error(`GitHub API ${method} ${route} failed with ${response.status}: ${(await response.text()).slice(0, 1000)}`);
+    throw new GitHubApiError(method, route, response.status, await response.text());
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -228,88 +255,411 @@ export function renderFindings(findings: AuditFinding[]): string {
   ].join("\n")).join("\n\n");
 }
 
-function documentGapIssueMarker(targetId: string, sectionId: string): string {
-  return `<!-- design-validation-document-gap: ${targetId}:${sectionId} -->`;
+function documentReportMarker(targetId: string): string {
+  return `<!-- design-validation-document-gap-report: ${targetId} -->`;
 }
 
-export function buildDocumentGapIssueBody(args: {
-  summary: TargetCheckSummary;
-  node: NodeCheckSummary;
+function documentReportHashMarker(reportHash: Sha256): string {
+  return `<!-- design-validation-document-gap-report-hash: ${reportHash} -->`;
+}
+
+function reportBranchSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+}
+
+async function createGitCommitWithFiles(args: {
+  config: PipelineConfig;
+  parentCommit: string;
+  message: string;
+  files: Array<{ path: string; content: string }>;
+}): Promise<string> {
+  const parent = await githubRequest<GitCommitResponse>(
+    args.config,
+    "GET",
+    `/repos/${args.config.repository}/git/commits/${args.parentCommit}`,
+  );
+  const treeEntries = await Promise.all(args.files.map(async (file) => {
+    const blob = await githubRequest<GitObjectResponse>(
+      args.config,
+      "POST",
+      `/repos/${args.config.repository}/git/blobs`,
+      { content: Buffer.from(file.content).toString("base64"), encoding: "base64" },
+    );
+    return { path: file.path, mode: "100644", type: "blob", sha: blob.sha };
+  }));
+  const tree = await githubRequest<GitObjectResponse>(
+    args.config,
+    "POST",
+    `/repos/${args.config.repository}/git/trees`,
+    { base_tree: parent.tree.sha, tree: treeEntries },
+  );
+  const commit = await githubRequest<GitCommitResponse>(
+    args.config,
+    "POST",
+    `/repos/${args.config.repository}/git/commits`,
+    { message: args.message, tree: tree.sha, parents: [args.parentCommit] },
+  );
+  return commit.sha;
+}
+
+async function createAutomationBranch(args: {
+  config: PipelineConfig;
+  branch: string;
+  commit: string;
+}): Promise<void> {
+  const existing = await githubRequest<GitReferenceResponse>(
+    args.config,
+    "GET",
+    `/repos/${args.config.repository}/git/ref/heads/${encodeURIComponent(args.branch)}`,
+  ).catch((error: unknown) => {
+    if (error instanceof GitHubApiError && error.status === 404) return null;
+    throw error;
+  });
+  if (existing) {
+    if (existing.object.sha !== args.commit) {
+      throw new Error(`REPORT_BRANCH_EXISTS: ${args.branch} is at ${existing.object.sha}, expected ${args.commit}.`);
+    }
+    return;
+  }
+  await githubRequest(
+    args.config,
+    "POST",
+    `/repos/${args.config.repository}/git/refs`,
+    { ref: `refs/heads/${args.branch}`, sha: args.commit },
+  );
+}
+
+function reportRepositoryPath(bundle: DocumentGapReportBundle): string {
+  const fingerprint = bundle.combinedHash.slice("sha256:".length, "sha256:".length + 16);
+  return `reports/document-gaps/${reportBranchSlug(bundle.targetId)}/${fingerprint}`;
+}
+
+function reportChildBody(args: {
+  bundle: DocumentGapReportBundle;
+  reportPath: string;
+  childId: string;
+  contentHash: Sha256;
 }): string {
   return [
-    "## Missing DESIGN_INDEX instructions",
+    "## Stage 1 verbatim report child",
     "",
-    renderFindings(args.node.documentFindings ?? []),
+    `- Target: \`${args.bundle.targetId}\``,
+    `- Child: \`${args.childId}\``,
+    `- Report path: \`${args.reportPath}\``,
+    `- Content hash: \`${args.contentHash}\``,
     "",
-    "## Isolated Stage 1 request",
+    "This internal child PR adds only deterministic Stage 1 report bytes. It is automatically merged upward in a batch of at most five children and is not a human merge boundary.",
     "",
-    `- Target: \`${args.summary.targetId}\``,
-    `- Section: \`${args.node.sectionId}\``,
-    `- Trigger: \`${args.summary.triggerPath}\``,
-    `- Status: \`${args.node.documentAuditStatus}\``,
-    `- Fingerprint: \`${args.node.documentFingerprint ?? "unavailable"}\``,
-    `- Request: \`${args.summary.runId}:document-audit:${args.node.sectionId}\``,
-    "- Comparison: `Specification instructions -> DESIGN_INDEX`",
-    "- Frontend source included: `false`",
-    "",
-    "This Issue reports a document-contract omission only. Stage 1 never edits the immutable DESIGN_INDEX and never creates a frontend PR. Stage 2 runs independently and is not blocked by this Issue.",
-    "",
-    documentGapIssueMarker(args.summary.targetId, args.node.sectionId),
+    documentReportHashMarker(args.bundle.combinedHash),
   ].join("\n");
 }
 
-export async function publishDocumentGapIssues(args: {
+async function publishReportChild(args: {
   config: PipelineConfig;
-  summaries: TargetCheckSummary[];
-}): Promise<Array<{ targetId: string; sectionId: string; number: number; url: string; reused: boolean }>> {
-  if (!args.config.github.token || args.config.dryRun) return [];
-  const existingIssues = (await githubRequest<IssueResponse[]>(
+  bundle: DocumentGapReportBundle;
+  reportPath: string;
+  childId: string;
+  baseBranch: string;
+  baseCommit: string;
+  files: Array<{ path: string; content: string }>;
+  contentHash: Sha256;
+}): Promise<MergeableChildPullRequest & { commit: string }> {
+  const branch = `auto/${reportBranchSlug(args.bundle.targetId)}/document-report-${reportBranchSlug(args.childId)}/${args.contentHash.slice(7, 19)}`;
+  const commit = await createGitCommitWithFiles({
+    config: args.config,
+    parentCommit: args.baseCommit,
+    message: `docs(${args.childId.toLowerCase()}): add verbatim Stage 1 report`,
+    files: args.files,
+  });
+  await createAutomationBranch({ config: args.config, branch, commit });
+  const pull = await githubRequest<PullRequestResponse>(
+    args.config,
+    "POST",
+    `/repos/${args.config.repository}/pulls`,
+    {
+      title: `docs(${args.childId.toLowerCase()}): preserve Stage 1 report`,
+      head: branch,
+      base: args.baseBranch,
+      body: reportChildBody(args),
+      draft: false,
+    },
+  );
+  return {
+    patchNodeId: args.childId,
+    number: pull.number,
+    url: pull.html_url,
+    branch,
+    baseBranch: args.baseBranch,
+    commit,
+  };
+}
+
+function representativeReportBody(args: {
+  bundle: DocumentGapReportBundle;
+  reportPath: string;
+  children: MergeableChildPullRequest[];
+}): string {
+  return [
+    "## Stage 1 consolidated document-gap report",
+    "",
+    `- Target: \`${args.bundle.targetId}\``,
+    `- Trigger: \`${args.bundle.triggerPath}\``,
+    `- Verbatim Section reports: \`${args.bundle.sectionReports.length}\``,
+    `- Consolidated report: \`${args.reportPath}/DOCUMENT_GAPS.md\``,
+    `- Report hash: \`${args.bundle.combinedHash}\``,
+    `- Internal child PRs: \`${args.children.length}\``,
+    "- Maximum children merged per batch: `5`",
+    "",
+    "Every Section report is embedded byte-for-byte in DOCUMENT_GAPS.md. No LLM summary or paraphrase is used. Internal child PRs were merged deepest-first into this branch; this draft PR is the only human merge boundary.",
+    "",
+    ...args.children.map((child) => `- [${child.patchNodeId} PR #${child.number}](${child.url})`),
+    "",
+    documentReportMarker(args.bundle.targetId),
+    documentReportHashMarker(args.bundle.combinedHash),
+  ].join("\n");
+}
+
+async function publishRepresentativeDocumentIssue(args: {
+  config: PipelineConfig;
+  bundle: DocumentGapReportBundle;
+  pull: PullRequestResponse;
+  reportPath: string;
+}): Promise<{ number: number; url: string; reused: boolean }> {
+  const issues = (await githubRequest<IssueResponse[]>(
     args.config,
     "GET",
-    `/repos/${args.config.repository}/issues?state=open&per_page=100`,
+    `/repos/${args.config.repository}/issues?state=all&per_page=100`,
   )).filter((issue) => !issue.pull_request);
-  const published: Array<{ targetId: string; sectionId: string; number: number; url: string; reused: boolean }> = [];
-
-  for (const summary of args.summaries) {
-    for (const node of summary.nodes) {
-      if (node.documentAuditStatus !== "DOCUMENT_GAP") continue;
-      const marker = documentGapIssueMarker(summary.targetId, node.sectionId);
-      const title = `[${node.sectionId}] Complete missing DESIGN_INDEX instructions for ${summary.targetId}`.slice(0, 256);
-      const body = buildDocumentGapIssueBody({ summary, node });
-      const existing = existingIssues.find((issue) => issue.body?.includes(marker));
-      if (existing) {
-        const updated = await githubRequest<IssueResponse>(
-          args.config,
-          "PATCH",
-          `/repos/${args.config.repository}/issues/${existing.number}`,
-          { title, body },
-        );
-        published.push({
-          targetId: summary.targetId,
-          sectionId: node.sectionId,
-          number: updated.number,
-          url: updated.html_url,
-          reused: true,
-        });
-        continue;
-      }
-      const created = await githubRequest<IssueResponse>(
+  const marker = documentReportMarker(args.bundle.targetId);
+  const legacyIssues = issues.filter((issue) => (
+    issue.body?.includes(`<!-- design-validation-document-gap: ${args.bundle.targetId}:`)
+  ));
+  const title = `[Stage 1] Consolidated DESIGN_INDEX gaps for ${args.bundle.targetId}`.slice(0, 256);
+  const chunks = chunkVerbatimReport(args.bundle.combinedContent);
+  const body = [
+    "## Consolidated Stage 1 result",
+    "",
+    `- Target: \`${args.bundle.targetId}\``,
+    `- Trigger: \`${args.bundle.triggerPath}\``,
+    `- Representative report PR: [#${args.pull.number}](${args.pull.html_url})`,
+    `- Repository report: \`${args.reportPath}/DOCUMENT_GAPS.md\``,
+    `- Exact report hash: \`${args.bundle.combinedHash}\``,
+    `- Verbatim chunks below: \`${chunks.length}\``,
+    `- Migrated legacy Section Issues: \`${legacyIssues.length}\``,
+    "",
+    "The following comments preserve the consolidated report as exact UTF-8 chunks. Concatenating chunk payloads in index order reproduces DOCUMENT_GAPS.md and its SHA-256 hash. Nothing is summarized.",
+    "",
+    marker,
+    documentReportHashMarker(args.bundle.combinedHash),
+  ].join("\n");
+  const existing = issues.find((issue) => issue.state === "open" && issue.body?.includes(marker));
+  const issue = existing
+    ? await githubRequest<IssueResponse>(
+      args.config,
+      "PATCH",
+      `/repos/${args.config.repository}/issues/${existing.number}`,
+      { title, body },
+    )
+    : await githubRequest<IssueResponse>(
+      args.config,
+      "POST",
+      `/repos/${args.config.repository}/issues`,
+      { title, body },
+    );
+  const comments = await githubRequest<IssueCommentResponse[]>(
+    args.config,
+    "GET",
+    `/repos/${args.config.repository}/issues/${issue.number}/comments?per_page=100`,
+  );
+  for (const chunk of chunks) {
+    const chunkMarker = `<!-- design-validation-verbatim-chunk: ${args.bundle.combinedHash}:${chunk.index}/${chunk.total}:${chunk.contentHash} -->`;
+    if (comments.some((comment) => comment.body?.includes(chunkMarker))) continue;
+    await githubRequest(
+      args.config,
+      "POST",
+      `/repos/${args.config.repository}/issues/${issue.number}/comments`,
+      { body: `${chunkMarker}\n${chunk.content}` },
+    );
+  }
+  for (const legacy of legacyIssues) {
+    const originalBody = legacy.body ?? "";
+    const originalHash = sha256(originalBody);
+    const migrationMarker = `<!-- design-validation-legacy-issue-copy: ${legacy.number}:${originalHash} -->`;
+    if (!comments.some((comment) => comment.body?.includes(migrationMarker))) {
+      await githubRequest(
         args.config,
         "POST",
-        `/repos/${args.config.repository}/issues`,
-        { title, body },
+        `/repos/${args.config.repository}/issues/${issue.number}/comments`,
+        {
+          body: [
+            migrationMarker,
+            `<!-- BEGIN VERBATIM LEGACY ISSUE #${legacy.number} ${originalHash} -->`,
+            originalBody,
+            `<!-- END VERBATIM LEGACY ISSUE #${legacy.number} -->`,
+          ].join("\n"),
+        },
       );
-      existingIssues.push(created);
-      published.push({
-        targetId: summary.targetId,
-        sectionId: node.sectionId,
-        number: created.number,
-        url: created.html_url,
-        reused: false,
-      });
     }
+    const legacyComments = await githubRequest<IssueCommentResponse[]>(
+      args.config,
+      "GET",
+      `/repos/${args.config.repository}/issues/${legacy.number}/comments?per_page=100`,
+    );
+    const pointerMarker = `<!-- design-validation-migrated-to: ${issue.number}:${args.bundle.combinedHash} -->`;
+    if (!legacyComments.some((comment) => comment.body?.includes(pointerMarker))) {
+      await githubRequest(
+        args.config,
+        "POST",
+        `/repos/${args.config.repository}/issues/${legacy.number}/comments`,
+        {
+          body: [
+            `This Section Issue was preserved verbatim in representative Issue #${issue.number}.`,
+            "",
+            pointerMarker,
+          ].join("\n"),
+        },
+      );
+    }
+    await githubRequest(
+      args.config,
+      "PATCH",
+      `/repos/${args.config.repository}/issues/${legacy.number}`,
+      { state: "closed", state_reason: "completed" },
+    );
   }
-  return published;
+  return { number: issue.number, url: issue.html_url, reused: Boolean(existing) };
+}
+
+export interface PublishedDocumentGapReport {
+  targetId: string;
+  reportHash: Sha256;
+  reportPath: string;
+  pullRequest: { number: number; url: string; branch: string };
+  issue: { number: number; url: string; reused: boolean };
+  childPullRequests: Array<{ number: number; url: string; childId: string }>;
+}
+
+export async function publishDocumentGapReports(args: {
+  config: PipelineConfig;
+  summaries: TargetCheckSummary[];
+}): Promise<PublishedDocumentGapReport[]> {
+  if (!args.config.github.token || args.config.dryRun || !args.config.createPrs) return [];
+  const publications: PublishedDocumentGapReport[] = [];
+  for (const summary of args.summaries) {
+    const bundle = summary.documentReport;
+    if (!bundle) {
+      throw new Error(`Stage 1 report publication is missing its exact report bundle for ${summary.targetId}.`);
+    }
+    if (bundle.targetId !== summary.targetId || bundle.triggerPath !== summary.triggerPath) {
+      throw new Error(`Stage 1 report publication received a mismatched report bundle for ${summary.targetId}.`);
+    }
+    if (bundle.sectionReports.length === 0) continue;
+    const marker = documentReportHashMarker(bundle.combinedHash);
+    const existingPull = (await allAutomationPullRequestsAnyBase(args.config, "all"))
+      .find((pull) => pull.body?.includes(marker) && pull.body?.includes(documentReportMarker(bundle.targetId)));
+    const reportPath = reportRepositoryPath(bundle);
+    if (existingPull) {
+      const issue = await publishRepresentativeDocumentIssue({
+        config: args.config,
+        bundle,
+        pull: existingPull,
+        reportPath,
+      });
+      publications.push({
+        targetId: bundle.targetId,
+        reportHash: bundle.combinedHash,
+        reportPath,
+        pullRequest: {
+          number: existingPull.number,
+          url: existingPull.html_url,
+          branch: existingPull.head?.ref ?? "unknown",
+        },
+        issue,
+        childPullRequests: [],
+      });
+      continue;
+    }
+
+    const branch = `auto/${reportBranchSlug(bundle.targetId)}/document-report/${bundle.combinedHash.slice(7, 19)}`;
+    await createAutomationBranch({ config: args.config, branch, commit: args.config.baseCommit });
+    let reportCommit = args.config.baseCommit;
+    const allChildren: MergeableChildPullRequest[] = [];
+    const reportItems = [
+      ...bundle.sectionReports.map((report) => ({
+        childId: report.sectionId,
+        contentHash: report.contentHash,
+        files: [{ path: `${reportPath}/sections/${report.sectionId}.md`, content: report.content }],
+      })),
+      {
+        childId: "DOCUMENT-GAPS",
+        contentHash: bundle.combinedHash,
+        files: [
+          { path: `${reportPath}/DOCUMENT_GAPS.md`, content: bundle.combinedContent },
+          { path: `${reportPath}/manifest.json`, content: `${JSON.stringify(bundle.manifest, null, 2)}\n` },
+        ],
+      },
+    ];
+    for (let index = 0; index < reportItems.length; index += 5) {
+      const batch = reportItems.slice(index, index + 5);
+      const pulls: MergeableChildPullRequest[] = [];
+      let parentBranch = branch;
+      let parentCommit = reportCommit;
+      for (const item of batch) {
+        const child = await publishReportChild({
+          config: args.config,
+          bundle,
+          reportPath,
+          childId: item.childId,
+          baseBranch: parentBranch,
+          baseCommit: parentCommit,
+          files: item.files,
+          contentHash: item.contentHash,
+        });
+        pulls.push(child);
+        allChildren.push(child);
+        parentBranch = child.branch;
+        parentCommit = child.commit;
+      }
+      const merged = await mergeChildPullRequestBatch({
+        config: args.config,
+        sectionId: "DOCUMENT-REPORT",
+        sectionBranch: branch,
+        pulls,
+      });
+      reportCommit = merged.commit;
+    }
+    const representative = await githubRequest<PullRequestResponse>(
+      args.config,
+      "POST",
+      `/repos/${args.config.repository}/pulls`,
+      {
+        title: `docs(stage-1): review ${bundle.sectionReports.length} consolidated document-gap report(s)`,
+        head: branch,
+        base: args.config.github.baseBranch,
+        body: representativeReportBody({ bundle, reportPath, children: allChildren }),
+        draft: true,
+      },
+    );
+    const issue = await publishRepresentativeDocumentIssue({
+      config: args.config,
+      bundle,
+      pull: representative,
+      reportPath,
+    });
+    publications.push({
+      targetId: bundle.targetId,
+      reportHash: bundle.combinedHash,
+      reportPath,
+      pullRequest: { number: representative.number, url: representative.html_url, branch },
+      issue,
+      childPullRequests: allChildren.map((child) => ({
+        number: child.number,
+        url: child.url,
+        childId: child.patchNodeId,
+      })),
+    });
+  }
+  return publications;
 }
 
 export function buildNodeCheckOutput(args: {

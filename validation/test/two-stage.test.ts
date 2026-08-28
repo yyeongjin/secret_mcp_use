@@ -5,18 +5,39 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullAuditRequestPlan } from "../src/orchestrator.ts";
 import { normalizeCompletionOutput } from "../src/nvidia.ts";
 import { auditUserPrompt, documentAuditUserPrompt } from "../src/prompts.ts";
-import type { DocumentAuditInput, NodeAuditInput, Sha256 } from "../src/types.ts";
+import { buildRequirementInventory } from "../src/requirements.ts";
+import { SECTION_IDS, type DocumentAuditInput, type NodeAuditInput, type RequirementInventory, type SectionId, type Sha256 } from "../src/types.ts";
 
 const fingerprint = `sha256:${"9".repeat(64)}` as Sha256;
 
-test("a full run plans 19 independent Stage 1 and 19 independent Stage 2 requests", () => {
-  const plan = fullAuditRequestPlan("run-test");
-  assert.equal(plan.length, 38);
-  assert.equal(plan.filter((item) => item.stage === "document-audit").length, 19);
-  assert.equal(plan.filter((item) => item.stage === "implementation-audit").length, 19);
-  assert.equal(new Set(plan.map((item) => item.requestId)).size, 38);
-  assert.equal(plan[0].requestId, "run-test:document-audit:S01");
-  assert.equal(plan[37].requestId, "run-test:implementation-audit:S19");
+test("a full run plans one independent request for every dynamic Stage 1 and Stage 2 leaf", () => {
+  const inventories = (stage: "document" | "implementation"): Map<SectionId, RequirementInventory> => (
+    new Map(SECTION_IDS.map((sectionId) => [
+      sectionId,
+      buildRequirementInventory({
+        stage,
+        sectionId,
+        fragments: [{
+          sourcePath: `${stage}.md`,
+          sourceKind: "section",
+          source: sectionId === "S01" ? "Requirement A\nRequirement B\n" : "Requirement A\n",
+          baseOffset: 0,
+          baseLine: 1,
+          idPrefix: "U",
+        }],
+      }),
+    ]))
+  );
+  const plan = fullAuditRequestPlan("run-test", {
+    document: inventories("document"),
+    implementation: inventories("implementation"),
+  });
+  assert.equal(plan.length, 40);
+  assert.equal(plan.filter((item) => item.stage === "document-audit").length, 20);
+  assert.equal(plan.filter((item) => item.stage === "implementation-audit").length, 20);
+  assert.equal(new Set(plan.map((item) => item.requestId)).size, 40);
+  assert.equal(plan[0].requestId, "run-test:document-audit:S01:S01-DOC-U0001-R001");
+  assert.equal(plan[39].requestId, "run-test:implementation-audit:S19:S19-IMPL-U0001-R001");
 });
 
 test("Stage 1 prompt contains no source-code payload", () => {

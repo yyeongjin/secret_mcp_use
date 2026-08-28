@@ -47,6 +47,8 @@ test("payload facts and generated Requirement IDs remain Section-owned", () => {
     path: "trigger/DESIGN_INDEX_gdweb-26357.md",
     referenceId: "gdweb-26357",
     documentHash: hash,
+    source: "",
+    preambleFragments: [],
     sections: new Map(),
   } as TriggerSnapshot;
   const fragment = "## 12. Responsive Behavior\n- P-01 uses 1440px and 390px.";

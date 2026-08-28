@@ -118,7 +118,7 @@ export async function loadConfig(argv = process.argv.slice(2)): Promise<Pipeline
       temperature: decimal(process.env.NVIDIA_TEMPERATURE, 1, 0, 1),
       topP: decimal(process.env.NVIDIA_TOP_P, 0.95, 0, 1),
       rpmLimit: integer(process.env.NVIDIA_RPM_LIMIT, 40, 1),
-      concurrency: integer(process.env.NVIDIA_AUDIT_CONCURRENCY, 1, 1),
+      concurrency: integer(process.env.NVIDIA_AUDIT_CONCURRENCY, 8, 1),
       timeoutMs: integer(process.env.NVIDIA_TIMEOUT_MS, 900000, 1000),
       maxRetries: integer(process.env.NVIDIA_MAX_RETRIES, 3, 0),
     },

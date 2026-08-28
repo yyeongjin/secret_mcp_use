@@ -29,7 +29,7 @@ The complete rules are maintained in [DESIGN_INDEX_SPECIFICATION.md](DESIGN_INDE
 
 ## NVIDIA Validation Pipeline Setup
 
-The validation pipeline uses [`nvidia/nemotron-3-super-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) through the NVIDIA API. A single model ID does not mean a single combined LLM job. One work is split into `S01` through `S19`, then validated in two explicit stages: Stage 1 sends 19 stateless document-completeness requests that compare the current Specification with the matching DESIGN_INDEX Section and contain no source code; Stage 2 sends another 19 stateless implementation requests that compare the matching DESIGN_INDEX Section with its owned source slice and contain no Specification text. A first or forced full run therefore schedules exactly 38 independent primary requests before any patch candidate or re-audit calls.
+The validation pipeline uses [`nvidia/nemotron-3-super-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) through the NVIDIA API. A single model ID does not mean a single combined LLM job. `S01` through `S19` are aggregation parents, not model-call units. Deterministic code assigns every nonstructural source span in the Specification and DESIGN_INDEX to an atomic leaf Requirement. Stage 1 sends one stateless document-completeness request per Specification leaf and contains no source code; Stage 2 sends one stateless implementation request per DESIGN_INDEX leaf and contains no Specification text. The request count is therefore derived from the current documents instead of being fixed at 38. With the current `gdweb-26357` input it is 327 Stage 1 leaves plus 761 Stage 2 leaves, or 1,088 primary requests before retries, preflights, patch candidates, and re-audits.
 
 The complete pipeline contract is documented in [IDEA_VALIDATION_AND_PR_PIPELINE.ko.md](IDEA_VALIDATION_AND_PR_PIPELINE.ko.md).
 
@@ -59,7 +59,7 @@ Open **Settings → Secrets and variables → Actions → Variables → New repo
 | Variable | Recommended value | Purpose |
 | --- | --- | --- |
 | `NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` | NVIDIA OpenAI-compatible API base URL |
-| `NVIDIA_MODEL` | `nvidia/nemotron-3-super-120b-a12b` | Model used by every isolated Section request |
+| `NVIDIA_MODEL` | `nvidia/nemotron-3-super-120b-a12b` | Model used by every isolated atomic-leaf request |
 | `NVIDIA_CONTEXT_WINDOW_TOKENS` | `1000000` | Declared model context window |
 | `NVIDIA_MAX_INPUT_TOKENS` | `980000` | Runner-side input budget, leaving space for output and message templates |
 | `NVIDIA_MAX_OUTPUT_TOKENS` | `4096` | Maximum output for each independent request |
@@ -68,12 +68,12 @@ Open **Settings → Secrets and variables → Actions → Variables → New repo
 | `NVIDIA_TEMPERATURE` | `1.0` | Sampling temperature recommended for this model |
 | `NVIDIA_TOP_P` | `0.95` | Top-p value recommended for this model |
 | `NVIDIA_RPM_LIMIT` | `40` | Repository-side rate limiter; lower this if the account limit is lower |
-| `NVIDIA_AUDIT_CONCURRENCY` | `1` | Safe initial concurrency; request independence does not require parallel execution |
+| `NVIDIA_AUDIT_CONCURRENCY` | `8` | Concurrent stateless workers; the shared 40 RPM start limiter still controls request starts |
 | `PIPELINE_TRIGGER_GLOB` | `trigger/DESIGN_INDEX_gdweb-*.md` | Immutable input documents that start a work-specific run |
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | Preserves valid cached PASS results during ordinary code validation |
 | `PIPELINE_DRY_RUN` | `false` | Allows verified patches to be published after temporary-worktree validation |
-| `PIPELINE_CREATE_PRS` | `true` | Publishes idempotent stacked draft PRs for verified Stage 2 Section child diffs; Stage 1 `DOCUMENT_GAP` results become Section-specific Issues, while other non-PR results stay in Checks and run artifacts |
-| `PIPELINE_AUDIT_ATTEMPTS` | `5` (minimum) | Maximum same-Section independent audit attempts for transport/schema defects and ambiguous or blocked judgments |
+| `PIPELINE_CREATE_PRS` | `true` | Publishes Stage 1 verbatim report child PRs, one report representative PR and Issue per work, plus idempotent stacked draft PRs for verified Stage 2 code diffs |
+| `PIPELINE_AUDIT_ATTEMPTS` | `5` (minimum) | Maximum same-leaf independent audit attempts for transport/schema defects and ambiguous or blocked judgments |
 | `PIPELINE_PATCH_ATTEMPTS` | `8` | Maximum independently seeded patch candidates, including full verification retries, for one `PATCH_REQUIRED` Section |
 | `PIPELINE_PR_MERGE_BATCH_SIZE` | `5` | Number of verified child PRs recursively merged deepest-first into one Section branch; valid range is 1-10 |
 
@@ -94,7 +94,7 @@ gh variable set NVIDIA_REASONING_BUDGET --body '0' --repo "$REPO"
 gh variable set NVIDIA_TEMPERATURE --body '1.0' --repo "$REPO"
 gh variable set NVIDIA_TOP_P --body '0.95' --repo "$REPO"
 gh variable set NVIDIA_RPM_LIMIT --body '40' --repo "$REPO"
-gh variable set NVIDIA_AUDIT_CONCURRENCY --body '1' --repo "$REPO"
+gh variable set NVIDIA_AUDIT_CONCURRENCY --body '8' --repo "$REPO"
 gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' --repo "$REPO"
 gh variable set PIPELINE_FORCE_FULL_AUDIT --body 'false' --repo "$REPO"
 gh variable set PIPELINE_DRY_RUN --body 'false' --repo "$REPO"
@@ -112,29 +112,29 @@ gh variable list --repo yyeongjin/secret_mcp_use
 
 ### 3. Skip work that has already passed
 
-An NVIDIA request must not be used to decide whether an unchanged Section should be inspected. That would already consume an API call. Before any request, deterministic orchestrator code calculates two fingerprints per Section. The Stage 1 document fingerprint covers the Specification rules, matching immutable trigger fragment, Evidence, request contract, validator contract, and model configuration. The Stage 2 implementation fingerprint covers the immutable DESIGN_INDEX fragment, same-Section Stage 1 output digest, owned frontend source hashes, Evidence, validator contract, model configuration, and dependency attestations.
+An NVIDIA request must not be used to decide whether unchanged work should be inspected. That would already consume an API call. Before any request, deterministic orchestrator code inventories every source span, proves byte-complete coverage, and calculates a fingerprint for each leaf plus its `S01-S19` aggregation parent. A Stage 1 leaf fingerprint covers its exact Specification source span, comparison boundary, Evidence, request contract, validator contract, and model configuration. A Stage 2 leaf fingerprint covers its exact DESIGN_INDEX source span, owned frontend source hashes, same-Section Stage 1 lineage, Evidence, validator contract, and model configuration.
 
-The orchestrator then looks for an immutable PASS attestation with the same `targetId`, `sectionId`, and fingerprint:
+The orchestrator then looks for immutable PASS attestations with the same work, Stage, Section, inventory, source, and implementation fingerprints:
 
 ```text
-matching Stage 1 PASS attestation -> document CACHED_PASS -> zero Stage 1 calls
-matching Stage 2 PASS attestation -> implementation CACHED_PASS -> zero Stage 2 calls -> no patch -> no PR
-missing or mismatched attestation -> one isolated request for that Stage and Section
+all Stage 1 leaf attestations match -> document CACHED_PASS -> zero Stage 1 calls
+all Stage 2 leaf attestations match -> implementation CACHED_PASS -> zero Stage 2 calls -> no patch -> no code PR
+any leaf attestation is missing or mismatched -> independently audit the affected leaf inventory
 ```
 
-A visual similarity guess or the model's memory is never sufficient for a skip. A Section that appears to be implemented but has no valid PASS attestation is audited once. After it passes, the attestation makes later identical runs static and call-free.
+A visual similarity guess or the model's memory is never sufficient for a skip. A parent Section cannot pass while one child leaf is unexamined, unmapped, or `UNKNOWN`. Only the deterministic bottom-up aggregate of a byte-complete inventory can make later identical runs static and call-free.
 
-The cache is invalidated when any fingerprint input changes, the attestation is missing or revoked, or a dependency attestation is no longer valid. A newly added or externally updated `trigger/DESIGN_INDEX_gdweb-*.md` is a new immutable contract version and therefore starts a full 38-request audit for that work: 19 Stage 1 requests plus 19 Stage 2 requests. `PIPELINE_FORCE_FULL_AUDIT=true` also bypasses both PASS caches and must only be used for an intentional complete re-audit. Dependencies and overlapping write sets determine deterministic order and parent commits; they never block an independently grounded `PATCH_REQUIRED` Requirement from receiving its own preflight and patch attempt.
+The cache is invalidated when any fingerprint input changes, the leaf inventory changes, an attestation is missing or revoked, or a dependency attestation is no longer valid. A newly added or externally updated `trigger/DESIGN_INDEX_gdweb-*.md` is a new immutable contract version and therefore starts a complete audit of every current Stage 1 and Stage 2 leaf for that work. `PIPELINE_FORCE_FULL_AUDIT=true` bypasses both PASS caches and must only be used for an intentional complete re-audit. Dependencies and overlapping write sets determine deterministic order and parent commits; they never block an independently grounded `PATCH_REQUIRED` Requirement from receiving its own preflight and patch attempt.
 
-The Specification is not compiled into the runner. Every execution parses the current `DESIGN_INDEX_SPECIFICATION.md` with a Markdown AST and extracts the current global rules and numbered S01-S19 fragments. A global rule change invalidates all Section fingerprints. A numbered fragment change invalidates that Section and any downstream cache whose dependency attestation is no longer valid. A previous PASS from another Specification hash is never reused. Missing or duplicate numbered fragments stop the run before any NVIDIA request, and the pipeline never edits the Specification to repair the structure.
+The Specification is not compiled into the runner. Every execution parses the current `DESIGN_INDEX_SPECIFICATION.md` and trigger source, records headings, fence markers, table separators, thematic breaks, and whitespace as structural spans, and records all remaining paragraph lines, list items, table rows, and code payloads as audit leaves. The inventory must cover byte offset 0 through end-of-file with no overlap or uncovered range. Missing or duplicate numbered Sections, a source coverage gap, or a stale inventory stops the run before any NVIDIA request, and the pipeline never edits the Specification or trigger to repair the structure.
 
-The two fan-outs always schedule one logical request for every uncached Stage and Section. A first or forced full run creates exactly 19 independent `document-audit:S01-S19` requests followed by exactly 19 independent `implementation-audit:S01-S19` requests. No model receives another Section's input or output. Stage 1 never receives source code; Stage 2 never receives Specification text. If a provider response is truncated, malformed, schema-invalid, `UNKNOWN`, `BLOCKED_MISSING_EVIDENCE`, or `BLOCKED_CONTRACT_CONFLICT`, only that same Stage and Section is independently retried up to `PIPELINE_AUDIT_ATTEMPTS`. Run records distinguish `documentAuditRequests`, `implementationAuditRequests`, and `totalLogicalAuditRequests` from additional provider attempts. Responses are stored separately under `nodes/SXX/document-audit-attempts/attempt-N/` and `nodes/SXX/audit-attempts/attempt-N/`.
+The two fan-outs always schedule one logical request for every uncached atomic leaf. No model receives another leaf's result or another Section's natural-language output. Stage 1 never receives source code; Stage 2 never receives Specification text. If a provider response is truncated, malformed, schema-invalid, `UNKNOWN`, `BLOCKED_MISSING_EVIDENCE`, or `BLOCKED_CONTRACT_CONFLICT`, only that same Stage and leaf is independently retried up to `PIPELINE_AUDIT_ATTEMPTS`. Deterministic code aggregates leaf results into Section and work results; it never asks a model to summarize them. Run records distinguish `documentAuditRequests`, `implementationAuditRequests`, and `totalLogicalAuditRequests` from additional provider attempts. Leaf inputs and outputs are stored separately under `nodes/SXX/document-leaves/<requirement-id>/` and `nodes/SXX/implementation-leaves/<requirement-id>/`.
 
 ### 4. First-run safety settings
 
 The committed push workflow runs with `PIPELINE_DRY_RUN=false` and `PIPELINE_CREATE_PRS=true`. It still cannot publish arbitrary model output: a patch must pass request isolation, response schema validation, immutable-path rejection, base-hash validation, write ownership, diff size limits, `git apply --check`, type checks, unit tests, desktop/mobile browser tests, accessibility regression checks, patched-Section re-audit, affected PASS regression audits, open-PR conflict checks, and idempotency checks. Only then is an unmerged draft PR created. Before `git apply`, deterministic code may remove context-only or exact no-op hunks, restore repository-rooted path prefixes, discard untrusted index metadata, and recompute hunk counts; it never changes a meaningful added or deleted source line. A zero-context hunk is accepted only when every declared base hash still matches byte for byte, and the resulting worktree must still pass the Requirement re-audit and affected-PASS regression audits. Requirement IDs, Evidence refs, base hashes, and read/write sets are derived from the isolated audit input and the inspected diff instead of trusting duplicated model metadata.
 
-Every verified child PR leads with the Requirement ID assigned to that correction, followed by changed-line counts, concrete request IDs, guard results, and the run artifact. `S01` through `S19` remain the top-level audit Sections. The patch stage creates dynamic child nodes such as `S09-1`, `S09-2`, and `S09-3`; each child receives exactly one independently preflighted Requirement, runs as a separate NVIDIA request, and is independently guarded and re-audited. The pipeline opens at most five child PRs in one stack, merges them automatically from the deepest child toward the Section branch, and deletes the child branches. After every child batch is consolidated, one `S09`-style draft PR remains as the human review boundary. Stage 1 publishes each `DOCUMENT_GAP` as a Section-specific GitHub Issue. The normative pipeline contract is `IDEA_VALIDATION_AND_PR_PIPELINE.ko.md`.
+Every verified code child PR leads with the Requirement ID assigned to that correction, followed by changed-line counts, concrete request IDs, guard results, and the run artifact. `S01` through `S19` remain top-level aggregation Sections. Stage 1 creates one verbatim report child PR for every non-PASS Section, merges report children deepest-first in groups of at most five, and leaves one report representative draft PR plus one representative Issue per work. `DOCUMENT_GAPS.md` embeds each Section report byte-for-byte; oversized Issue payloads are split into ordered comments that reconstruct the exact file. Legacy Section Issue bodies are copied verbatim into the representative Issue before the old Issues are linked and closed. Stage 2 creates dynamic code children such as `S09-1`, `S09-2`, and `S09-3`; each child receives exactly one independently preflighted Requirement and is independently guarded and re-audited. Code children are also merged deepest-first in groups of at most five, leaving one `S09`-style draft PR as the human review boundary. The normative pipeline contract is `IDEA_VALIDATION_AND_PR_PIPELINE.ko.md`.
 
 An open Section representative PR is never closed and its branch is never deleted merely because `main` changed. The pipeline marks it stale, performs a fresh isolated audit against the current base, and preserves the PR number and review history. When a replacement diff passes every guard, only the bot-owned representative branch is updated with `--force-with-lease`. Temporary Requirement child PRs are different: after a verified batch is complete, they are recursively merged into the Section branch and their child branches are deleted. If a refreshed Section result is PASS, blocked, or cannot be patched safely, the representative PR remains open for a human decision.
 
@@ -157,23 +157,25 @@ The complete runner is under [`validation/`](validation/) and [`.github/workflow
 Manual inputs have the following meaning:
 
 - `trigger_path`: exactly one immutable `trigger/DESIGN_INDEX_gdweb-*.md` input. Push runs discover every matching input and skip unchanged works by fingerprint.
-- `force_full_audit`: ignores both valid PASS caches and sends all 38 primary audit requests, 19 per Stage.
+- `force_full_audit`: ignores both valid PASS caches and sends one primary request for every current Stage 1 and Stage 2 atomic leaf.
 - `dry_run`: applies a proposed diff only in an isolated temporary worktree and never publishes it.
-- `create_prs`: after every guard, browser test, and patched-code re-audit passes, publishes an idempotent draft PR. This requires `dry_run=false`.
+- `create_prs`: publishes the Stage 1 verbatim report tree, its representative Issue, and every Stage 2 patch that passes its guards, browser tests, and patched-code re-audit. Published draft PRs are idempotent, and this requires `dry_run=false`.
 - A published PR targets the branch/ref that ran the workflow. A `main` push therefore targets `main`, while an explicitly dispatched validation branch can test publication without modifying `main`.
 
 The end-to-end order is fixed:
 
 ```text
 parse current Specification and trigger
-  -> compute 19 Stage 1 document fingerprints
+  -> inventory every source byte as structural span or atomic leaf
+  -> compute one Stage 1 fingerprint per Specification leaf
   -> reuse valid immutable document PASS attestations before API calls
-  -> send one stateless Specification-to-DESIGN_INDEX request per remaining Section
-  -> merge Stage 1 JSON outputs with deterministic code
-  -> compute 19 Stage 2 implementation fingerprints using same-Section Stage 1 digests
+  -> send one stateless Specification-to-DESIGN_INDEX request per remaining leaf
+  -> aggregate Stage 1 leaves bottom-up with deterministic code
+  -> publish verbatim Section report child PRs, one report PR, and one representative Issue
+  -> compute one Stage 2 fingerprint per DESIGN_INDEX leaf using same-Section Stage 1 lineage
   -> reuse valid immutable implementation PASS attestations before API calls
-  -> send one stateless DESIGN_INDEX-to-source request per remaining Section
-  -> merge Stage 2 JSON outputs with deterministic code
+  -> send one stateless DESIGN_INDEX-to-source request per remaining leaf
+  -> aggregate Stage 2 leaves bottom-up with deterministic code
   -> require every PATCH_REQUIRED finding to name a supplied file owned by that Section
   -> send a separate patch request only for grounded PATCH_REQUIRED nodes
   -> try at most PIPELINE_PATCH_ATTEMPTS independently seeded candidates inside that Section
@@ -215,7 +217,7 @@ Open <http://127.0.0.1:4318/>. To inspect a downloaded Actions artifact, point t
 PIPELINE_VIEWER_DATA_ROOT=/absolute/path/to/.validation-runs/current npm run viewer
 ```
 
-The first grid shows the 19 Stage 1 document requests and the second grid shows the 19 Stage 2 implementation requests. The counters come directly from `documentAuditRequests`, `implementationAuditRequests`, and `totalLogicalAuditRequests` in the run summary.
+The first grid shows every Stage 1 document leaf request and the second grid shows every Stage 2 implementation leaf request. Their sizes change with the current documents. The counters come directly from `documentAuditRequests`, `implementationAuditRequests`, and `totalLogicalAuditRequests` in the run summary.
 
 ## Live Frontend Preview
 
