@@ -24,6 +24,7 @@
     --color-decoration: #eeeeff;
     --color-decoration-alt: #ddddee;
     --color-primary: #4169f5;
+    --color-primary-hover: #3157DD;
     --color-primary-pressed: #2748be;
     --color-overlay: rgb(0 0 0 / 52%);
     --container-main: 1012px;
@@ -32,6 +33,7 @@
     --gutter-mobile: 16px;
     --header-desktop: 68px;
     --button-height: 49px;
+    --header-mobile: 56px;
     --focus: 0 0 0 3px rgb(65 105 245 / 32%);
     --ease: cubic-bezier(.2, .8, .2, 1);
   }
