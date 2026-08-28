@@ -26,11 +26,33 @@ on:
   push:
     branches:
       - main
+    paths:
+      - trigger/**
+      - DESIGN_INDEX_SPECIFICATION.md
+      - DESIGN_INDEX_SPECIFICATION.ko.md
+      - frontend/**
+      - validation/src/**
+      - validation/schemas/**
+      - validation/impact-manifest.yml
+      - package.json
+      - package-lock.json
+      - tsconfig.json
   pull_request:
     branches:
       - main
     types:
       - closed
+    paths:
+      - trigger/**
+      - DESIGN_INDEX_SPECIFICATION.md
+      - DESIGN_INDEX_SPECIFICATION.ko.md
+      - frontend/**
+      - validation/src/**
+      - validation/schemas/**
+      - validation/impact-manifest.yml
+      - package.json
+      - package-lock.json
+      - tsconfig.json
   merge_group:
     types:
       - checks_requested
