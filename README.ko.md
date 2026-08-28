@@ -69,6 +69,7 @@ unset NVIDIA_API_KEY
 | `NVIDIA_TOP_P` | `0.95` | 해당 모델의 권장 top-p 값 |
 | `NVIDIA_RPM_LIMIT` | `40` | 저장소 측 rate limiter 값이며 계정 제한이 더 낮으면 함께 낮춤 |
 | `NVIDIA_AUDIT_CONCURRENCY` | `8` | stateless worker 동시성. 공용 40 RPM 시작 제한기가 요청 시작 시점은 계속 제어함 |
+| `NVIDIA_MAX_RETRIES` | `8` | network 오류, HTTP 429 또는 HTTP 5xx 뒤 논리 요청 하나에 허용하는 transport 재시도 횟수 |
 | `PIPELINE_TRIGGER_GLOB` | `trigger/DESIGN_INDEX_gdweb-*.md` | 작품별 run을 시작하는 불변 입력 문서 경로 |
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | 일반 코드 검증에서 유효한 PASS cache를 유지 |
 | `PIPELINE_DRY_RUN` | `false` | 임시 worktree 검증을 통과한 patch 게시 허용 |
@@ -76,7 +77,7 @@ unset NVIDIA_API_KEY
 | `PIPELINE_AUDIT_ATTEMPTS` | `5` (최소값) | transport/schema 결함과 애매하거나 차단된 판정을 위한 동일 leaf 독립 audit 최대 시도 횟수 |
 | `PIPELINE_PATCH_ATTEMPTS` | `8` | `PATCH_REQUIRED` Section 하나에 허용하는 전체 검증 재시도를 포함한 독립 seed patch 후보 최대 횟수 |
 
-이 값들은 runner 설정이며 전부 NVIDIA 요청에 그대로 전달되는 필드는 아닙니다. 특히 `NVIDIA_MAX_INPUT_TOKENS`는 HTTP 요청을 보내기 전에 runner가 검사합니다. 입력을 100만 token으로 가득 채우지 않고 `980000`으로 제한해 system message, chat template과 최대 4,096 output token을 위한 약 20,000 token의 여유를 둡니다.
+이 값들은 runner 설정이며 전부 NVIDIA 요청에 그대로 전달되는 필드는 아닙니다. 특히 `NVIDIA_MAX_INPUT_TOKENS`는 HTTP 요청을 보내기 전에 runner가 검사합니다. 입력을 100만 token으로 가득 채우지 않고 `980000`으로 제한해 system message, chat template과 최대 4,096 output token을 위한 약 20,000 token의 여유를 둡니다. `NVIDIA_RPM_LIMIT`는 transport 재시도를 포함한 모든 물리 HTTP 요청 시작에 적용됩니다. HTTP 429가 반환되면 하나의 공용 `Retry-After` cooldown을 모든 worker가 함께 따르며 동시성으로 이를 우회할 수 없습니다.
 
 GitHub CLI로도 Variable을 설정할 수 있습니다.
 
@@ -94,6 +95,7 @@ gh variable set NVIDIA_TEMPERATURE --body '1.0' --repo "$REPO"
 gh variable set NVIDIA_TOP_P --body '0.95' --repo "$REPO"
 gh variable set NVIDIA_RPM_LIMIT --body '40' --repo "$REPO"
 gh variable set NVIDIA_AUDIT_CONCURRENCY --body '8' --repo "$REPO"
+gh variable set NVIDIA_MAX_RETRIES --body '8' --repo "$REPO"
 gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' --repo "$REPO"
 gh variable set PIPELINE_FORCE_FULL_AUDIT --body 'false' --repo "$REPO"
 gh variable set PIPELINE_DRY_RUN --body 'false' --repo "$REPO"

@@ -69,6 +69,7 @@ Open **Settings → Secrets and variables → Actions → Variables → New repo
 | `NVIDIA_TOP_P` | `0.95` | Top-p value recommended for this model |
 | `NVIDIA_RPM_LIMIT` | `40` | Repository-side rate limiter; lower this if the account limit is lower |
 | `NVIDIA_AUDIT_CONCURRENCY` | `8` | Concurrent stateless workers; the shared 40 RPM start limiter still controls request starts |
+| `NVIDIA_MAX_RETRIES` | `8` | Transport retries per logical request after network errors, HTTP 429, or HTTP 5xx responses |
 | `PIPELINE_TRIGGER_GLOB` | `trigger/DESIGN_INDEX_gdweb-*.md` | Immutable input documents that start a work-specific run |
 | `PIPELINE_FORCE_FULL_AUDIT` | `false` | Preserves valid cached PASS results during ordinary code validation |
 | `PIPELINE_DRY_RUN` | `false` | Allows verified patches to be published after temporary-worktree validation |
@@ -77,7 +78,7 @@ Open **Settings → Secrets and variables → Actions → Variables → New repo
 | `PIPELINE_PATCH_ATTEMPTS` | `8` | Maximum independently seeded patch candidates, including full verification retries, for one `PATCH_REQUIRED` Section |
 | `PIPELINE_PR_MERGE_BATCH_SIZE` | `5` | Number of verified child PRs recursively merged deepest-first into one Section branch; valid range is 1-10 |
 
-These are runner configuration variables, not all direct NVIDIA request fields. In particular, `NVIDIA_MAX_INPUT_TOKENS` is enforced before the HTTP request is sent. The `980000` limit deliberately keeps approximately 20,000 tokens available for the system message, chat template, and up to 4,096 output tokens instead of filling the entire one-million-token window with input.
+These are runner configuration variables, not all direct NVIDIA request fields. In particular, `NVIDIA_MAX_INPUT_TOKENS` is enforced before the HTTP request is sent. The `980000` limit deliberately keeps approximately 20,000 tokens available for the system message, chat template, and up to 4,096 output tokens instead of filling the entire one-million-token window with input. `NVIDIA_RPM_LIMIT` applies to every physical HTTP request start, including transport retries. An HTTP 429 response extends one shared `Retry-After` cooldown for all workers; concurrency never bypasses that cooldown.
 
 The variables can also be configured with GitHub CLI:
 
@@ -95,6 +96,7 @@ gh variable set NVIDIA_TEMPERATURE --body '1.0' --repo "$REPO"
 gh variable set NVIDIA_TOP_P --body '0.95' --repo "$REPO"
 gh variable set NVIDIA_RPM_LIMIT --body '40' --repo "$REPO"
 gh variable set NVIDIA_AUDIT_CONCURRENCY --body '8' --repo "$REPO"
+gh variable set NVIDIA_MAX_RETRIES --body '8' --repo "$REPO"
 gh variable set PIPELINE_TRIGGER_GLOB --body 'trigger/DESIGN_INDEX_gdweb-*.md' --repo "$REPO"
 gh variable set PIPELINE_FORCE_FULL_AUDIT --body 'false' --repo "$REPO"
 gh variable set PIPELINE_DRY_RUN --body 'false' --repo "$REPO"

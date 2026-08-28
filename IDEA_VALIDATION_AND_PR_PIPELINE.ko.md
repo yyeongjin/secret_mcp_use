@@ -21,6 +21,10 @@
 9. 원문 parser는 heading, fence, 표 구분선과 공백을 구조 span으로 기록하고 나머지 모든 문단 줄, 목록 항목, 표 행과 code payload를 감사 leaf로 기록한다. 모든 byte는 구조 span 또는 leaf span에 귀속되어야 하며 미귀속 범위가 있으면 provider 호출 전에 실패한다.
 10. 1차와 2차의 호출 수는 19로 고정하지 않는다. 1차는 Specification leaf 전체, 2차는 DESIGN_INDEX leaf 전체를 각각 독립 호출한다. 19개 Section 호출은 V4에서 모델 호출 단위가 아니라 집계 단위다.
 11. 1차 Section 보고서와 통합 문서는 모델이 요약하지 않는다. 원문 leaf 결과, request ID, source span과 hash를 Section 번호순으로 이어 붙이며, GitHub 본문 한도를 넘으면 같은 대표 Issue의 순번 댓글로 나누고 재결합 hash를 검증한다.
+12. `NVIDIA_RPM_LIMIT`는 최초 요청뿐 아니라 network, HTTP 429와 HTTP 5xx transport 재시도를 포함한 모든 물리 HTTP 시작에 적용한다. worker 동시성이나 재시도 loop가 공용 시작 제한기를 우회하면 안 된다.
+13. HTTP 429의 `Retry-After`는 모든 worker가 공유하는 cooldown이다. 이미 rate limiter queue에 들어간 worker도 전송 직전에 cooldown을 다시 확인하며 더 긴 cooldown을 짧은 간격 값으로 덮어쓰지 않는다.
+14. 1차 Section에 `UNKNOWN` 또는 `FAILED_SCHEMA`가 하나라도 있으면 Section report 하위 PR, 대표 report PR과 대표 Issue를 하나도 발행하지 않고 workflow를 실패시킨다. 미판정 결과를 문서 누락 보고서로 공개해서는 안 된다.
+15. GitHub가 막 생성된 child PR의 mergeability를 계산하는 동안 반환하는 405 `Pull Request is not mergeable`은 제한된 횟수로 다시 조회·병합한다. 보호 규칙 실패처럼 실제로 병합할 수 없는 오류는 재시도 대상으로 넓히지 않는다.
 
 ## 문서 상태
 
@@ -44,6 +48,25 @@ DESIGN_INDEX 원문 -> 모든 source span -> 모든 leaf 독립 구현 감사
 ```
 
 Section 최종 상태는 결정적 집계기만 계산한다. 모든 자식이 PASS일 때만 부모가 PASS이며, 모델 응답 하나가 다른 leaf를 생략하거나 부모 상태를 덮어쓸 수 없다. 1차 보고서 결합은 byte 보존 assembler가 수행하고, 과거 revision의 원문과 hash를 수정하지 않는다.
+
+## Provider 호출과 게시 안전성
+
+논리 leaf 요청과 물리 HTTP 시도는 별도로 기록한다. 동일 leaf의 transport 재시도는 새 Requirement 감사가 아니지만 실제 provider rate limit을 소비하므로 매 시도마다 공용 시작 제한기를 거쳐야 한다.
+
+```text
+logical leaf request
+  -> shared RPM start slot
+  -> physical HTTP attempt
+       -> success: schema 검사와 leaf 판정
+       -> 429: shared Retry-After cooldown 갱신 -> shared RPM start slot부터 재시도
+       -> network/5xx: bounded backoff -> shared RPM start slot부터 재시도
+```
+
+- 기본 transport 재시도 횟수는 `NVIDIA_MAX_RETRIES=8`이며 논리 leaf 독립 재시도 예산인 `PIPELINE_AUDIT_ATTEMPTS`와 구분한다.
+- rate limiter는 최초 호출과 모든 transport 재시도를 합친 전체 물리 시작 횟수를 `NVIDIA_RPM_LIMIT` 이하로 직렬화한다.
+- 429가 발생하면 현재 실행의 모든 worker가 가장 긴 활성 cooldown을 공유한다.
+- transport 및 schema 재시도를 소진한 leaf는 `UNKNOWN`이다. Stage 1에 이런 leaf가 있으면 보고서 PR과 Issue를 생성하지 않으며, Stage 2에 있으면 code PR을 생성하지 않고 전체 workflow를 실패시킨다.
+- Stage 1 게시가 시작된 뒤 GitHub mergeability 계산이 늦는 경우 child PR을 다시 조회하고 제한적으로 병합을 재시도한다. 최대 횟수를 소진하면 대표 PR이나 Issue를 만들지 않고 실패시킨다.
 
 ## V4 입력 계약
 

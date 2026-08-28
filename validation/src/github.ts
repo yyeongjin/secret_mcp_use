@@ -155,7 +155,7 @@ function wait(milliseconds: number): Promise<void> {
 export function isRetryableChildMergeError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /GitHub API PUT .*\/pulls\/\d+\/merge failed with (?:405|409):/.test(message) &&
-    /Base branch was modified|mergeability|try the merge again/i.test(message);
+    /Base branch was modified|Pull Request is not mergeable|mergeability|try the merge again/i.test(message);
 }
 
 async function githubRequest<T>(
@@ -546,6 +546,14 @@ export async function publishDocumentGapReports(args: {
   if (!args.config.github.token || args.config.dryRun || !args.config.createPrs) return [];
   const publications: PublishedDocumentGapReport[] = [];
   for (const summary of args.summaries) {
+    const unresolvedSections = summary.nodes.filter((node) => (
+      node.documentAuditStatus === "UNKNOWN" || node.documentAuditStatus === "FAILED_SCHEMA"
+    ));
+    if (unresolvedSections.length > 0) {
+      throw new Error(
+        `Stage 1 report publication refused unresolved Sections: ${unresolvedSections.map((node) => node.sectionId).join(", ")}.`,
+      );
+    }
     const bundle = summary.documentReport;
     if (!bundle) {
       throw new Error(`Stage 1 report publication is missing its exact report bundle for ${summary.targetId}.`);

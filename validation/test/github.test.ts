@@ -132,6 +132,9 @@ test("recursive merge retries only GitHub branch-recalculation races", () => {
   )), true);
   assert.equal(isRetryableChildMergeError(new Error(
     'GitHub API PUT /repos/example/repo/pulls/41/merge failed with 405: {"message":"Pull Request is not mergeable"}',
+  )), true);
+  assert.equal(isRetryableChildMergeError(new Error(
+    'GitHub API PUT /repos/example/repo/pulls/41/merge failed with 405: {"message":"Required status check is failing"}',
   )), false);
 });
 

@@ -46,6 +46,30 @@ test("audit retries cannot be configured below five independent calls", async ()
   assert.match(config, /auditAttempts: Math\.max\(integer\(process\.env\.PIPELINE_AUDIT_ATTEMPTS, 5, 1\), 5\)/);
 });
 
+test("every physical NVIDIA retry obeys one shared RPM and 429 cooldown", async () => {
+  const source = await readFile(new URL("../src/nvidia.ts", import.meta.url), "utf8");
+  const config = await readFile(new URL("../src/config.ts", import.meta.url), "utf8");
+  const workflow = await readFile(
+    new URL("../../.github/workflows/validate-design-index.yml", import.meta.url),
+    "utf8",
+  );
+  const start = source.indexOf("async completeJson");
+  const end = source.indexOf("export async function runWithConcurrency", start);
+  const completeJson = source.slice(start, end);
+  const retryLoop = completeJson.indexOf("for (let attempt = 0;");
+  const limiterWait = completeJson.indexOf("await this.limiter.wait()", retryLoop);
+  const fetchCall = completeJson.indexOf("fetch(endpoint", limiterWait);
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  assert.ok(retryLoop < limiterWait && limiterWait < fetchCall);
+  assert.match(source, /private cooldownUntil = 0/);
+  assert.match(source, /Math\.max\(0, this\.nextStart, this\.cooldownUntil\) - Date\.now\(\)/);
+  assert.match(completeJson, /response\.status === 429\) this\.limiter\.defer\(retryDelay\)/);
+  assert.match(config, /maxRetries: integer\(process\.env\.NVIDIA_MAX_RETRIES, 8, 0\)/);
+  assert.match(workflow, /NVIDIA_MAX_RETRIES:.*'8'/);
+});
+
 test("recursive child consolidation cannot merge a Section representative into main", async () => {
   const github = await readFile(new URL("../src/github.ts", import.meta.url), "utf8");
   const start = github.indexOf("export async function mergeChildPullRequestBatch");
@@ -97,8 +121,11 @@ test("V4 audits source leaves bottom-up and publishes one verbatim Stage 1 repor
   assert.match(github, /documentReportMarker/);
   assert.match(github, /issues\?state=all&per_page=100/);
   assert.match(github, /issue\.state === "open" && issue\.body\?\.includes\(marker\)/);
+  assert.match(github, /Stage 1 report publication refused unresolved Sections/);
   assert.doesNotMatch(github, /publishDocumentGapIssues/);
   assert.match(document, /모든 leaf가 PASS일 때만 Section이 PASS/);
   assert.match(document, /대표 Issue는 작품당 하나만 연다/);
   assert.match(document, /최대 55,000 UTF-8 byte 단위 댓글/);
+  assert.match(document, /1차 Section에 `UNKNOWN` 또는 `FAILED_SCHEMA`가 하나라도 있으면/);
+  assert.match(document, /모든 물리 HTTP 시작에 적용/);
 });

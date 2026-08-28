@@ -89,6 +89,7 @@ jobs:
       NVIDIA_TOP_P: ${{ vars.NVIDIA_TOP_P || '0.95' }}
       NVIDIA_RPM_LIMIT: ${{ vars.NVIDIA_RPM_LIMIT || '40' }}
       NVIDIA_AUDIT_CONCURRENCY: ${{ vars.NVIDIA_AUDIT_CONCURRENCY || '8' }}
+      NVIDIA_MAX_RETRIES: ${{ vars.NVIDIA_MAX_RETRIES || '8' }}
       PIPELINE_OUTPUT_ROOT: .validation-runs/current
       PIPELINE_STATE_ROOT: .validation-state
       PIPELINE_FORCE_FULL_AUDIT: ${{ vars.PIPELINE_FORCE_FULL_AUDIT || 'false' }}

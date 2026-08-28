@@ -35,11 +35,16 @@ export function completionSeed(fingerprint: Sha256, requestId: string): number {
 
 class StartRateLimiter {
   private nextStart = 0;
+  private cooldownUntil = 0;
   private chain = Promise.resolve();
   private readonly intervalMs: number;
 
   constructor(rpmLimit: number) {
     this.intervalMs = Math.ceil(60_000 / rpmLimit);
+  }
+
+  defer(milliseconds: number): void {
+    this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + milliseconds);
   }
 
   async wait(): Promise<void> {
@@ -49,8 +54,11 @@ class StartRateLimiter {
       release = resolve;
     });
     await previous;
-    const waitMs = Math.max(0, this.nextStart - Date.now());
-    if (waitMs > 0) await delay(waitMs);
+    while (true) {
+      const waitMs = Math.max(0, this.nextStart, this.cooldownUntil) - Date.now();
+      if (waitMs <= 0) break;
+      await delay(waitMs);
+    }
     this.nextStart = Date.now() + this.intervalMs;
     release();
   }
@@ -332,6 +340,8 @@ function retryAfterMs(response: Response, attempt: number): number {
   if (header) {
     const seconds = Number(header);
     if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+    const date = Date.parse(header);
+    if (Number.isFinite(date)) return Math.max(0, date - Date.now());
   }
   return Math.min(30_000, 1000 * 2 ** attempt);
 }
@@ -361,7 +371,6 @@ export class NvidiaClient {
       );
     }
 
-    await this.limiter.wait();
     const endpoint = `${this.config.nvidia.baseUrl.replace(/\/$/, "")}/chat/completions`;
     const seed = completionSeed(args.fingerprint, args.requestId);
     const body = {
@@ -381,6 +390,9 @@ export class NvidiaClient {
     };
 
     for (let attempt = 0; attempt <= this.config.nvidia.maxRetries; attempt += 1) {
+      // Every physical HTTP start, including transport retries, consumes the
+      // shared RPM budget. This prevents concurrent retry bursts after 429s.
+      await this.limiter.wait();
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), this.config.nvidia.timeoutMs);
       let response: Response;
@@ -409,7 +421,9 @@ export class NvidiaClient {
       if (!response.ok) {
         const message = (await response.text()).slice(0, 1000);
         if ((response.status === 429 || response.status >= 500) && attempt < this.config.nvidia.maxRetries) {
-          await delay(retryAfterMs(response, attempt));
+          const retryDelay = retryAfterMs(response, attempt);
+          if (response.status === 429) this.limiter.defer(retryDelay);
+          else await delay(retryDelay);
           continue;
         }
         throw new Error(`${args.requestId} NVIDIA HTTP ${response.status}: ${message}`);

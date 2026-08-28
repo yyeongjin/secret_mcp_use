@@ -120,7 +120,7 @@ export async function loadConfig(argv = process.argv.slice(2)): Promise<Pipeline
       rpmLimit: integer(process.env.NVIDIA_RPM_LIMIT, 40, 1),
       concurrency: integer(process.env.NVIDIA_AUDIT_CONCURRENCY, 8, 1),
       timeoutMs: integer(process.env.NVIDIA_TIMEOUT_MS, 900000, 1000),
-      maxRetries: integer(process.env.NVIDIA_MAX_RETRIES, 3, 0),
+      maxRetries: integer(process.env.NVIDIA_MAX_RETRIES, 8, 0),
     },
     github: {
       token: process.env.GITHUB_TOKEN ?? "",
