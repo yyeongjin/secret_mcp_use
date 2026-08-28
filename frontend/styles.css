@@ -189,6 +189,7 @@
 @layer responsive {
   @media (max-width: 1024px) {
     .site-header__inner { width: calc(100% - 40px); grid-template-columns: 130px 1fr 56px; }
+    .site-header { position: fixed; }
     .primary-nav { gap: 5px; }
     .primary-nav a { padding-inline: 5px; font-size: 11px; }
     .hero { height: 580px; }
