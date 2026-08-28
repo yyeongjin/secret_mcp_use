@@ -83,6 +83,8 @@ DESIGN_INDEX + Evidence + Request Contract + frontend 소스 push
 22. `UNKNOWN` 상태, `UNKNOWN` finding, `UNKNOWN`을 포함한 placeholder Requirement ID는 patch 후보나 PR 큐에 절대 넣지 않는다. 같은 Stage·Section만 새 request ID와 seed로 독립 재시도하고, 최소 5회 뒤에도 안정적인 Requirement ID와 `MISSING` 판정을 얻지 못하면 해당 실행을 실패 처리한다. 이 실패가 다른 Section이나 다른 Requirement ID의 patch 호출 및 PR 생성을 생략하는 조건이 되어서는 안 된다.
 23. 한 Requirement의 preflight, patch 후보, test, re-audit 또는 PR 게시가 최종 실패해도 같은 Section의 뒤쪽 Requirement ID를 건너뛰지 않는다. 실패 ID만 unresolved로 기록하고 변경되지 않은 마지막 검증 parent에서 다음 `SXX-N`을 계속 호출한다. 따라서 한 Section에 고유 Requirement ID가 40개면 앞선 일부가 실패하더라도 40개 모두 독립 preflight를 받아야 하며, 검증된 항목의 하위 PR들은 5개씩 정리되어 Section 대표 PR에 누적된다.
 24. 모델이 근거 있는 finding을 반환했지만 Requirement ID에 할당 Section 접두사를 빠뜨린 경우 판단 전체를 UNKNOWN으로 폐기하지 않는다. 오케스트레이터가 `SXX-<원본 ID>`로 결정적으로 소유권을 보정한 뒤 같은 finding과 status를 보존한다. 이 보정은 다른 Section으로 이동하거나 여러 finding을 합치는 작업이 아니며, 빈 ID와 `UNKNOWN` placeholder는 기존 격리 규칙을 따른다.
+25. 2차 감사가 허용된 새 frontend 텍스트 파일 경로를 정확히 지목하면 preflight, patch 요청과 저장 artifact 모두 그 경로를 `0 byte` 빈 기준 파일로 전달한다. 모델이 `writeSet` 메타데이터를 빠뜨려도 감사 finding이 지목한 동일 경로의 실제 diff는 허용 경로·확장자·변경량 검사를 통과할 수 있어야 한다.
+26. 1차가 `DOCUMENT_GAP`이고 2차 finding에도 코드에 넣을 정확한 값이나 Evidence가 없으며 기존 파일 위치만 지목된 경우, patch 후보를 모두 소진한 항목은 코드 누락으로 꾸며 PR을 만들지 않는다. 해당 항목은 같은 Section의 1차 Issue가 소유한다. 단, 정확한 acceptance behavior로부터 새 테스트 파일을 만들 수 있는 경우에는 이 규칙으로 재분류하지 않고 2차 코드 correction을 계속한다.
 
 `19개 항목`은 상위 검증 격리 단위이지 API 호출이나 일시적인 하위 PR 생성 이력의 상한이 아니다. 한 실행에서 17개가 PASS이고 2개가 누락되었더라도 각 누락 범위가 크면 두 Section 아래에 여러 하위 patch 요청과 stacked PR이 생긴다. 정리 완료 후 열린 검토 PR은 해당 두 Section의 대표 PR 두 개다.
 
@@ -101,6 +103,8 @@ DESIGN_INDEX + Evidence + Request Contract + frontend 소스 push
 - 한 상위 Section의 첫 patch 요청은 `SXX-1`이며 정렬된 첫 번째 unresolved Requirement ID 하나와 그 항목의 파일 slice만 받는다.
 - 각 하위 노드는 patch 생성 전에 같은 Requirement ID 하나와 현재 누적 부모 소스만 받는 독립 NVIDIA preflight를 수행한다. preflight가 `PATCH_REQUIRED`를 확정한 항목은 반드시 patch·검증·PR로 진행한다.
 - preflight가 현재 소스에서 이미 충족된 거짓 양성을 `PASS`로 확인하거나 정확한 구현 원본이 없는 항목을 비-patch 상태로 재분류하면 `AUDIT_RECLASSIFIED` artifact를 남기고 PR을 만들지 않는다. 이는 대기·차단이 아니라 잘못된 상위 판정을 현재 소스로 정정한 최종 결과다.
+- 1차 `DOCUMENT_GAP` 때문에 정확한 구현값이 문서에 존재하지 않는 항목은 독립 patch 후보를 모두 확인한 뒤 1차 Issue로 귀속한다. 모델이 값을 발명해 코드 PR을 만드는 것은 금지하지만, 이 항목 때문에 같은 Section의 뒤쪽 Requirement 처리를 중단해서도 안 된다.
+- finding이 허용된 새 frontend 텍스트 파일을 요구하면 그 정확한 경로의 빈 파일을 preflight와 patch 입력에 제공한다. 새 파일이라는 이유만으로 `BLOCKED_MISSING_VALUE` 처리하지 않는다.
 - 해당 Requirement ID를 완전히 구현하고 guard·test·재감사를 통과하면 그 diff만 `SXX-1` 하위 PR로 게시한다. 다른 Requirement ID의 변경을 같은 NVIDIA 응답이나 하위 PR에 넣지 않는다.
 - 남은 Requirement ID가 있으면 게시된 `SXX-1` commit에서 입력과 fingerprint를 다시 계산해 다음 Requirement ID 하나만 담은 `SXX-2`를 호출한다. 이후에도 같은 규칙으로 재귀한다.
 - 각 하위 노드는 자신에게 할당된 Requirement ID 하나를 완전히 해결해야 한다. 진전 없는 응답은 같은 하위 노드의 교체 후보로만 재시도한다.

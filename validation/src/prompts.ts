@@ -1,4 +1,5 @@
-import { canonicalJson } from "./hash.ts";
+import { canonicalJson, sha256 } from "./hash.ts";
+import { matchesAnyPath } from "./manifest.ts";
 import type {
   DocumentAuditInput,
   NodeAuditInput,
@@ -225,10 +226,29 @@ export function patchReauditUserPrompt(input: {
   });
 }
 
-function focusedPatchFiles(auditInput: NodeAuditInput, auditOutput: NodeAuditOutput) {
+export function focusedPatchFiles(auditInput: NodeAuditInput, auditOutput: NodeAuditOutput) {
   const referencedPaths = new Set(auditOutput.findings.flatMap((finding) => finding.implementationRefs));
   const focused = auditInput.implementation.files.filter((file) => referencedPaths.has(file.path));
-  return focused.length > 0 ? focused : auditInput.implementation.files;
+  const existingPaths = new Set(auditInput.implementation.files.map((file) => file.path));
+  const syntheticNewFiles = [...referencedPaths]
+    .filter((candidate) => (
+      !existingPaths.has(candidate) &&
+      candidate.startsWith("frontend/") &&
+      /\.(?:css|html|js|jsx|json|mjs|ts|tsx)$/.test(candidate) &&
+      matchesAnyPath(candidate, auditInput.policy.allowedWriteGlobs)
+    ))
+    .sort()
+    .map((candidate): NodeAuditInput["implementation"]["files"][number] => ({
+      path: candidate,
+      contentHash: sha256(""),
+      byteLength: 0,
+      encoding: "utf8",
+      content: "",
+    }));
+  if (focused.length > 0 || syntheticNewFiles.length > 0) {
+    return [...focused, ...syntheticNewFiles];
+  }
+  return auditInput.implementation.files;
 }
 
 function targetLineHints(

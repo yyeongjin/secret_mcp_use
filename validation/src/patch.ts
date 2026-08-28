@@ -297,11 +297,16 @@ export function canonicalizePatchOutput(args: {
   if (status === "PATCH" && diff.trim() !== "") {
     changedPaths = inspectUnifiedDiff(diff).changedPaths;
   }
+  const addressedFindings = args.auditOutput.findings.filter((finding) => (
+    addressedRequirementIds.includes(finding.requirementId)
+  ));
+  const findingPaths = addressedFindings.flatMap((finding) => finding.implementationRefs);
+  const groundedFindingPaths = new Set(findingPaths);
   const declaredWritePaths = new Set(declaredPaths(source.writeSet));
   for (const changedPath of changedPaths) {
     if (!fileByPath.has(changedPath)) {
       const allowedNewTextFile = (
-        declaredWritePaths.has(changedPath) &&
+        (declaredWritePaths.has(changedPath) || groundedFindingPaths.has(changedPath)) &&
         matchesAnyPath(changedPath, args.auditInput.policy.allowedWriteGlobs) &&
         changedPath.startsWith("frontend/") &&
         /\.(?:css|html|js|jsx|json|mjs|ts|tsx)$/.test(changedPath)
@@ -319,10 +324,6 @@ export function canonicalizePatchOutput(args: {
     }
   }
 
-  const addressedFindings = args.auditOutput.findings.filter((finding) => (
-    addressedRequirementIds.includes(finding.requirementId)
-  ));
-  const findingPaths = addressedFindings.flatMap((finding) => finding.implementationRefs);
   const readPaths = [...new Set([
     ...declaredPaths(source.readSet),
     ...findingPaths,

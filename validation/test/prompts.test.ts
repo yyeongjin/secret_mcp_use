@@ -63,6 +63,30 @@ test("audit output requires exact repository paths instead of source excerpts", 
   assert.ok(prompt.implementationRefContract.forbiddenExamples.includes("source excerpt"));
 });
 
+test("a grounded owned new test path is supplied as an empty synthetic file", () => {
+  const input = {
+    ...auditInput,
+    node: { sectionId: "S18", fingerprint },
+    implementation: { files: [] },
+    policy: { maxChangedLines: 120, allowedWriteGlobs: ["frontend/tests/**"] },
+  } as unknown as NodeAuditInput;
+  const output = {
+    ...auditOutput,
+    sectionId: "S18",
+    findings: [{
+      ...auditOutput.findings[0],
+      requirementId: "S18-TEST-001",
+      implementationRefs: ["frontend/tests/design-index-s18.spec.ts"],
+    }],
+  } as NodeAuditOutput;
+  const prompt = JSON.parse(patchUserPrompt({ auditInput: input, auditOutput: output })) as {
+    files: Array<{ path: string; byteLength: number; content: string }>;
+  };
+  assert.deepEqual(prompt.files.map((file) => file.path), ["frontend/tests/design-index-s18.spec.ts"]);
+  assert.equal(prompt.files[0].byteLength, 0);
+  assert.equal(prompt.files[0].content, "");
+});
+
 test("patch prompt includes only finding-referenced files and exact physical lines", () => {
   assert.match(PATCH_SYSTEM_PROMPT, /exactly the one supplied Requirement ID/);
   const prompt = JSON.parse(patchUserPrompt({ auditInput, auditOutput })) as {

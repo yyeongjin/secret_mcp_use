@@ -382,7 +382,7 @@ test("an empty patch that reports an already satisfied finding becomes an audit 
   assert.equal(output.diff, "");
 });
 
-test("an owned declared text file can be created from an empty base", () => {
+test("an audit-grounded owned text file can be created even when model write metadata is omitted", () => {
   const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;
   const auditInput = {
     node: { sectionId: "S18", fingerprint },
@@ -410,7 +410,7 @@ test("an owned declared text file can be created from an empty base", () => {
         "+export {};",
         "",
       ].join("\n"),
-      writeSet: [{ path: "frontend/tests/home.spec.ts", baseHash: "model-value-is-ignored" }],
+      writeSet: [],
     },
     auditInput,
     auditOutput,

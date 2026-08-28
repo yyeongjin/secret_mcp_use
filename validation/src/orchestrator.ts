@@ -55,6 +55,7 @@ import {
   REGRESSION_AUDIT_SYSTEM_PROMPT,
   auditUserPrompt,
   documentAuditUserPrompt,
+  focusedPatchFiles,
   patchPreflightUserPrompt,
   patchRetryUserPrompt,
   patchReauditUserPrompt,
@@ -344,6 +345,23 @@ export function auditOutputNeedsIndependentRetry(output: NodeAuditOutput): boole
 
 export function patchOutputNeedsIndependentRetry(output: NodePatchOutput): boolean {
   return output.status !== "PATCH";
+}
+
+export function isDocumentGapOnlyPatchFailure(
+  input: NodeAuditInput,
+  auditOutput: NodeAuditOutput,
+  patchOutput: NodePatchOutput,
+): boolean {
+  if (
+    patchOutput.status !== "BLOCKED_MISSING_VALUE" ||
+    input.contract.documentAudit.status !== "DOCUMENT_GAP"
+  ) return false;
+  const existingPaths = new Set(input.implementation.files.map((file) => file.path));
+  return auditOutput.findings.length > 0 && auditOutput.findings.every((finding) => (
+    finding.evidenceRefs.length === 0 &&
+    finding.implementationRefs.length > 0 &&
+    finding.implementationRefs.every((reference) => existingPaths.has(reference))
+  ));
 }
 
 export function groundOwnedNewImplementationPaths(
@@ -1223,7 +1241,7 @@ async function runPatches(args: {
           let output: NodePatchOutput;
 
           try {
-            const findingPaths = new Set(remainingFindings.flatMap((finding) => finding.implementationRefs));
+            const patchFiles = focusedPatchFiles(currentInput, remainingAuditOutput);
             const patchInputArtifact = {
               schemaVersion: "design-validation/patch-input/v2",
               runId: args.runId,
@@ -1239,7 +1257,7 @@ async function runPatches(args: {
               designIndexFragment: currentInput.contract.designIndexFragment,
               documentAudit: currentInput.contract.documentAudit,
               evidence: currentInput.evidence,
-              files: currentInput.implementation.files.filter((file) => findingPaths.has(file.path)),
+              files: patchFiles,
               allowedWriteGlobs: currentInput.policy.allowedWriteGlobs,
               payload: currentInput.payload,
             };
@@ -1355,6 +1373,27 @@ async function runPatches(args: {
                 childResolvedWithoutPatch = true;
                 break;
               }
+            }
+            if (
+              attempt === args.config.patchGenerationAttempts &&
+              isDocumentGapOnlyPatchFailure(currentInput, remainingAuditOutput, output)
+            ) {
+              resolvedWithoutPatchRequirementIds.add(requirementId);
+              const reclassified: PatchAttemptRecord = {
+                attempt: 0,
+                patchNodeId,
+                status: "AUDIT_RECLASSIFIED",
+                reason: `${patchNodeId} exhausted independent patch candidates because the exact value is absent from DESIGN_INDEX; the same Section's Stage 1 DOCUMENT_GAP Issue owns this omission.`,
+              };
+              attempts.push(reclassified);
+              await writeJson(
+                path.join(scratchDirectory, sectionId, patchNodeId, "document-gap-reclassification.json"),
+                reclassified,
+              );
+              finalRecord = undefined;
+              childIndex += 1;
+              childResolvedWithoutPatch = true;
+              break;
             }
             finalRecord = { sectionId, ...attemptRecord, attempts };
             break;
@@ -2438,7 +2477,7 @@ async function runTrigger(args: {
         ].includes(record.status))
         .map((record) => `${record.sectionId}: ${record.status} - ${record.reason}`),
       ...incompletePatchSections.map((sectionId) => (
-        `${sectionId}: PATCH_REQUIRED did not produce a complete ${effectiveConfig.createPrs ? "stacked draft PR chain" : "verified patch chain"} in this run.`
+        `${sectionId}: PATCH_REQUIRED did not produce a complete ${effectiveConfig.createPrs ? "Section representative PR" : "verified patch chain"} in this run.`
       )),
     ],
   };

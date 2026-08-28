@@ -8,6 +8,7 @@ import {
   enforcePatchGrounding,
   groundOwnedNewImplementationPaths,
   incompletePatchSectionIds,
+  isDocumentGapOnlyPatchFailure,
   nextPatchRequirementFindings,
   patchOutputNeedsIndependentRetry,
   rejectedPatchSummaryForRetry,
@@ -334,6 +335,33 @@ test("ambiguous audit and blocked patch outputs require independent replacement 
   } satisfies NodePatchOutput;
   assert.equal(patchOutputNeedsIndependentRetry(patch), true);
   assert.equal(patchOutputNeedsIndependentRetry({ ...patch, status: "PATCH" }), false);
+});
+
+test("an exhausted exact-value failure returns to its Stage 1 document-gap owner", () => {
+  const input = {
+    ...groundingInput(["frontend/**"]),
+    contract: { documentAudit: { status: "DOCUMENT_GAP" } },
+  } as NodeAuditInput;
+  const audit = patchRequired(["frontend/styles.css"]);
+  const blocked = {
+    schemaVersion: "design-validation/patch-output/v2",
+    sectionId: "S18",
+    fingerprint,
+    status: "BLOCKED_MISSING_VALUE",
+    requirementIds: [],
+    evidenceRefs: [],
+    readSet: [],
+    writeSet: [],
+    reason: "The exact DESIGN_INDEX value is absent.",
+    diff: "",
+  } satisfies NodePatchOutput;
+  assert.equal(isDocumentGapOnlyPatchFailure(input, audit, blocked), true);
+  assert.equal(isDocumentGapOnlyPatchFailure(
+    input,
+    patchRequired(["frontend/tests/design-index-s18.spec.ts"]),
+    blocked,
+  ), false, "a missing owned new file remains a Stage 2 code correction",
+  );
 });
 
 test("every PATCH_REQUIRED Section must publish a complete PR chain", () => {
