@@ -1,0 +1,144 @@
+{
+  "schemaVersion": "design-validation/document-gap-report/v1",
+  "targetId": "yyeongjin-secret-mcp-use--gdweb-26357",
+  "triggerPath": "trigger/DESIGN_INDEX_gdweb-26357.md",
+  "reportHash": "sha256:1cd48ca7575b91d7cc633dd3fa6cc3d55cf7fac95d3c342a98583c9cf4008878",
+  "sections": [
+    {
+      "sectionId": "S01",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:55bafe8030af12513aa4d6710760a9cdce593e976fe61f718591c4aeadd76596",
+      "contentHash": "sha256:07f6c80a207fc041dd2803f8b545395dcda40e0cb663b528dd4305794ff899b5",
+      "byteLength": 136581,
+      "leafCount": 86
+    },
+    {
+      "sectionId": "S03",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:5b99d5427f3a32051078da328f9328f1c47756470e83639ecbc2b1edf243b0ee",
+      "contentHash": "sha256:6e058cafcdfc1d1db172b7ee27fb422d286262db26188e64124b23261bfef709",
+      "byteLength": 27241,
+      "leafCount": 15
+    },
+    {
+      "sectionId": "S04",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:a3cf569c20cc3a3292ae33aa90daa918068dde791aa9aae38e05227d287e61d4",
+      "contentHash": "sha256:feaf7caefe6c506fceae4c1cccd924bcbb3715c675df82e3099be464d5b6bf01",
+      "byteLength": 14782,
+      "leafCount": 8
+    },
+    {
+      "sectionId": "S05",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:745006179d09bdae427de423c43972f99e4bcc70724be4cc7529842edae364b7",
+      "contentHash": "sha256:7205faf9f9ac6745c5ad1a39daa0c1cf582e4e9d91ad64d7f0ab917faf37f68f",
+      "byteLength": 68316,
+      "leafCount": 38
+    },
+    {
+      "sectionId": "S06",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:2f150b69a3f86b250ac9c3539eeac3eb4411f5a4b0e765304bb878e3547e4c3b",
+      "contentHash": "sha256:3e0e27bd01f558dbabcf68020348667c060a09171f2bbbc03362d670a070b1fb",
+      "byteLength": 40515,
+      "leafCount": 22
+    },
+    {
+      "sectionId": "S07",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:456e213f6f93523071e814c2175f757d11489919c369a488a74477f8db17c5f9",
+      "contentHash": "sha256:b8898ecb0a792b2eda5ea63a533a5b5f508e986b2cd7e1175bdf9eed385fa4f8",
+      "byteLength": 25532,
+      "leafCount": 14
+    },
+    {
+      "sectionId": "S08",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:d14ea2c98a6ee54cd68c6acaff75c3fd078598bb7e36b4b153786c42c07c2650",
+      "contentHash": "sha256:56b43c7e3753c97204a43abbc3f2d2bdb2df132f14b47fc5d802f4e15290c725",
+      "byteLength": 22174,
+      "leafCount": 12
+    },
+    {
+      "sectionId": "S10",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:e8253da9c6653afd767e5f66a8d0a086ab521bc03d382826c0813db235d93120",
+      "contentHash": "sha256:ab6c7f689fa2d9108d17379cd00c35a05479f71d336381a21f3de50d97e31da2",
+      "byteLength": 29444,
+      "leafCount": 14
+    },
+    {
+      "sectionId": "S11",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:39da195653bcfe0b0190b34845ae1cb56742ef1a0210b48ff395494360f96beb",
+      "contentHash": "sha256:f392e14772e9d3fff06f58e78d8dd212a11f7ec1b67c74771be9d428ef19b0cd",
+      "byteLength": 12996,
+      "leafCount": 6
+    },
+    {
+      "sectionId": "S12",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:35e6b32184fb6491fb9be9236a613d8d5c0aeb207b734296042b944b66f2dd5f",
+      "contentHash": "sha256:f6f7c9beb335fb4e9840b5c966e312074c9fd639fd5c6b511e97ac0d5331e5d7",
+      "byteLength": 13297,
+      "leafCount": 7
+    },
+    {
+      "sectionId": "S13",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:d096a2e93b0c81eaaa6031f2ec92a8cf07557590ed0031afe3e4b2fb99e30022",
+      "contentHash": "sha256:9f27ecbd6a2d97967313c1225169b4809c9edafbe485c7b57297c5b1577952f9",
+      "byteLength": 27932,
+      "leafCount": 14
+    },
+    {
+      "sectionId": "S14",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:60b71f2e46cbb629a5e01ecedc8d7e2a756f54f03b1a5fcf14b4009b2a79ffff",
+      "contentHash": "sha256:13ca8900584641381bde6f6ad2ccd5805e78f7d5688ec131088c2f82405b6503",
+      "byteLength": 27827,
+      "leafCount": 15
+    },
+    {
+      "sectionId": "S15",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:d314707072ad04aea62c0806c5ab1ed387828fbebdc4e1ab6c486ddfd92e862c",
+      "contentHash": "sha256:7abe438f747954076307d4294c5565bcd5d480d6ee3c55ac5c95e4f7384353f4",
+      "byteLength": 17317,
+      "leafCount": 10
+    },
+    {
+      "sectionId": "S16",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:b589cb6c28c9fb2adf6fd5ef5d6c90a66338f30910236f4c0768f2e892a4c597",
+      "contentHash": "sha256:0049c59bd5564a80f95255f72181b153bdefb3d7aab2af3d0fbb265800589451",
+      "byteLength": 21500,
+      "leafCount": 13
+    },
+    {
+      "sectionId": "S17",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:400c73af41dd0590adadc11ce97e6163360e79c77ec770c12380f666cedcfcf8",
+      "contentHash": "sha256:beda35324efb1036358fe03d8bfc16783014c13eecea1c7f187e9b45cbf4f051",
+      "byteLength": 16346,
+      "leafCount": 10
+    },
+    {
+      "sectionId": "S18",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:636e8bb270f01fd63248414b68c91b696ea1010a92782b01b8947398c84d448e",
+      "contentHash": "sha256:312d9c89c9f366325c085d2614b731ffd8efbb049cd578ec27fc57a4b731338e",
+      "byteLength": 33234,
+      "leafCount": 20
+    },
+    {
+      "sectionId": "S19",
+      "status": "DOCUMENT_GAP",
+      "fingerprint": "sha256:d297188f35bc8156c15efed01268f7071c9f73d9161f5fcf3a0a129670f697ce",
+      "contentHash": "sha256:5df146fa6a58408bbed7421362688ca32df707f0f6fe2941820c233f3adee24f",
+      "byteLength": 12483,
+      "leafCount": 7
+    }
+  ]
+}
