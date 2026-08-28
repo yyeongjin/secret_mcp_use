@@ -289,6 +289,7 @@ function targetLineHints(
 ) {
   if (file.content === null) return [];
   const needles = new Set<string>();
+  const customPropertyNeedles = new Set<string>();
   for (const finding of findings) {
     if (finding.componentId) needles.add(finding.componentId);
     const findingText = finding.finding ?? "";
@@ -296,7 +297,10 @@ function targetLineHints(
     for (const match of findingText.matchAll(/[.#][A-Za-z_][\w-]*(?:\s+(?:[.#]?[A-Za-z_][\w-]*|\[[^\]]+\]))*/g)) {
       needles.add(match[0]);
     }
-    for (const match of findingText.matchAll(/(?:--|aria-)[A-Za-z0-9_-]+/g)) needles.add(match[0]);
+    for (const match of findingText.matchAll(/(?:--|aria-)[A-Za-z0-9_-]+/g)) {
+      needles.add(match[0]);
+      if (match[0].startsWith("--")) customPropertyNeedles.add(match[0]);
+    }
     for (const match of findingText.matchAll(/\b\d+(?:\.\d+)?(?:px|rem|em|vw|vh|%)\b/gi)) {
       needles.add(match[0]);
     }
@@ -304,14 +308,36 @@ function targetLineHints(
   const normalizedNeedles = [...needles]
     .map((value) => value.trim().replace(/^['"]|['"]$/g, ""))
     .filter((value) => value.length >= 3);
+  for (const property of customPropertyNeedles) {
+    const family = /^(--[^-]+-)/.exec(property)?.[1];
+    if (family) normalizedNeedles.push(family);
+  }
   const lines = file.content.split("\n");
   const hintedIndexes = new Set<number>();
-  lines.forEach((text, index) => {
-    if (!normalizedNeedles.some((needle) => text.includes(needle))) return;
-    for (let candidate = Math.max(0, index - 6); candidate <= Math.min(lines.length - 1, index + 6); candidate += 1) {
+  const addWindow = (index: number, radius = 6) => {
+    for (let candidate = Math.max(0, index - radius); candidate <= Math.min(lines.length - 1, index + radius); candidate += 1) {
       hintedIndexes.add(candidate);
     }
+  };
+  lines.forEach((text, index) => {
+    if (!normalizedNeedles.some((needle) => text.includes(needle))) return;
+    addWindow(index);
   });
+  if (hintedIndexes.size === 0 && file.path.endsWith(".css") && customPropertyNeedles.size > 0) {
+    const rootStart = lines.findIndex((line) => /(?:^|\s):root\s*\{/.test(line));
+    if (rootStart >= 0) {
+      let depth = 0;
+      let rootEnd = rootStart;
+      for (; rootEnd < lines.length; rootEnd += 1) {
+        depth += (lines[rootEnd].match(/\{/g) ?? []).length;
+        depth -= (lines[rootEnd].match(/\}/g) ?? []).length;
+        if (rootEnd > rootStart && depth <= 0) break;
+      }
+      for (let index = Math.max(0, rootStart - 2); index <= Math.min(lines.length - 1, rootEnd + 2); index += 1) {
+        hintedIndexes.add(index);
+      }
+    }
+  }
   return [...hintedIndexes]
     .sort((left, right) => left - right)
     .slice(0, 80)

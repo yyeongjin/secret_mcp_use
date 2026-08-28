@@ -149,6 +149,54 @@ test("patch hints include exact surrounding context for selectors and viewport v
   assert.ok(prompt.files[0].targetLineHints.some(({ line }) => line === 6));
 });
 
+test("a missing custom property receives the exact root declaration block as its insertion context", () => {
+  const content = [
+    "@layer tokens {",
+    "  :root {",
+    "    --color-primary: #4169f5;",
+    "    --focus: 0 0 0 3px rgb(65 105 245 / 32%);",
+    "    --ease: cubic-bezier(.2, .8, .2, 1);",
+    "  }",
+    "}",
+    "",
+    "@layer base {",
+    "  body { min-width: 320px; }",
+    "}",
+    "",
+  ].join("\n");
+  const input = {
+    ...auditInput,
+    node: { sectionId: "S09", fingerprint },
+    implementation: {
+      files: [{
+        path: "frontend/styles.css",
+        contentHash: cssHash,
+        byteLength: content.length,
+        encoding: "utf8",
+        content,
+      }],
+    },
+  } as NodeAuditInput;
+  const output = {
+    ...auditOutput,
+    sectionId: "S09",
+    findings: [{
+      ...auditOutput.findings[0],
+      requirementId: "S09-BP-XL",
+      componentId: "--bp-xl",
+      finding: "Token `--bp-xl` with value `1280px` is required but missing.",
+    }],
+  } as NodeAuditOutput;
+  const prompt = JSON.parse(patchUserPrompt({ auditInput: input, auditOutput: output })) as {
+    files: Array<{ targetLineHints: Array<{ line: number; text: string }> }>;
+  };
+  const hints = prompt.files[0].targetLineHints;
+  assert.ok(hints.some(({ text }) => text.includes(":root")));
+  assert.ok(hints.some(({ text }) => text.includes("--focus")));
+  assert.ok(hints.some(({ text }) => text.includes("--ease")));
+  assert.equal(hints.some(({ text }) => text.includes("body {")), false);
+});
+
 test("patch preflight independently owns one Requirement ID", () => {
   assert.match(PATCH_PREFLIGHT_SYSTEM_PROMPT, /Do not trust the earlier PATCH_REQUIRED judgment/);
   const prompt = JSON.parse(patchPreflightUserPrompt({ auditInput, auditOutput })) as {
