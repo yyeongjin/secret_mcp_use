@@ -86,6 +86,7 @@ DESIGN_INDEX + Evidence + Request Contract + frontend 소스 push
 25. 2차 감사가 허용된 새 frontend 텍스트 파일 경로를 정확히 지목하면 preflight, patch 요청과 저장 artifact 모두 그 경로를 `0 byte` 빈 기준 파일로 전달한다. 모델이 `writeSet` 메타데이터를 빠뜨려도 감사 finding이 지목한 동일 경로의 실제 diff는 허용 경로·확장자·변경량 검사를 통과할 수 있어야 한다.
 26. 1차가 `DOCUMENT_GAP`이고 2차 finding에도 코드에 넣을 정확한 값이나 Evidence가 없으며 기존 파일 위치만 지목된 경우, patch 후보를 모두 소진한 항목은 코드 누락으로 꾸며 PR을 만들지 않는다. 해당 항목은 같은 Section의 1차 Issue가 소유한다. 단, 정확한 acceptance behavior로부터 새 테스트 파일을 만들 수 있는 경우에는 이 규칙으로 재분류하지 않고 2차 코드 correction을 계속한다.
 27. 모델이 실제 추가 코드와 원본의 연속 문맥을 작성했지만 unified diff의 `+` 표식만 빠뜨린 경우, 오케스트레이터는 원본 파일에서 정확히 한 번만 일치하는 연속 anchor를 찾았을 때에만 나머지 모델 작성 줄의 추가 표식을 기계적으로 복원할 수 있다. 전체 hunk가 원본과 같거나 anchor가 없거나 둘 이상이면 복원하지 않고 후보를 거부한다. 이 복원은 모델이 작성하지 않은 코드나 값을 새로 만드는 작업이 아니다.
+28. patch 후보 하나가 `BLOCKED_AUDIT_CONFLICT`를 반환하면 마지막 patch 시도까지 기다리거나 뒤의 형식 오류 후보로 그 주장을 덮어쓰지 않는다. 해당 finding, 현재 전체 focused source와 충돌 사유만 받는 별도의 NVIDIA conflict arbiter를 즉시 호출한다. arbiter가 semantic CSS 조합, 계산식, media query 또는 동등 구현을 확인해 `PASS`한 경우에만 `AUDIT_RECLASSIFIED`로 종료하고, 그렇지 않으면 남은 독립 patch 후보를 계속 호출한다.
 
 `19개 항목`은 상위 검증 격리 단위이지 API 호출이나 일시적인 하위 PR 생성 이력의 상한이 아니다. 한 실행에서 17개가 PASS이고 2개가 누락되었더라도 각 누락 범위가 크면 두 Section 아래에 여러 하위 patch 요청과 stacked PR이 생긴다. 정리 완료 후 열린 검토 PR은 해당 두 Section의 대표 PR 두 개다.
 

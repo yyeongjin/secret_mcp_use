@@ -25,6 +25,12 @@ test("PATCH_REQUIRED scheduling cannot regain dependency or write-set wait gates
   assert.match(runPatches, /PATCH_PREFLIGHT_SYSTEM_PROMPT/);
   assert.match(runPatches, /AUDIT_RECLASSIFIED/);
   assert.match(runPatches, /patch-conflict-preflight/);
+  assert.match(runPatches, /PATCH_CONFLICT_PREFLIGHT_SYSTEM_PROMPT/);
+  assert.ok(
+    runPatches.indexOf('if (output.status === "BLOCKED_AUDIT_CONFLICT")') <
+      runPatches.indexOf("patchOutputNeedsIndependentRetry(output)"),
+    "an audit-conflict candidate must be independently arbitrated before another patch candidate replaces it",
+  );
   assert.match(runPatches, /mergeChildPullRequestBatch/);
   assert.match(runPatches, /prMergeBatchSize/);
   assert.match(runPatches, /publishSectionPullRequest/);

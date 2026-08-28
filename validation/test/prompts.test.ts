@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AUDIT_SYSTEM_PROMPT,
+  PATCH_CONFLICT_PREFLIGHT_SYSTEM_PROMPT,
   PATCH_PREFLIGHT_SYSTEM_PROMPT,
   PATCH_REAUDIT_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
   auditUserPrompt,
+  patchConflictPreflightUserPrompt,
   patchPreflightUserPrompt,
   patchReauditUserPrompt,
   patchRetryUserPrompt,
@@ -113,6 +115,33 @@ test("patch preflight independently owns one Requirement ID", () => {
   assert.deepEqual(prompt.requiredOutput.ownedRequirementIds, ["S10-COLOR"]);
   assert.deepEqual(prompt.claimedFinding.map((finding) => finding.requirementId), ["S10-COLOR"]);
   assert.deepEqual(prompt.files.map((file) => file.path), ["frontend/styles.css"]);
+});
+
+test("patch conflict arbitration receives the candidate reason in a separate request", () => {
+  assert.match(PATCH_CONFLICT_PREFLIGHT_SYSTEM_PROMPT, /max-width, margins, formulas/);
+  const prompt = JSON.parse(patchConflictPreflightUserPrompt({
+    auditInput,
+    auditOutput,
+    conflictOutput: {
+      schemaVersion: "design-validation/patch-output/v2",
+      sectionId: "S10",
+      fingerprint,
+      status: "BLOCKED_AUDIT_CONFLICT",
+      requirementIds: [],
+      evidenceRefs: [],
+      readSet: [],
+      writeSet: [],
+      reason: "The max-width already computes the required outer gutter.",
+      diff: "",
+    },
+  })) as {
+    task: string;
+    candidateConflict: { status: string; reason: string };
+    requiredOutput: { ownedRequirementIds: string[] };
+  };
+  assert.equal(prompt.task, "independently-arbitrate-one-patch-audit-conflict");
+  assert.match(prompt.candidateConflict.reason, /max-width/);
+  assert.deepEqual(prompt.requiredOutput.ownedRequirementIds, ["S10-COLOR"]);
 });
 
 test("retry prompt carries a bounded rejection summary instead of the rejected diff", () => {

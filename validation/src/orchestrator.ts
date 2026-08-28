@@ -48,6 +48,7 @@ import { augmentAuditWithExactCssFindings, buildPatchScope } from "./patch-scope
 import {
   AUDIT_SYSTEM_PROMPT,
   DOCUMENT_AUDIT_SYSTEM_PROMPT,
+  PATCH_CONFLICT_PREFLIGHT_SYSTEM_PROMPT,
   PATCH_PREFLIGHT_SYSTEM_PROMPT,
   PATCH_REAUDIT_SYSTEM_PROMPT,
   PATCH_RETRY_SYSTEM_PROMPT,
@@ -56,6 +57,7 @@ import {
   auditUserPrompt,
   documentAuditUserPrompt,
   focusedPatchFiles,
+  patchConflictPreflightUserPrompt,
   patchPreflightUserPrompt,
   patchRetryUserPrompt,
   patchReauditUserPrompt,
@@ -1331,28 +1333,25 @@ async function runPatches(args: {
             const attemptRecord: PatchAttemptRecord = { attempt, patchNodeId, status: output.status, reason };
             attempts.push(attemptRecord);
             await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
-            if (attempt < args.config.patchGenerationAttempts && patchOutputNeedsIndependentRetry(output)) {
-              retryContext = { output, failure: { stage: "guard", reason } };
-              continue;
-            }
             if (output.status === "BLOCKED_AUDIT_CONFLICT") {
               const conflictResolution = await callAudit({
                 client: args.client,
                 input: currentInput,
                 kind: "reaudit",
-                requestId: `${args.runId}:patch-conflict-preflight:${patchNodeId}`,
+                requestId: `${args.runId}:patch-conflict-preflight:${patchNodeId}:candidate:${attempt}`,
                 maxAttempts: args.config.auditAttempts,
                 validate: args.validateAudit,
                 outputSchema: args.auditOutputSchema,
-                systemPrompt: PATCH_PREFLIGHT_SYSTEM_PROMPT,
-                userPrompt: patchPreflightUserPrompt({
+                systemPrompt: PATCH_CONFLICT_PREFLIGHT_SYSTEM_PROMPT,
+                userPrompt: patchConflictPreflightUserPrompt({
                   auditInput: currentInput,
                   auditOutput: remainingAuditOutput,
+                  conflictOutput: output,
                 }),
               });
               reauditCalls += conflictResolution.attempts.length;
               await saveAuditCall(
-                path.join(scratchDirectory, sectionId, patchNodeId, "conflict-preflight"),
+                path.join(scratchDirectory, sectionId, patchNodeId, `conflict-preflight-attempt-${attempt}`),
                 currentInput,
                 conflictResolution,
               );
@@ -1373,6 +1372,10 @@ async function runPatches(args: {
                 childResolvedWithoutPatch = true;
                 break;
               }
+            }
+            if (attempt < args.config.patchGenerationAttempts && patchOutputNeedsIndependentRetry(output)) {
+              retryContext = { output, failure: { stage: "guard", reason } };
+              continue;
             }
             if (
               attempt === args.config.patchGenerationAttempts &&
