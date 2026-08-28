@@ -13,6 +13,7 @@ import {
   isRetryablePatchCandidateError,
   normalizeUnifiedDiffMechanics,
   relocateUnifiedDiffHunks,
+  restoreOmittedAdditionPrefixes,
 } from "../src/patch.ts";
 import type { ImpactManifest, NodeAuditInput, NodeAuditOutput, PipelineConfig, Sha256 } from "../src/types.ts";
 
@@ -197,6 +198,34 @@ test("mechanical normalization repairs an unprefixed context line in a model hun
   assert.match(normalized, /^--- a\/frontend\/styles\.css$/m);
   assert.match(normalized, /^\+\+\+ b\/frontend\/styles\.css$/m);
   assert.match(normalized, /^ }$/m);
+});
+
+test("mechanical normalization restores omitted addition markers only from a unique source anchor", () => {
+  const raw = [
+    "diff --git a/frontend/app.js b/frontend/app.js",
+    "--- a/frontend/app.js",
+    "+++ b/frontend/app.js",
+    "@@",
+    "/** @typedef {{id:string,label:string}} NavItem */",
+    "/** @typedef {{id:string,title:string}} EditorialItem */",
+    " const header = document.querySelector('[data-header]');",
+  ].join("\n");
+  const baseFiles = new Map([
+    ["frontend/app.js", "const header = document.querySelector('[data-header]');\nconst menu = null;\n"],
+  ]);
+  const restored = restoreOmittedAdditionPrefixes(raw, baseFiles);
+  assert.match(restored, /^\+\/\*\* @typedef \{\{id:string,label:string\}\} NavItem \*\/$/m);
+  assert.match(restored, /^ const header = document\.querySelector/m);
+  const normalized = normalizeUnifiedDiffMechanics(restored);
+  const relocated = relocateUnifiedDiffHunks(normalized, baseFiles);
+  assert.match(relocated, /^@@ -1,1 \+1,3 @@$/m);
+
+  const ambiguous = raw.replace(
+    "const header = document.querySelector('[data-header]');",
+    "const item = null;",
+  );
+  const ambiguousBase = new Map([["frontend/app.js", "const item = null;\nconst item = null;\n"]]);
+  assert.equal(restoreOmittedAdditionPrefixes(ambiguous, ambiguousBase), ambiguous);
 });
 
 test("mechanical normalization rejects a patch containing only no-op replacements", () => {

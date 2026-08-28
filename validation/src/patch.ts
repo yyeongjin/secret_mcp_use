@@ -156,6 +156,98 @@ export function normalizeUnifiedDiffMechanics(diff: string): string {
   return changedHunks > 0 ? `${normalized.join("\n")}\n` : "";
 }
 
+function exactSequenceMatches(sourceLines: string[], sequence: string[]): number[] {
+  const matches: number[] = [];
+  for (let start = 0; start + sequence.length <= sourceLines.length; start += 1) {
+    if (sequence.every((line, offset) => sourceLines[start + offset] === line)) {
+      matches.push(start);
+    }
+  }
+  return matches;
+}
+
+export function restoreOmittedAdditionPrefixes(
+  diff: string,
+  baseFiles: ReadonlyMap<string, string>,
+): string {
+  const lines = diff.replaceAll("\r\n", "\n").split("\n");
+  let currentPath: string | null = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const fileHeader = /^diff --git (\S+) (\S+)$/.exec(lines[index]);
+    if (fileHeader) {
+      currentPath = normalizedDiffPath(fileHeader[2]) ?? normalizedDiffPath(fileHeader[1]);
+      continue;
+    }
+    if (lines[index].startsWith("--- ") && lines[index + 1]?.startsWith("+++ ")) {
+      currentPath = normalizedDiffPath(lines[index + 1].slice(4))
+        ?? normalizedDiffPath(lines[index].slice(4));
+      index += 1;
+      continue;
+    }
+    if (!lines[index].startsWith("@@ ") && lines[index].trim() !== "@@") continue;
+    if (!currentPath) continue;
+    const source = baseFiles.get(currentPath);
+    if (source === undefined) continue;
+
+    let bodyEnd = index + 1;
+    while (
+      bodyEnd < lines.length &&
+      !lines[bodyEnd].startsWith("@@ ") &&
+      lines[bodyEnd].trim() !== "@@" &&
+      !lines[bodyEnd].startsWith("diff --git ") &&
+      !(lines[bodyEnd].startsWith("--- ") && lines[bodyEnd + 1]?.startsWith("+++ "))
+    ) bodyEnd += 1;
+    let bodyIndexes = Array.from(
+      { length: bodyEnd - index - 1 },
+      (_, offset) => index + 1 + offset,
+    );
+    if (bodyEnd === lines.length && lines.at(-1) === "") bodyIndexes = bodyIndexes.slice(0, -1);
+    if (
+      bodyIndexes.length < 2 ||
+      bodyIndexes.some((lineIndex) => /^[+\-]/.test(lines[lineIndex])) ||
+      bodyIndexes.some((lineIndex) => lines[lineIndex] === "\\ No newline at end of file")
+    ) {
+      index = bodyEnd - 1;
+      continue;
+    }
+
+    const bodyText = bodyIndexes.map((lineIndex) => (
+      lines[lineIndex].startsWith(" ") ? lines[lineIndex].slice(1) : lines[lineIndex]
+    ));
+    const sourceLines = source.replaceAll("\r\n", "\n").split("\n");
+    if (exactSequenceMatches(sourceLines, bodyText).length > 0) {
+      index = bodyEnd - 1;
+      continue;
+    }
+
+    const candidates: Array<{ contextStart: number; contextEnd: number; size: number }> = [];
+    for (let split = 1; split < bodyText.length; split += 1) {
+      const suffix = bodyText.slice(split);
+      if (exactSequenceMatches(sourceLines, suffix).length === 1) {
+        candidates.push({ contextStart: split, contextEnd: bodyText.length, size: suffix.length });
+      }
+      const prefix = bodyText.slice(0, split);
+      if (exactSequenceMatches(sourceLines, prefix).length === 1) {
+        candidates.push({ contextStart: 0, contextEnd: split, size: prefix.length });
+      }
+    }
+    candidates.sort((left, right) => right.size - left.size);
+    const best = candidates[0];
+    if (!best || candidates[1]?.size === best.size) {
+      index = bodyEnd - 1;
+      continue;
+    }
+    bodyIndexes.forEach((lineIndex, offset) => {
+      const prefix = offset >= best.contextStart && offset < best.contextEnd ? " " : "+";
+      lines[lineIndex] = `${prefix}${bodyText[offset]}`;
+    });
+    index = bodyEnd - 1;
+  }
+
+  return lines.join("\n");
+}
+
 export function relocateUnifiedDiffHunks(
   diff: string,
   baseFiles: ReadonlyMap<string, string>,
@@ -291,7 +383,10 @@ export function canonicalizePatchOutput(args: {
   );
   const rawDiff = typeof source.diff === "string" ? source.diff : "";
   const diff = status === "PATCH"
-    ? relocateUnifiedDiffHunks(normalizeUnifiedDiffMechanics(rawDiff), baseTextByPath)
+    ? relocateUnifiedDiffHunks(
+      normalizeUnifiedDiffMechanics(restoreOmittedAdditionPrefixes(rawDiff, baseTextByPath)),
+      baseTextByPath,
+    )
     : rawDiff;
   let changedPaths: string[] = [];
   if (status === "PATCH" && diff.trim() !== "") {
