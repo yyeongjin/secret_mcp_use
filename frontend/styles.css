@@ -108,7 +108,7 @@
   .action--dark { background: #000; color: #fff; }
   .action--dark:hover { background: #222; }
   .action--primary { background: var(--color-primary); color: #fff; }
-  .action--primary:hover { background: var(--color-primary-hover); }
+  .action--primary:hover { background: #3157DD; }
   .action--primary:active { background: var(--color-primary-pressed); }
 
   .sustainability { position: relative; min-height: 1231px; padding-top: 151px; overflow: hidden; }
