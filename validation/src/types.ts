@@ -395,6 +395,7 @@ export interface PipelineConfig {
   createPrs: boolean;
   maxChangedFiles: number;
   maxChangedLines: number;
+  prMergeBatchSize: number;
   auditAttempts: number;
   patchGenerationAttempts: number;
   nvidia: {

@@ -20,6 +20,12 @@ interface PullRequestResponse {
   base?: { ref: string; sha: string };
 }
 
+interface PullRequestMergeResponse {
+  sha: string;
+  merged: boolean;
+  message: string;
+}
+
 interface IssueCommentResponse {
   body?: string | null;
 }
@@ -64,6 +70,8 @@ interface NodeCheckSummary {
       url: string;
       branch: string;
       baseBranch: string;
+      mergeBatch?: number;
+      mergedIntoSection?: boolean;
     }>;
   } | null;
 }
@@ -111,7 +119,7 @@ interface TargetCheckSummary {
 
 async function githubRequest<T>(
   config: PipelineConfig,
-  method: "GET" | "POST" | "PATCH" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
   route: string,
   body?: unknown,
 ): Promise<T> {
@@ -147,6 +155,10 @@ export function branchName(input: NodeAuditInput, patchNodeId: string = input.no
   const target = input.run.targetId.toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 100);
   const fingerprint = input.node.fingerprint.slice("sha256:".length, "sha256:".length + 12);
   return `auto/${target}/${patchNodeId}/${fingerprint}`;
+}
+
+export function sectionBranchName(input: NodeAuditInput): string {
+  return branchName(input, input.node.sectionId);
 }
 
 export function nodeCheckConclusion(node: Pick<NodeCheckSummary, "auditStatus" | "executionState" | "patch">): CheckConclusion {
@@ -304,7 +316,7 @@ export function buildNodeCheckOutput(args: {
   const childPullRequests = node.patch?.childPullRequests ?? [];
   const childPublication = childPullRequests.length > 0
     ? childPullRequests.map((pull) => (
-      `- [${pull.patchNodeId} PR #${pull.number}](${pull.url}): \`${pull.branch}\` -> \`${pull.baseBranch}\``
+      `- [${pull.patchNodeId} PR #${pull.number}](${pull.url}): batch \`${pull.mergeBatch ?? "unknown"}\`, ${pull.mergedIntoSection ? "merged into Section" : "pending consolidation"}`
     )).join("\n")
     : null;
   const disposition = pullRequest
@@ -349,7 +361,7 @@ export function buildNodeCheckOutput(args: {
       "## Next action",
       "",
       disposition,
-      ...(childPublication ? ["", "## Stacked child PRs", "", childPublication] : []),
+      ...(childPublication ? ["", "## Consolidated child PR history", "", childPublication] : []),
       "",
       patchReason,
     ].join("\n"),
@@ -540,6 +552,124 @@ export async function reconcileStaleAutomationPullRequests(config: PipelineConfi
   return preserved;
 }
 
+export async function prepareSectionBranch(args: {
+  config: PipelineConfig;
+  input: NodeAuditInput;
+  baseBranch: string;
+  baseCommit: string;
+}): Promise<{ branch: string; commit: string }> {
+  await assertBranchAtCommit(args.config, args.baseBranch, args.baseCommit);
+  const branch = sectionBranchName(args.input);
+  if (branch === args.config.github.baseBranch || branch === args.baseBranch) {
+    throw new Error(`Refusing to use protected parent branch ${branch} as a Section aggregation branch.`);
+  }
+  const remote = await runCommand("git", ["ls-remote", "--exit-code", "--heads", "origin", branch], {
+    cwd: args.config.repositoryRoot,
+    allowFailure: true,
+  });
+  if (remote.exitCode === 0) {
+    const commit = remote.stdout.trim().split(/\s+/)[0];
+    if (commit !== args.baseCommit) {
+      throw new Error(
+        `SECTION_BRANCH_EXISTS: ${branch} is already at ${commit}; preserve its representative PR or clean it before a fresh run.`,
+      );
+    }
+    return { branch, commit };
+  }
+  await runCommand("git", ["push", "--quiet", "origin", `${args.baseCommit}:refs/heads/${branch}`], {
+    cwd: args.config.repositoryRoot,
+  });
+  return { branch, commit: args.baseCommit };
+}
+
+export interface MergeableChildPullRequest {
+  patchNodeId: string;
+  number: number;
+  url: string;
+  branch: string;
+  baseBranch: string;
+}
+
+export function recursiveMergeOrder(
+  pulls: MergeableChildPullRequest[],
+  sectionBranch: string,
+): MergeableChildPullRequest[] {
+  if (pulls.length === 0) return [];
+  for (let index = 0; index < pulls.length; index += 1) {
+    const expectedBase = index === 0 ? sectionBranch : pulls[index - 1].branch;
+    if (pulls[index].baseBranch !== expectedBase) {
+      throw new Error(
+        `INVALID_CHILD_CHAIN: ${pulls[index].patchNodeId} targets ${pulls[index].baseBranch}, expected ${expectedBase}.`,
+      );
+    }
+  }
+  return [...pulls].reverse();
+}
+
+export async function mergeChildPullRequestBatch(args: {
+  config: PipelineConfig;
+  sectionId: string;
+  sectionBranch: string;
+  pulls: MergeableChildPullRequest[];
+}): Promise<{ commit: string; mergedPullNumbers: number[] }> {
+  if (args.sectionBranch === args.config.github.baseBranch) {
+    throw new Error(`Refusing to auto-merge ${args.sectionId} children directly into ${args.config.github.baseBranch}.`);
+  }
+  const mergedPullNumbers: number[] = [];
+  for (const expected of recursiveMergeOrder(args.pulls, args.sectionBranch)) {
+    const pull = await githubRequest<PullRequestResponse>(
+      args.config,
+      "GET",
+      `/repos/${args.config.repository}/pulls/${expected.number}`,
+    );
+    if (pull.merged_at) {
+      mergedPullNumbers.push(pull.number);
+      continue;
+    }
+    if (pull.state !== "open") {
+      throw new Error(`Child PR #${pull.number} is ${pull.state}; recursive consolidation requires an open or merged PR.`);
+    }
+    if (pull.head?.ref !== expected.branch || pull.base?.ref !== expected.baseBranch) {
+      throw new Error(
+        `Child PR #${pull.number} changed shape: ${pull.head?.ref ?? "unknown"} -> ${pull.base?.ref ?? "unknown"}.`,
+      );
+    }
+    if (
+      expected.baseBranch === args.config.github.baseBranch ||
+      !expected.branch.startsWith("auto/") ||
+      !expected.baseBranch.startsWith("auto/")
+    ) {
+      throw new Error(`Refusing to auto-merge child PR #${pull.number} outside the Section automation tree.`);
+    }
+    const merge = await githubRequest<PullRequestMergeResponse>(
+      args.config,
+      "PUT",
+      `/repos/${args.config.repository}/pulls/${pull.number}/merge`,
+      {
+        merge_method: "merge",
+        commit_title: `chore(${args.sectionId.toLowerCase()}): consolidate ${expected.patchNodeId}`,
+      },
+    );
+    if (!merge.merged) {
+      throw new Error(`GitHub did not merge child PR #${pull.number}: ${merge.message}`);
+    }
+    mergedPullNumbers.push(pull.number);
+    await runCommand("git", ["push", "--quiet", "origin", "--delete", expected.branch], {
+      cwd: args.config.repositoryRoot,
+      allowFailure: true,
+    });
+  }
+  const reference = await githubRequest<GitReferenceResponse>(
+    args.config,
+    "GET",
+    `/repos/${args.config.repository}/git/ref/heads/${encodeURIComponent(args.sectionBranch)}`,
+  );
+  await runCommand("git", ["fetch", "--quiet", "origin", `refs/heads/${args.sectionBranch}`], {
+    cwd: args.config.repositoryRoot,
+  });
+  return { commit: reference.object.sha, mergedPullNumbers };
+}
+
 function fencedCode(language: string, value: string): string {
   const longest = Math.max(2, ...[...value.matchAll(/`+/g)].map((match) => match[0].length));
   const fence = "`".repeat(longest + 1);
@@ -616,7 +746,7 @@ export function buildPullRequestBody(args: {
     "",
     args.manifest.runUrl ? `Run artifact: ${args.manifest.runUrl}` : `Run ID: \`${args.manifest.runId}\``,
     "",
-    "This draft PR contains an actual verified code correction. It is never auto-approved or auto-merged.",
+    "This verified child PR is an internal aggregation node. After its batch is complete, the pipeline merges it from the deepest child toward the Section branch; only the Section representative PR remains for human review.",
     "",
     keyMarker(args.manifest.prKey),
     manifestMarker(args.manifest),
@@ -736,8 +866,128 @@ export async function publishPatchPullRequest(args: {
       head: branch,
       base: args.baseBranch,
       body,
-      draft: true,
+      draft: false,
     },
   );
   return { branch, commit, number: pull.number, url: pull.html_url, reused: false, merged: false };
+}
+
+export function buildSectionPullRequestBody(args: {
+  manifest: PullRequestManifest;
+  childPullRequests: Array<MergeableChildPullRequest & { requirementIds: string[]; mergeBatch: number }>;
+  batchSize: number;
+}): string {
+  const grouped = new Map<number, typeof args.childPullRequests>();
+  for (const pull of args.childPullRequests) {
+    const values = grouped.get(pull.mergeBatch) ?? [];
+    values.push(pull);
+    grouped.set(pull.mergeBatch, values);
+  }
+  const batches = [...grouped.entries()].sort(([left], [right]) => left - right).flatMap(([batch, pulls]) => [
+    `### Batch ${batch}`,
+    "",
+    ...pulls.map((pull) => (
+      `- [${pull.patchNodeId} PR #${pull.number}](${pull.url}) merged into the Section branch: ${codeItems(pull.requirementIds)}`
+    )),
+    "",
+  ]);
+  return [
+    "## Section correction summary",
+    "",
+    `- Target: \`${args.manifest.targetId}\``,
+    `- Section: \`${args.manifest.sectionId}\``,
+    `- Trigger: \`${args.manifest.triggerSource.path}\``,
+    `- Requirements corrected: ${codeItems(args.manifest.requirementIds)}`,
+    `- Child PRs consolidated: \`${args.childPullRequests.length}\``,
+    `- Maximum children per merge batch: \`${args.batchSize}\``,
+    `- Aggregate patch hash: \`${args.manifest.patchHash}\``,
+    "",
+    "## Recursive child consolidation",
+    "",
+    ...batches,
+    "Every child was independently preflighted, patched, guarded, tested, re-audited, and regression-checked. The pipeline merged each completed batch from the deepest descendant toward this Section branch and removed the child automation branches.",
+    "",
+    "## Human review boundary",
+    "",
+    `This draft PR is the single review boundary for \`${args.manifest.sectionId}\`. Its base is \`${args.manifest.baseBranch}\`; the automation must never merge this representative PR, and a user decides whether to merge it.`,
+    "",
+    args.manifest.runUrl ? `Run artifact: ${args.manifest.runUrl}` : `Run ID: \`${args.manifest.runId}\``,
+    "",
+    keyMarker(args.manifest.prKey),
+    manifestMarker(args.manifest),
+  ].join("\n");
+}
+
+export async function publishSectionPullRequest(args: {
+  config: PipelineConfig;
+  input: NodeAuditInput;
+  manifest: PullRequestManifest;
+  sectionBranch: string;
+  sectionCommit: string;
+  childPullRequests: Array<MergeableChildPullRequest & { requirementIds: string[]; mergeBatch: number }>;
+}): Promise<{
+  branch: string;
+  commit: string;
+  number: number;
+  url: string;
+  reused: boolean;
+}> {
+  await assertBranchAtCommit(args.config, args.manifest.baseBranch, args.manifest.baseCommit);
+  if (args.sectionBranch === args.config.github.baseBranch || args.sectionBranch === args.manifest.baseBranch) {
+    throw new Error(`Section representative branch must be isolated from ${args.manifest.baseBranch}.`);
+  }
+  const sectionReference = await githubRequest<GitReferenceResponse>(
+    args.config,
+    "GET",
+    `/repos/${args.config.repository}/git/ref/heads/${encodeURIComponent(args.sectionBranch)}`,
+  );
+  if (sectionReference.object.sha !== args.sectionCommit) {
+    throw new Error(
+      `STALE_SECTION_HEAD: expected ${args.sectionCommit}, current ${args.sectionBranch} is ${sectionReference.object.sha}.`,
+    );
+  }
+  const title = `fix(${args.input.node.sectionId.toLowerCase()}): review ${args.manifest.requirementIds.length} consolidated correction(s)`;
+  const body = buildSectionPullRequestBody({
+    manifest: args.manifest,
+    childPullRequests: args.childPullRequests,
+    batchSize: args.config.prMergeBatchSize,
+  });
+  const keyedPull = await pullRequestByKey(args.config, args.manifest.prKey);
+  if (keyedPull) {
+    if (keyedPull.merged_at) {
+      throw new Error(`Section representative PR #${keyedPull.number} is already merged; it cannot be reused as a human review boundary.`);
+    }
+    const refreshed = await githubRequest<PullRequestResponse>(
+      args.config,
+      "PATCH",
+      `/repos/${args.config.repository}/pulls/${keyedPull.number}`,
+      { title, body, base: args.manifest.baseBranch },
+    );
+    return {
+      branch: args.sectionBranch,
+      commit: args.sectionCommit,
+      number: refreshed.number,
+      url: refreshed.html_url,
+      reused: true,
+    };
+  }
+  const pull = await githubRequest<PullRequestResponse>(
+    args.config,
+    "POST",
+    `/repos/${args.config.repository}/pulls`,
+    {
+      title,
+      head: args.sectionBranch,
+      base: args.manifest.baseBranch,
+      body,
+      draft: true,
+    },
+  );
+  return {
+    branch: args.sectionBranch,
+    commit: args.sectionCommit,
+    number: pull.number,
+    url: pull.html_url,
+    reused: false,
+  };
 }

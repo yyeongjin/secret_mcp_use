@@ -75,10 +75,14 @@ export async function loadConfig(argv = process.argv.slice(2)): Promise<Pipeline
   const contextWindowTokens = integer(process.env.NVIDIA_CONTEXT_WINDOW_TOKENS, 1000000, 1);
   const maxInputTokens = integer(process.env.NVIDIA_MAX_INPUT_TOKENS, 980000, 1);
   const maxOutputTokens = integer(process.env.NVIDIA_MAX_OUTPUT_TOKENS, 4096, 1);
+  const prMergeBatchSize = integer(process.env.PIPELINE_PR_MERGE_BATCH_SIZE, 5, 1);
   if (maxInputTokens + maxOutputTokens > contextWindowTokens) {
     throw new Error(
       `NVIDIA input and output budgets exceed the context window: ${maxInputTokens} + ${maxOutputTokens} > ${contextWindowTokens}.`,
     );
+  }
+  if (prMergeBatchSize > 10) {
+    throw new Error(`PIPELINE_PR_MERGE_BATCH_SIZE must be between 1 and 10, received ${prMergeBatchSize}.`);
   }
 
   return {
@@ -99,6 +103,7 @@ export async function loadConfig(argv = process.argv.slice(2)): Promise<Pipeline
     createPrs,
     maxChangedFiles: integer(process.env.PIPELINE_MAX_CHANGED_FILES, 5, 1),
     maxChangedLines: integer(process.env.PIPELINE_MAX_CHANGED_LINES, 500, 1),
+    prMergeBatchSize,
     auditAttempts: Math.max(integer(process.env.PIPELINE_AUDIT_ATTEMPTS, 5, 1), 5),
     patchGenerationAttempts: integer(process.env.PIPELINE_PATCH_ATTEMPTS, 8, 1),
     nvidia: {

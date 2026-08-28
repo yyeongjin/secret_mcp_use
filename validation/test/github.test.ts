@@ -4,8 +4,10 @@ import {
   buildDocumentGapIssueBody,
   buildNodeCheckOutput,
   buildPullRequestBody,
+  buildSectionPullRequestBody,
   isAutomationPullRequestForBase,
   pullRequestTitle,
+  recursiveMergeOrder,
   stalePullRequestNotice,
 } from "../src/github.ts";
 import type {
@@ -104,6 +106,44 @@ test("a code PR leads with exact feedback and the verified unified diff", () => 
   assert.match(body, /run-123:patch:S05:attempt:3/);
   assert.doesNotMatch(body, /attempt:<n>/);
   assert.equal(pullRequestTitle("S05", auditOutput), "fix(s05): address S05-NAV-ACTIVE-001 omission");
+});
+
+test("child PRs are recursively merged deepest-first toward the Section branch", () => {
+  const pulls = [1, 2, 3].map((number) => ({
+    patchNodeId: `S05-${number}`,
+    number,
+    url: `https://example.test/pr/${number}`,
+    branch: `auto/target/S05-${number}/hash`,
+    baseBranch: number === 1 ? "auto/target/S05/hash" : `auto/target/S05-${number - 1}/hash`,
+  }));
+  assert.deepEqual(
+    recursiveMergeOrder(pulls, "auto/target/S05/hash").map((pull) => pull.patchNodeId),
+    ["S05-3", "S05-2", "S05-1"],
+  );
+  assert.throws(
+    () => recursiveMergeOrder([{ ...pulls[0], baseBranch: "main" }], "auto/target/S05/hash"),
+    /INVALID_CHILD_CHAIN/,
+  );
+});
+
+test("the Section PR is the only human merge boundary", () => {
+  const body = buildSectionPullRequestBody({
+    manifest,
+    childPullRequests: [{
+      patchNodeId: "S05-1",
+      number: 41,
+      url: "https://example.test/pr/41",
+      branch: "auto/target/S05-1/hash",
+      baseBranch: "auto/target/S05/hash",
+      requirementIds: ["S05-NAV-ACTIVE-001"],
+      mergeBatch: 1,
+    }],
+    batchSize: 5,
+  });
+  assert.match(body, /Child PRs consolidated: `1`/);
+  assert.match(body, /Maximum children per merge batch: `5`/);
+  assert.match(body, /deepest descendant toward this Section branch/);
+  assert.match(body, /automation must never merge this representative PR/);
 });
 
 test("a partial Section correction becomes a child PR with explicit descendant scope", () => {

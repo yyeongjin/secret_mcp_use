@@ -74,6 +74,7 @@ jobs:
       PIPELINE_CREATE_PRS: ${{ vars.PIPELINE_CREATE_PRS || 'false' }}
       PIPELINE_AUDIT_ATTEMPTS: ${{ vars.PIPELINE_AUDIT_ATTEMPTS || '5' }}
       PIPELINE_PATCH_ATTEMPTS: ${{ vars.PIPELINE_PATCH_ATTEMPTS || '8' }}
+      PIPELINE_PR_MERGE_BATCH_SIZE: ${{ vars.PIPELINE_PR_MERGE_BATCH_SIZE || '5' }}
       PIPELINE_PR_BASE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || 'main' }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

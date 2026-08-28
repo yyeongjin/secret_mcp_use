@@ -1,6 +1,6 @@
 # DESIGN_INDEX 독립 검증 및 DAG 기반 PR 자동 보정 파이프라인
 
-> **절대 차단 금지 규칙:** `dependsOn`, 선행 Section의 `PASS` 여부, 선행 PR의 병합 여부, 같은 파일의 write-set 중복은 `PATCH_REQUIRED` Section의 patch API 호출이나 PR 생성을 차단하는 조건으로 사용할 수 없다. DAG와 write-set은 오직 전체 correction을 결정적으로 직렬화하고 각 PR의 `baseBranch`와 `baseCommit`을 고르는 입력이다. 2차 감사에서 근거 있는 `PATCH_REQUIRED`로 판정된 모든 Section은 같은 실행 안에서 별도 patch 요청을 받고, 검증된 실제 코드 diff마다 하위 draft PR을 생성한다. `PATCH_WAITING_DEPENDENCY`, `WAITING_DEPENDENCY`, `WAITING_WRITE_LOCK`으로 수정 필요 항목을 보류하는 구현은 이 문서의 위반이다.
+> **절대 차단 금지 규칙:** `dependsOn`, 선행 Section의 `PASS` 여부, 선행 PR의 병합 여부, 같은 파일의 write-set 중복은 `PATCH_REQUIRED` Section의 patch API 호출이나 PR 생성을 차단하는 조건으로 사용할 수 없다. DAG와 write-set은 전체 correction을 결정적으로 직렬화하고 각 PR의 `baseBranch`와 `baseCommit`을 고르는 입력이다. 2차 감사에서 근거 있는 `PATCH_REQUIRED`로 판정된 모든 Requirement는 같은 실행 안에서 별도 preflight와 patch 요청을 받으며, 검증된 실제 코드 diff마다 하위 PR을 생성한다. 하위 PR은 최대 5개 단위로 가장 깊은 자식부터 Section 브랜치까지 자동 병합하고 삭제하며, 최종 `S0x` 대표 draft PR만 사람의 병합 결정을 위해 남긴다. 대표 PR을 `main` 또는 이전 Section 대표 브랜치로 자동 병합하는 것은 금지한다. `PATCH_WAITING_DEPENDENCY`, `WAITING_DEPENDENCY`, `WAITING_WRITE_LOCK`으로 수정 필요 항목을 보류하는 구현은 이 문서의 위반이다.
 
 ## 규범 문서 우선순위
 
@@ -9,22 +9,51 @@
 변경 승인 조건:
 
 1. `PATCH_REQUIRED` Section 수를 `N`이라 할 때, 각 Section은 같은 실행에서 최소 하나의 독립 patch 요청 흐름을 시작해야 한다.
-2. 검증된 실제 diff가 있는 Section은 선행 PASS나 merge를 기다리지 않고 draft PR을 생성해야 한다.
-3. 같은 파일을 수정하는 후속 Section은 직전 검증 commit을 base로 입력과 fingerprint를 다시 만들고 stacked PR을 생성해야 한다.
+2. 검증된 실제 diff가 있는 Section은 선행 PASS나 사람의 merge를 기다리지 않고 하위 PR과 Section 대표 draft PR을 생성해야 한다.
+3. 같은 파일을 수정하는 후속 Requirement는 직전 검증 commit을 base로 입력과 fingerprint를 다시 만들고 하위 PR을 생성해야 한다. 최대 5개의 하위 PR이 완성되면 깊이 우선 역순으로 Section 브랜치에 자동 병합한 뒤 다음 묶음을 시작한다.
 4. `runPatches`에 dependency wait, write-set wait 또는 `claimedPaths` 기반 중단을 다시 도입하는 변경은 CI invariant test가 거부해야 한다.
 5. 이 규칙을 바꾸려면 먼저 이 파일의 절대 차단 금지 규칙과 해당 CI test를 명시적으로 함께 변경해야 하며, README만 바꿔 동작을 변경할 수 없다.
 6. 1차 `DOCUMENT_GAP` Section 수가 `D`이면 같은 실행에서 Section별 GitHub Issue `D`개를 생성하거나 동일 key의 기존 열린 Issue를 갱신해야 한다.
-7. 2차 상위 감사 뒤 현재 누적 부모 소스에 대한 Requirement별 독립 preflight까지 `PATCH_REQUIRED`로 확정된 Section 수가 `N`이면 Section별 correction PR chain이 `N`개여야 한다. 19개 Section이 모두 실제 코드 누락으로 확정되면 S01-S19 각각 최소 한 개씩, 최소 19개의 PR이 생성되어야 한다.
-8. 한 Section에 Requirement ID가 여러 개면 처음부터 `SXX-1...SXX-K`로 재귀 분할한다. Requirement ID 하나마다 별도 NVIDIA 호출과 별도 PR을 생성하므로, 한 Section에 수십 개가 있으면 총 patch 호출과 PR 수도 그만큼 늘어나 19를 넘는다.
+7. 2차 상위 감사와 Requirement별 독립 preflight 뒤 `PATCH_REQUIRED`로 확정된 Section 수가 `N`이면 최종적으로 열린 Section 대표 PR도 `N`개여야 한다. 19개 Section이 모두 실제 코드 누락이면 S01-S19 대표 PR 19개가 남는다.
+8. 한 Section에 Requirement ID가 여러 개면 `SXX-1...SXX-K`로 재귀 분할하고 Requirement마다 별도 NVIDIA 호출과 일시적인 하위 PR을 만든다. 하위 PR은 최대 5개씩 역순 자동 병합하므로 호출 수와 생성 이력은 Requirement 수만큼 늘어도 최종 사람이 검토할 열린 PR은 Section당 하나다. 환경변수로 묶음 크기를 조정할 수 있지만 1~10만 허용한다.
 
 ## 문서 상태
 
-- 상태: V2 전체 파이프라인 구현 완료
+- 상태: V3 재귀 하위 PR 자동 정리와 Section 대표 PR 구현
 - 실행 대상 저장소: `secret_mcp_use` 하나만 사용
 - 상위 생성기: `secret_mcp`는 작품별 `DESIGN_INDEX`, Request Contract와 Evidence를 생성해 전달하는 역할만 담당
 - 입력: `secret_mcp`가 생성한 작품별 `DESIGN_INDEX`, 공통 Specification, 작품별 Request Contract, Evidence와 `secret_mcp_use`의 프론트엔드 소스
-- 출력: 1차 문서 누락의 Section별 GitHub Issue, 2차 코드 누락의 동적 최소 수정 하위 PR, 19개 상위 항목의 독립 검증 증명서와 재실행 시 사용할 정적 PASS 상태
-- 핵심 변경: S01-S19는 상위 감사 DAG로 유지하고, 큰 patch 범위만 `S09-1`, `S09-2`처럼 하위 실행 노드로 분할해 검증된 하위 노드별 stacked PR을 생성한다.
+- 출력: 1차 문서 누락의 Section별 GitHub Issue, 2차 코드 누락의 동적 최소 수정 하위 PR 이력과 Section 대표 PR, 19개 상위 항목의 독립 검증 증명서와 재실행 시 사용할 정적 PASS 상태
+- 핵심 변경: S01-S19는 상위 감사 DAG로 유지한다. `S09-1`, `S09-2` 같은 하위 실행 노드는 독립 검증 후 최대 5개씩 깊은 자식부터 Section 브랜치에 자동 병합되며, 사용자에게는 `S09` 대표 draft PR 하나가 최종 검토 단위로 남는다.
+
+## V3 전체 실행 구조
+
+```text
+DESIGN_INDEX + Evidence + Request Contract + frontend 소스 push
+        |
+        +-> 입력 해시와 S01-S19 Section 분리
+        |
+        +-> 1차 문서 감사: NVIDIA 독립 요청 19개
+        |       |
+        |       +-> 문서 누락 -> Section별 GitHub Issue
+        |
+        +-> 2차 구현 감사: NVIDIA 독립 요청 19개
+                |
+                +-> PASS -> 정적 PASS 증명서
+                |
+                +-> PATCH_REQUIRED
+                        |
+                        +-> Requirement ID별 SXX-1, SXX-2... 재귀 분할
+                        +-> Requirement별 독립 preflight와 patch API 호출
+                        +-> 최소 diff, guard, test, 재감사, 회귀 검사
+                        +-> 검증된 Requirement별 하위 PR
+                        +-> 최대 5개씩 deepest-first 자동 병합
+                        +-> 하위 PR/branch 정리
+                        +-> S0x 대표 draft PR 하나 유지
+                        +-> 사용자가 대표 PR 병합 여부 결정
+```
+
+`5개씩 묶기`는 모델 요청을 합친다는 뜻이 아니다. Requirement가 40개면 독립 preflight와 patch 호출은 최소 40개이며, 검증된 하위 PR을 정리하는 Git 단계만 `5 + 5 + ...`로 묶는다. 하위 PR 체인이 더 깊어져도 항상 leaf에서 root 방향으로 재귀 병합한다. `PIPELINE_PR_MERGE_BATCH_SIZE` 기본값은 `5`, 허용 범위는 `1~10`이다.
 
 ## 결론
 
@@ -39,23 +68,23 @@
 7. 선행 노드의 자연어 응답은 후행 노드에 전달하지 않는다. patch scheduler는 서명된 상태와 공개 출력 해시만 읽는다.
 8. 기존 PASS 증명서의 fingerprint가 현재 입력 fingerprint와 같으면 API를 호출하지 않고 `CACHED_PASS`로 종료한다.
 9. `PASS`인 노드는 PR을 만들지 않는다. 정적 PASS 증명서만 `validation-state` 브랜치에 기록한다.
-10. `PATCH_REQUIRED`인 노드만 별도의 NVIDIA patch 요청으로 최소 unified diff를 생성한다. `SXX-1`, `SXX-2` 각 하위 노드는 Requirement ID 하나만 입력받는 별도 세션이며, 여러 Requirement ID를 한 응답이나 한 PR로 묶지 않는다.
-11. diff가 허용 파일, 기준 해시, 변경 범위, 테스트와 회귀 검사를 모두 통과한 경우 해당 하위 PR을 반드시 만든다. 실행의 첫 correction PR은 실행 base를, 이후 모든 하위 PR과 다른 수정 Section의 PR은 직전 검증 branch를 base로 사용한다.
+10. `PATCH_REQUIRED`인 노드만 별도의 NVIDIA patch 요청으로 최소 unified diff를 생성한다. `SXX-1`, `SXX-2` 각 하위 노드는 Requirement ID 하나만 입력받는 별도 세션이다. 모델 입력과 diff 생성은 절대 합치지 않으며, PR 정리 단계에서만 검증 완료된 하위 PR을 최대 5개씩 Section 브랜치로 합친다.
+11. diff가 허용 파일, 기준 해시, 변경 범위, 테스트와 회귀 검사를 모두 통과한 경우 해당 하위 PR을 반드시 만든다. 한 묶음의 첫 하위 PR은 Section 브랜치를, 뒤쪽 하위 PR은 직전 하위 branch를 base로 사용한다. 묶음 완료 후 가장 깊은 자식부터 병합해 Section 브랜치를 갱신한다.
 12. 모든 `PATCH_REQUIRED` Section은 topological order로 직렬화한다. 병렬화 최적화는 전체 correction PR 생성 보장이 검증된 이후에만 허용하며 기본 구현에는 사용하지 않는다.
 13. 같은 파일을 수정하거나 의존 관계가 있어도 차단하지 않는다. 직전 검증 commit에서 source slice와 fingerprint를 다시 계산한 뒤 그 부모 위에 다음 PR을 쌓는다.
-14. merge 전에는 최신 `main`을 기준으로 patch를 다시 검증하며, 오래된 patch는 자동 병합하지 않는다.
+14. 자동 병합은 이번 실행에서 전체 검증을 통과한 하위 PR을 자기 Section 브랜치 방향으로 정리할 때만 허용한다. Section 대표 PR은 최신 부모 기준 검증 대상이며 `main`이나 이전 Section 대표 브랜치로 자동 병합하지 않는다.
 15. 모든 비-PASS 결과는 사라지지 않는다. 1차 `DOCUMENT_GAP`은 Section별 Issue로 게시한다. 2차 `PATCH_REQUIRED`는 각 하위 노드에 배정된 finding을 구현하고 검증한 code diff PR로 게시하며, 아직 남은 finding은 다음 하위 노드로 전달한다. 2차 patch chain 하나라도 완성하지 못하면 workflow 전체를 실패 처리한다.
 16. 어느 Stage든 독립 재시도를 소진한 뒤 `UNKNOWN`이면 전체 실행을 성공 처리하지 않는다. 모델이 직접 `UNKNOWN`을 반환했는지 schema quarantine warning이 붙었는지와 무관하게 미판정으로 기록하고 workflow를 실패 처리한다.
 17. S18에서 정확한 acceptance behavior가 있지만 테스트 파일만 없다는 `BLOCKED_MISSING_EVIDENCE` 응답은 차단으로 두지 않는다. 소유 경로 `frontend/tests/**`의 결정적 파일 경로를 배정해 `PATCH_REQUIRED`로 승격하고 Requirement별 하위 PR로 재귀 처리한다.
 18. Section 전체 patch-scope의 제외 항목 하나가 다른 Requirement의 patch·PR 생성을 중단할 수 없다. 2차의 모든 고유 Requirement ID는 현재 누적 부모 소스로 독립 preflight를 받고, PATCH_REQUIRED가 확정된 항목만 자기 child patch로 진행한다.
 19. patch 후보들이 `BLOCKED_AUDIT_CONFLICT`로 소진되면 동일 patch 모델의 주장만으로 항목을 닫지 않는다. 별도 NVIDIA conflict preflight가 현재 누적 부모 소스를 다시 검사해 PASS일 때만 `AUDIT_RECLASSIFIED`로 기록하고 다음 Requirement로 진행한다.
 20. 동일 Stage·Section의 독립 audit 최대 시도 횟수는 최소 5회다. 환경변수에 더 작은 값을 넣어도 5회 미만으로 낮아지지 않으며, 모든 시도 뒤에도 UNKNOWN이면 workflow를 실패 처리한다.
-21. 2차에서 19개 Section이 모두 실제 코드 누락이면 최소 19개의 correction PR이 같은 실행에서 생성되어야 한다. 한 Section에 현재 소스에서도 누락으로 확정된 고유 Requirement ID가 N개면 N개의 독립 하위 patch 호출과 N개의 stacked PR을 `SXX-1`부터 `SXX-N`까지 생성한다. patch 후보 재시도와 patch 재감사는 각 하위 노드의 추가 독립 호출이며 다른 Requirement ID와 합치지 않는다.
+21. 2차에서 19개 Section이 모두 실제 코드 누락이면 S01-S19 대표 correction PR 19개가 같은 실행에서 남아야 한다. 한 Section에 현재 소스에서도 누락으로 확정된 고유 Requirement ID가 N개면 N개의 독립 하위 patch 호출과 N개의 일시적 stacked PR을 `SXX-1`부터 `SXX-N`까지 생성한다. patch 후보 재시도와 patch 재감사는 각 하위 노드의 추가 독립 호출이며 다른 Requirement ID와 합치지 않는다. 검증된 하위 PR은 최대 5개씩 자동 병합해 대표 PR 하나로 정리한다.
 22. `UNKNOWN` 상태, `UNKNOWN` finding, `UNKNOWN`을 포함한 placeholder Requirement ID는 patch 후보나 PR 큐에 절대 넣지 않는다. 같은 Stage·Section만 새 request ID와 seed로 독립 재시도하고, 최소 5회 뒤에도 안정적인 Requirement ID와 `MISSING` 판정을 얻지 못하면 해당 실행을 실패 처리한다. 이 실패가 다른 Section이나 다른 Requirement ID의 patch 호출 및 PR 생성을 생략하는 조건이 되어서는 안 된다.
-23. 한 Requirement의 preflight, patch 후보, test, re-audit 또는 PR 게시가 최종 실패해도 같은 Section의 뒤쪽 Requirement ID를 건너뛰지 않는다. 실패 ID만 unresolved로 기록하고 변경되지 않은 마지막 검증 parent에서 다음 `SXX-N`을 계속 호출한다. 따라서 한 Section에 고유 Requirement ID가 40개면 앞선 일부가 실패하더라도 40개 모두 독립 preflight를 받아야 하며, 실제 누락으로 확정되고 검증된 각 항목은 개별 stacked PR을 가져야 한다.
+23. 한 Requirement의 preflight, patch 후보, test, re-audit 또는 PR 게시가 최종 실패해도 같은 Section의 뒤쪽 Requirement ID를 건너뛰지 않는다. 실패 ID만 unresolved로 기록하고 변경되지 않은 마지막 검증 parent에서 다음 `SXX-N`을 계속 호출한다. 따라서 한 Section에 고유 Requirement ID가 40개면 앞선 일부가 실패하더라도 40개 모두 독립 preflight를 받아야 하며, 검증된 항목의 하위 PR들은 5개씩 정리되어 Section 대표 PR에 누적된다.
 24. 모델이 근거 있는 finding을 반환했지만 Requirement ID에 할당 Section 접두사를 빠뜨린 경우 판단 전체를 UNKNOWN으로 폐기하지 않는다. 오케스트레이터가 `SXX-<원본 ID>`로 결정적으로 소유권을 보정한 뒤 같은 finding과 status를 보존한다. 이 보정은 다른 Section으로 이동하거나 여러 finding을 합치는 작업이 아니며, 빈 ID와 `UNKNOWN` placeholder는 기존 격리 규칙을 따른다.
 
-`19개 항목`은 상위 검증 격리 단위이지 API 호출이나 PR 수의 상한이 아니다. 한 실행에서 17개가 PASS이고 2개가 누락되었더라도 각 누락 범위가 크면 두 Section 아래에 여러 하위 patch 요청과 stacked PR이 생길 수 있다.
+`19개 항목`은 상위 검증 격리 단위이지 API 호출이나 일시적인 하위 PR 생성 이력의 상한이 아니다. 한 실행에서 17개가 PASS이고 2개가 누락되었더라도 각 누락 범위가 크면 두 Section 아래에 여러 하위 patch 요청과 stacked PR이 생긴다. 정리 완료 후 열린 검토 PR은 해당 두 Section의 대표 PR 두 개다.
 
 ### 고정된 2단계 감사 계약
 
@@ -72,11 +101,12 @@
 - 한 상위 Section의 첫 patch 요청은 `SXX-1`이며 정렬된 첫 번째 unresolved Requirement ID 하나와 그 항목의 파일 slice만 받는다.
 - 각 하위 노드는 patch 생성 전에 같은 Requirement ID 하나와 현재 누적 부모 소스만 받는 독립 NVIDIA preflight를 수행한다. preflight가 `PATCH_REQUIRED`를 확정한 항목은 반드시 patch·검증·PR로 진행한다.
 - preflight가 현재 소스에서 이미 충족된 거짓 양성을 `PASS`로 확인하거나 정확한 구현 원본이 없는 항목을 비-patch 상태로 재분류하면 `AUDIT_RECLASSIFIED` artifact를 남기고 PR을 만들지 않는다. 이는 대기·차단이 아니라 잘못된 상위 판정을 현재 소스로 정정한 최종 결과다.
-- 해당 Requirement ID를 완전히 구현하고 guard·test·재감사를 통과하면 그 diff만 `SXX-1` PR로 게시한다. 다른 Requirement ID의 변경을 같은 응답이나 PR에 넣지 않는다.
+- 해당 Requirement ID를 완전히 구현하고 guard·test·재감사를 통과하면 그 diff만 `SXX-1` 하위 PR로 게시한다. 다른 Requirement ID의 변경을 같은 NVIDIA 응답이나 하위 PR에 넣지 않는다.
 - 남은 Requirement ID가 있으면 게시된 `SXX-1` commit에서 입력과 fingerprint를 다시 계산해 다음 Requirement ID 하나만 담은 `SXX-2`를 호출한다. 이후에도 같은 규칙으로 재귀한다.
 - 각 하위 노드는 자신에게 할당된 Requirement ID 하나를 완전히 해결해야 한다. 진전 없는 응답은 같은 하위 노드의 교체 후보로만 재시도한다.
-- 하위 노드 수는 해당 Section의 고유 Requirement ID 수와 같다. 따라서 상위 감사는 19회여도 하위 patch 호출과 PR은 필요한 만큼 늘어난다.
-- 한 실행의 PR base는 Section 경계를 넘어 하나의 검증 사슬을 이룬다. 예: `S09-1 -> main`, `S09-2 -> S09-1`, `S10-1 -> S09-2`, `S04-1 -> S10-1`. 각 자식은 직전 부모 commit에서 입력을 다시 만들며 가장 깊은 PR부터 상위 방향으로 병합한다.
+- 하위 노드 수는 해당 Section의 고유 Requirement ID 수와 같다. 따라서 상위 감사는 19회여도 하위 patch 호출과 일시적 PR은 필요한 만큼 늘어난다.
+- 한 Section 안에서는 최대 5개 하위 PR이 하나의 검증 사슬을 이룬다. 예: `S09-1 -> S09`, `S09-2 -> S09-1`, ..., `S09-5 -> S09-4`. 다섯 개가 완성되면 `S09-5`부터 `S09-1`까지 역순 병합해 `S09` 브랜치에 누적하고 하위 브랜치를 삭제한다. 다음 묶음은 갱신된 `S09`에서 시작한다.
+- 모든 하위 묶음이 정리되면 `S09 -> main` 또는 `S10 -> S09` 형태의 Section 대표 draft PR을 만든다. Section 대표 PR끼리는 stacked 될 수 있지만 자동 병합하지 않는다.
 - 하위 PR마다 고유 request ID, fingerprint, patch hash, branch, PR key와 manifest를 가진다. 이전 하위 PR의 자연어 응답은 다음 모델 입력에 넣지 않고 게시된 source state와 남은 Requirement ID만 사용한다.
 
 ## 저장소 역할 경계
@@ -1194,10 +1224,10 @@ S12 patch writeSet = [frontend/styles.css]
 
 1. 두 audit 요청은 독립적으로 실행할 수 있다.
 2. 두 patch proposal도 격리된 작업공간에서 생성할 수 있다.
-3. DAG상 먼저인 S09 diff를 검증해 `S09-1 -> main` PR을 연다.
-4. S12를 대기 상태로 두지 않고 S09-1 commit의 `styles.css`에서 source slice와 fingerprint를 다시 만든다.
+3. DAG상 먼저인 S09 diff를 검증해 `S09-1 -> S09 대표 branch` 하위 PR을 연다.
+4. S09 하위 묶음을 깊은 자식부터 S09 대표 branch로 병합한다. S12를 대기 상태로 두지 않고 그 검증 commit의 `styles.css`에서 source slice와 fingerprint를 다시 만든다.
 5. S12의 독립 patch 요청과 검증을 수행한다.
-6. 새 S12 diff가 검증되면 `S12-1 -> S09-1` PR을 같은 실행에서 연다.
+6. 새 S12 diff가 검증되면 `S12-1 -> S12 대표 branch` 하위 PR을 같은 실행에서 열고, 정리 후 `S12 대표 PR -> S09 대표 branch`를 남긴다.
 7. write-set 중복은 순서와 base만 결정하며 PR 생성을 차단하지 않는다.
 
 ### 사례 H: 이미 PASS인 코드를 다른 PR이 건드린 경우
@@ -1213,7 +1243,7 @@ S12 patch writeSet = [frontend/styles.css]
 1. open PR의 `baseCommit`과 현재 main이 달라진다.
 2. PR을 `STALE_BASE`로 표시하고 merge queue 진입을 막는다.
 3. 기존 diff를 최신 base에 그대로 rebase하지 않고, 최신 main에서 해당 Section audit를 새 요청으로 다시 호출한다.
-4. 사람이 이미 누락을 고쳤다면 PASS 증명서와 설명 comment를 남기되 기존 자동 PR은 사람의 판단을 위해 열린 상태로 보존한다. 자동화가 PR을 닫거나 branch를 삭제하지 않는다.
+4. 사람이 이미 누락을 고쳤다면 PASS 증명서와 설명 comment를 남기되 기존 Section 대표 PR은 사람의 판단을 위해 열린 상태로 보존한다. 자동화가 대표 PR을 닫거나 대표 branch를 삭제하지 않는다.
 5. 여전히 누락이면 새 fingerprint와 patch hash로 만든 diff를 처음부터 검증한다. 모든 guard를 통과한 경우에만 봇 소유 branch를 `--force-with-lease`로 갱신하고 같은 PR 번호, review 대화, 제목과 본문을 최신 결과로 바꾼다.
 6. 새 결과가 차단되거나 안전한 diff를 만들 수 없으면 기존 PR은 열린 상태로 두고 Section Check와 실행 artifact에 현재 결과를 기록한다.
 
@@ -1366,17 +1396,21 @@ function patchReady(node: Node, state: State): boolean {
 ### 4. Stacked write-set 직렬화
 
 - 같은 파일을 수정하는 두 patch는 hunk가 달라도 직전 검증 PR commit 위에 순서대로 쌓는다.
-- DAG 선후 관계와 write-set 중복은 다음 PR의 base를 고르지만 선행 PR의 main 병합을 기다리지 않는다.
-- 기본 구현은 모든 correction Section을 하나의 결정적 stack으로 직렬화한다. 병렬 PR은 이 불변조건을 훼손하지 않는 별도 최적화가 검증되기 전에는 사용하지 않는다.
+- DAG 선후 관계와 write-set 중복은 다음 PR의 base를 고르지만 선행 Section 대표 PR의 사람 병합을 기다리지 않는다.
+- 기본 구현은 Section 내부에서 최대 5개의 하위 PR을 하나의 결정적 stack으로 직렬화하고, 완료된 묶음을 깊은 자식부터 Section 브랜치로 자동 병합한다.
+- Section 대표 PR은 이전 Section 대표 브랜치 위에 쌓을 수 있지만 자동 병합하지 않는다.
 
-### 5. merge queue
+### 5. 재귀 하위 PR 정리와 사람 merge queue
 
-- PR은 merge queue에서 한 번에 하나씩 최신 `main`에 재배치해 검증한다.
+- 하위 PR은 한 묶음의 모든 검증이 끝난 뒤 가장 깊은 자식부터 부모 방향으로 병합한다. 하위 PR의 base와 head가 예상한 `auto/` 트리인지 매 단계 확인한다.
+- 자동 병합 대상의 base가 `main`이면 즉시 실패한다. Section 대표 PR은 자동 병합 함수에 전달하지 않는다.
+- 하위 병합이 끝나면 하위 `auto/` branch를 삭제하고 Section 대표 branch만 남긴다.
+- 사용자는 Section 대표 PR을 merge queue에서 한 번에 하나씩 최신 `main` 또는 부모 Section에 재배치해 검증한다.
 - base commit이 바뀌면 fingerprint, base hashes, 직접 영향 PASS 회귀 검사를 다시 계산한다.
 - 재검증이 실패하거나 새 patch를 안전하게 만들 수 없으면 기존 PR을 자동 종료하지 않고 merge를 계속 차단한 채 해당 노드를 다시 예약한다.
 - 최신 main에서 새로 생성하고 완전히 검증한 diff만 같은 자동화 PR에 반영할 수 있다. 오래된 NVIDIA diff를 단순 rebase해 재사용하지 않는다.
 - 갱신은 봇이 만든 `auto/` branch에만 현재 원격 SHA를 지정한 `--force-with-lease`로 수행한다. lease가 맞지 않으면 중단하며 사람의 수동 commit이나 conflict resolution을 덮어쓰지 않는다.
-- PASS, BLOCKED 또는 UNKNOWN 결과도 열린 PR을 자동 종료하거나 branch를 삭제하는 권한으로 사용하지 않는다.
+- PASS, BLOCKED 또는 UNKNOWN 결과는 Section 대표 PR을 자동 종료하거나 대표 branch를 삭제하는 권한으로 사용하지 않는다. 하위 PR과 하위 branch 삭제는 검증된 재귀 병합이 성공한 직후에만 허용한다.
 
 ## PR 생성 계약
 
@@ -1397,12 +1431,15 @@ visual/a11y checks for node == PASS
 affected cached PASS regression == PASS
 no equivalent open PR
 stacked parent branch and commit recorded
+child PR base is an auto Section/child branch
+Section representative PR is excluded from auto-merge
 ```
 
 ### idempotency key
 
 ```text
-sha256(targetId + sectionId + patchNodeId + fingerprint + patchHash)
+child: sha256(targetId + sectionId + patchNodeId + fingerprint + patchHash)
+Section representative: sha256(targetId + sectionId + sectionId + fingerprint + aggregatePatchHash)
 ```
 
 PR을 만들기 전에 branch 이름과 PR body의 hidden marker를 검색한다.
@@ -1475,7 +1512,7 @@ GitHub PR은 branch 간 실제 변경이 있어야 하므로, 안전한 code dif
 - Section Check: 현재 commit에 붙는 실행 단위 결과. finding 원문, 근거, 구현 위치, patch 중단 사유와 다음 동작을 표시한다.
 - 실행 artifact: Section 입력, 모든 독립 응답, finding, 중단 사유, fingerprint와 재실행 조건을 불변 파일로 보존한다.
 
-GitHub Issue는 1차 `DOCUMENT_GAP`에만 생성한다. 2차 구현 감사, preflight, patch 생성, guard·test·re-audit·publish 실패는 Issue를 만들지 않는다. dependency wait와 write-set wait는 존재하지 않는다. 각 하위 PR은 preflight로 실제 누락이 확정된 Requirement ID 하나를 구현하며, 아직 남은 항목은 Requirement ID별 descendant 하위 PR로 재귀 처리한다. 확정된 `PATCH_REQUIRED` chain이 미완료이면 Check와 artifact를 남기고 workflow를 실패 처리한다.
+GitHub Issue는 1차 `DOCUMENT_GAP`에만 생성한다. 2차 구현 감사, preflight, patch 생성, guard·test·re-audit·publish 실패는 Issue를 만들지 않는다. dependency wait와 write-set wait는 존재하지 않는다. 각 하위 PR은 preflight로 실제 누락이 확정된 Requirement ID 하나를 구현하며, 아직 남은 항목은 Requirement ID별 descendant 하위 PR로 재귀 처리한다. 최대 5개가 완성되면 가장 깊은 자식부터 Section 브랜치로 자동 병합하고, 모든 묶음이 끝나면 Section 대표 draft PR 하나를 남긴다. 확정된 `PATCH_REQUIRED` chain이 미완료이면 Check와 artifact를 남기고 workflow를 실패 처리한다.
 
 S18이 명세에 있는 페이지별 acceptance test의 부재를 찾았는데 새 파일의 `implementationRefs`만 생략한 경우는 근거 부족이 아니다. S18의 소유 경로 `frontend/tests/**`에서 결정적 기본 경로 `frontend/tests/design-index-s18.spec.ts`를 배정하고 독립 patch 요청으로 보낸다. 경로만 오케스트레이터가 결정하며 테스트 내용과 diff는 NVIDIA가 명세 근거로 생성하고 전체 guard를 통과해야 한다.
 
@@ -1699,11 +1736,11 @@ S09 verified patch -> frontend/styles.css
 S12 verified patch -> frontend/styles.css
 ```
 
-1. S09 diff를 검증해 `S09-1 -> main` PR을 연다.
+1. S09 diff를 검증해 `S09-1 -> S09 대표 branch` 하위 PR을 연다.
 2. S12를 차단하거나 기다리지 않는다.
-3. S09-1 commit에서 S12 입력과 fingerprint를 다시 계산한다.
+3. S09 하위 PR을 S09 대표 branch로 정리한 commit에서 S12 입력과 fingerprint를 다시 계산한다.
 4. S12의 새 NVIDIA patch 요청과 검증을 실행한다.
-5. S12 diff가 검증되면 `S12-1 -> S09-1` PR을 같은 실행에서 연다.
+5. S12 diff가 검증되면 `S12-1 -> S12 대표 branch` 하위 PR을 열고, 정리 후 `S12 대표 PR -> S09 대표 branch`를 같은 실행에서 연다.
 
 ### Example 9: 기존 자동 PR과 같은 수정이 사람이 먼저 들어온 경우
 
@@ -1716,7 +1753,7 @@ manual main push: same 390px rule implemented
 2. 최신 main으로 S12 독립 audit를 실행한다.
 3. 결과가 PASS이면 PASS 증명서를 기록한다.
 4. #203에 `already satisfied by main <sha>` comment와 검증 근거를 남긴다.
-5. 대체 PR을 만들지 않으며 #203과 branch는 삭제하지 않는다. 최종 종료 여부는 사람이 결정한다.
+5. 대체 PR을 만들지 않으며 Section 대표 PR #203과 대표 branch는 삭제하지 않는다. 최종 종료 여부는 사람이 결정한다.
 
 ### Example 10: 자동 PR이 테스트에서 실패한 경우
 
@@ -1955,7 +1992,7 @@ S19 audit BLOCKED_MISSING_EVIDENCE
 
 어느 Stage의 S05가 실패했어도 같은 Stage의 S06-S19 호출이나 2차 fan-out을 임의로 생략하지 않는다. 최초·강제 full audit의 논리 primary 요청 수는 정확히 38개이며, 애매한 응답의 같은-Stage·Section 재시도 횟수는 `documentAuditCalls`와 `implementationAuditCalls`에 별도로 기록한다. 2차 결과가 `PATCH_REQUIRED`이면 의존 Section 상태와 관계없이 모두 patch 생성과 PR 게시까지 진행한다. 하나라도 검증된 PR을 게시하지 못하면 실행 전체를 실패 처리하고 성공으로 보고하지 않는다.
 
-`PR #41`과 그 자식 correction PR들을 가장 깊은 branch부터 병합한 뒤 S05의 새 PASS 증명서를 만든다. 입력 fingerprint가 바뀐 후행 노드는 다음 main 실행에서 각각 다시 감사한다. 이번 실행의 `PATCH_REQUIRED` Section은 그 병합을 기다리지 않고 이미 stacked PR을 가져야 한다.
+S05의 자식 correction PR들은 파이프라인이 가장 깊은 branch부터 S05 대표 branch로 자동 병합한다. 사용자가 S05 대표 PR을 병합하면 새 PASS 증명서를 만들고, 입력 fingerprint가 바뀐 후행 노드는 다음 main 실행에서 각각 다시 감사한다. 다른 `PATCH_REQUIRED` Section은 S05의 사람 병합을 기다리지 않고 자기 대표 PR을 가져야 한다.
 
 ## 최종 권장안
 
@@ -1965,7 +2002,7 @@ S19 audit BLOCKED_MISSING_EVIDENCE
 - 최초·강제 전체 audit의 논리 NVIDIA primary 요청 수는 정확히 38개다. 1차 19개와 2차 19개를 별도 집계하고 `UNKNOWN`·차단·스키마 오류의 같은-Stage·Section 독립 재시도는 별도 실제 호출 수로 추가 기록한다.
 - 증분 audit 호출 수는 dirty Section 수만큼이며, 언제나 Section별 별도 요청이다.
 - PATCH_REQUIRED 후보가 있으면 primary audit 38개와 별도로 Requirement별 독립 preflight, patch 후보, patch 재감사 요청이 추가되므로 전체 API 호출 수는 38개를 넘을 수 있다.
-- PR 수는 실제 누락을 안전하게 구현하고 검증한 하위 노드 수만큼 생긴다. 하나의 상위 Section에서도 여러 stacked PR이 생길 수 있다.
+- 일시적인 하위 PR 생성 수는 실제 누락을 안전하게 구현하고 검증한 하위 노드 수만큼 생긴다. 이들은 최대 5개씩 Section 브랜치로 자동 병합되며, 정리 후 열린 PR 수는 실제 수정 Section 수와 같다.
 - 근거 있는 모든 `PATCH_REQUIRED`는 선행 PASS나 병합을 기다리지 않고 같은 실행에서 stacked PR 생성 단계로 진행한다.
 - 이미 통과한 노드는 fingerprint가 바뀌지 않는 한 정적으로 PASS 상태를 재사용한다.
 - 독립성은 별도 요청과 작업공간으로 보장하고, 일관성은 DAG 증명서와 `publicDigest`로 보장한다.

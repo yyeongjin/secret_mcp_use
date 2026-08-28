@@ -9,11 +9,15 @@ import {
 import { buildChangeEvent, directDirtySections } from "./change.ts";
 import { sha256 } from "./hash.ts";
 import {
+  mergeChildPullRequestBatch,
+  prepareSectionBranch,
   publishDocumentGapIssues,
   publishNodeCheckRuns,
   publishPatchPullRequest,
+  publishSectionPullRequest,
   pullRequestKey,
   reconcileStaleAutomationPullRequests,
+  sectionBranchName,
 } from "./github.ts";
 import {
   assertIsolatedAuditInput,
@@ -192,6 +196,8 @@ export interface PatchRecord {
     branch: string;
     baseBranch: string;
     requirementIds: string[];
+    mergeBatch: number;
+    mergedIntoSection: boolean;
   }>;
   attempts?: PatchAttemptRecord[];
 }
@@ -483,7 +489,8 @@ export function incompletePatchSectionIds(args: {
     return !(
       (record.status === "PR_CREATED" || record.status === "PR_REUSED") &&
       record.pullRequest &&
-      (record.childPullRequests?.length ?? 0) > 0
+      (record.childPullRequests?.length ?? 0) > 0 &&
+      record.childPullRequests?.every((pull) => pull.mergedIntoSection)
     );
   });
 }
@@ -970,7 +977,6 @@ async function runPatches(args: {
   let reauditCalls = 0;
   let stackParentBranch = args.config.github.baseBranch;
   let stackParentCommit = args.config.baseCommit;
-  let stackParentPatchNodeId: string | null = null;
   const scratchDirectory = path.join(args.runDirectory, "patches");
   await mkdir(scratchDirectory, { recursive: true });
 
@@ -996,16 +1002,69 @@ async function runPatches(args: {
     const failedRequirementIds = new Set<string>();
     const requirementFailures: Array<{ requirementId: string; record: PatchRecord }> = [];
     const childPullRequests: NonNullable<PatchRecord["childPullRequests"]> = [];
+    const pendingMergeBatch: NonNullable<PatchRecord["childPullRequests"]> = [];
+    const sectionPatchHashes: string[] = [];
+    const sectionEvidenceRefs = new Set<string>();
+    const sectionReadSet = new Map<string, NodePatchOutput["readSet"][number]>();
+    const sectionWriteSet = new Map<string, NodePatchOutput["writeSet"][number]>();
+    const sectionAffectedPassAttestations = new Set<ReturnType<typeof sha256>>();
+    const sectionBaseBranch = stackParentBranch;
+    const sectionBaseCommit = stackParentCommit;
+    const aggregationBranch = sectionBranchName(input);
     let currentInput = input;
     let currentInputs = args.inputs;
-    let parentBranch = stackParentBranch;
-    let parentCommit = stackParentCommit;
-    let parentPatchNodeId: string | null = stackParentPatchNodeId;
+    let parentBranch = aggregationBranch;
+    let parentCommit = sectionBaseCommit;
+    let parentPatchNodeId: string | null = null;
+    let aggregationBranchPrepared = false;
+    let mergeBatch = 1;
     let activeParentWorktree: Awaited<ReturnType<typeof createPatchedWorktree>> | null = null;
     let childIndex = 1;
     let finalRecord: PatchRecord | undefined;
     let allPatchableFindings: NodeAuditOutput["findings"] = [];
     let allPatchableRequirementIds: string[] = [];
+    let sectionPull: Awaited<ReturnType<typeof publishSectionPullRequest>> | undefined;
+
+    const consolidateCurrentBatch = async (): Promise<void> => {
+      if (pendingMergeBatch.length === 0) return;
+      if (!aggregationBranchPrepared) {
+        throw new Error(`${sectionId} aggregation branch was not prepared before child consolidation.`);
+      }
+      const merged = await mergeChildPullRequestBatch({
+        config: args.config,
+        sectionId,
+        sectionBranch: aggregationBranch,
+        pulls: pendingMergeBatch,
+      });
+      const mergedNumbers = new Set(merged.mergedPullNumbers);
+      for (const child of childPullRequests) {
+        if (mergedNumbers.has(child.number)) child.mergedIntoSection = true;
+      }
+      pendingMergeBatch.splice(0, pendingMergeBatch.length);
+      if (activeParentWorktree) await activeParentWorktree.cleanup();
+      parentBranch = aggregationBranch;
+      parentCommit = merged.commit;
+      parentPatchNodeId = null;
+      activeParentWorktree = await createAuditWorktree(
+        { ...args.config, baseCommit: merged.commit },
+        `${sectionId}-aggregate-${mergeBatch}`,
+        merged.commit,
+      );
+      currentInputs = await patchedInputs({
+        originalConfig: { ...args.config, baseCommit: merged.commit },
+        worktreePath: activeParentWorktree.path,
+        triggerPath: args.triggerPath,
+        runId: `${args.runId}:${sectionId}:aggregate:${mergeBatch}`,
+        manifest: args.manifest,
+        contractSchemaHash: args.contractSchemaHash,
+        changeEvent: args.changeEvent,
+        documentOutputs: args.documentOutputs,
+      });
+      const aggregatedInput = currentInputs.get(sectionId);
+      if (!aggregatedInput) throw new Error(`Aggregated parent input is missing ${sectionId}.`);
+      currentInput = aggregatedInput;
+      mergeBatch += 1;
+    };
 
     try {
       if (parentCommit !== args.config.baseCommit) {
@@ -1545,6 +1604,15 @@ async function runPatches(args: {
             }
 
             try {
+              if (!aggregationBranchPrepared) {
+                await prepareSectionBranch({
+                  config: args.config,
+                  input,
+                  baseBranch: sectionBaseBranch,
+                  baseCommit: sectionBaseCommit,
+                });
+                aggregationBranchPrepared = true;
+              }
               const prKey = pullRequestKey({
                 targetId: currentInput.run.targetId,
                 sectionId,
@@ -1632,7 +1700,17 @@ async function runPatches(args: {
                 branch: pull.branch,
                 baseBranch: parentBranch,
                 requirementIds: output.requirementIds,
+                mergeBatch,
+                mergedIntoSection: false,
               });
+              pendingMergeBatch.push(childPullRequests.at(-1)!);
+              sectionPatchHashes.push(guarded.patchHash);
+              for (const evidenceRef of output.evidenceRefs) sectionEvidenceRefs.add(evidenceRef);
+              for (const entry of output.readSet) sectionReadSet.set(entry.path, entry);
+              for (const entry of output.writeSet) sectionWriteSet.set(entry.path, entry);
+              for (const attestation of affectedPassAttestations) {
+                sectionAffectedPassAttestations.add(attestation);
+              }
               for (const requirementId of output.requirementIds) addressedRequirementIds.add(requirementId);
               const previousParentWorktree = activeParentWorktree;
               activeParentWorktree = worktree;
@@ -1690,6 +1768,70 @@ async function runPatches(args: {
           finalRecord = undefined;
           childIndex += 1;
         }
+        if (childPublished && pendingMergeBatch.length >= args.config.prMergeBatchSize) {
+          await consolidateCurrentBatch();
+        }
+      }
+      await consolidateCurrentBatch();
+
+      if (childPullRequests.length > 0) {
+        const aggregatePatchHash = sha256(JSON.stringify({
+          sectionId,
+          childPatchHashes: sectionPatchHashes,
+          requirementIds: [...addressedRequirementIds].sort(),
+        }));
+        const prKey = pullRequestKey({
+          targetId: input.run.targetId,
+          sectionId,
+          fingerprint: input.node.fingerprint,
+          patchHash: aggregatePatchHash,
+        });
+        const runUrl = args.config.runId
+          ? `${args.config.github.serverUrl}/${args.config.repository}/actions/runs/${args.config.runId}`
+          : null;
+        const sectionManifest: PullRequestManifest = {
+          schemaVersion: "design-validation/pr-manifest/v2",
+          prKey,
+          targetId: input.run.targetId,
+          sectionId,
+          fingerprint: input.node.fingerprint,
+          triggerSource: {
+            path: input.contract.designIndexSource.path,
+            documentHash: input.contract.designIndexSource.documentHash,
+            sectionHeading: input.contract.designIndexSource.sectionHeading,
+          },
+          baseCommit: sectionBaseCommit,
+          baseBranch: sectionBaseBranch,
+          requirementIds: [...addressedRequirementIds].sort(),
+          evidenceRefs: [...sectionEvidenceRefs].sort(),
+          patchHash: aggregatePatchHash,
+          readSet: [...sectionReadSet.values()].sort((left, right) => left.path.localeCompare(right.path)),
+          writeSet: [...sectionWriteSet.values()].sort((left, right) => left.path.localeCompare(right.path)),
+          affectedPassAttestations: [...sectionAffectedPassAttestations].sort(),
+          checks: {
+            schema: "PASS",
+            scope: "PASS",
+            immutableInputs: "PASS",
+            build: "PASS",
+            test: "PASS",
+            visual: "PASS",
+            accessibility: "PASS",
+            regression: "PASS",
+            base: "PASS",
+          },
+          runId: args.runId,
+          runUrl,
+        };
+        assertContract(args.validatePrManifest, sectionManifest, `${sectionId} Section PR manifest`);
+        await writeJson(path.join(scratchDirectory, sectionId, "section-pr-manifest.json"), sectionManifest);
+        sectionPull = await publishSectionPullRequest({
+          config: args.config,
+          input,
+          manifest: sectionManifest,
+          sectionBranch: aggregationBranch,
+          sectionCommit: parentCommit,
+          childPullRequests,
+        });
       }
     } finally {
       if (activeParentWorktree) await activeParentWorktree.cleanup();
@@ -1700,22 +1842,20 @@ async function runPatches(args: {
       ...resolvedWithoutPatchRequirementIds,
     ]);
     if (!finalRecord && failedRequirementIds.size === 0 && completedRequirementIds.size === allPatchableRequirementIds.length) {
-      const lastPull = childPullRequests.at(-1);
-      const allReused = childPullRequests.length > 0 && attempts
-        .filter((attempt) => attempt.status === "PR_CREATED" || attempt.status === "PR_REUSED")
-        .every((attempt) => attempt.status === "PR_REUSED");
       finalRecord = {
         sectionId,
         status: childPullRequests.length === 0
           ? "AUDIT_RECLASSIFIED"
-          : allReused ? "PR_REUSED" : "PR_CREATED",
+          : sectionPull?.reused ? "PR_REUSED" : "PR_CREATED",
         reason: childPullRequests.length === 0
           ? `Independent child preflights reclassified all ${sectionId} findings against the current source.`
-          : `Published ${childPullRequests.length} stacked child PR(s) for ${sectionId}; ${resolvedWithoutPatchRequirementIds.size} false-positive or non-patchable finding(s) were independently reclassified.`,
+          : `Merged ${childPullRequests.length} verified child PR(s) into ${sectionId} in batches of at most ${args.config.prMergeBatchSize}, then published one Section representative PR; ${resolvedWithoutPatchRequirementIds.size} finding(s) were independently reclassified.`,
         addressedRequirementIds: [...addressedRequirementIds],
         resolvedWithoutPatchRequirementIds: [...resolvedWithoutPatchRequirementIds],
         unresolvedRequirementIds: [],
-        ...(lastPull ? { pullRequest: { number: lastPull.number, url: lastPull.url, branch: lastPull.branch } } : {}),
+        ...(sectionPull ? {
+          pullRequest: { number: sectionPull.number, url: sectionPull.url, branch: sectionPull.branch },
+        } : {}),
         childPullRequests,
         attempts,
       };
@@ -1729,12 +1869,12 @@ async function runPatches(args: {
         unresolvedRequirementIds: [...failedRequirementIds],
         childPullRequests,
         attempts,
-        ...(childPullRequests.at(-1)
+        ...(sectionPull
           ? {
             pullRequest: {
-              number: childPullRequests.at(-1)!.number,
-              url: childPullRequests.at(-1)!.url,
-              branch: childPullRequests.at(-1)!.branch,
+              number: sectionPull.number,
+              url: sectionPull.url,
+              branch: sectionPull.branch,
             },
           }
           : {}),
@@ -1747,22 +1887,21 @@ async function runPatches(args: {
         unresolvedRequirementIds: allPatchableRequirementIds
           .filter((requirementId) => !completedRequirementIds.has(requirementId)),
         childPullRequests,
-        ...(childPullRequests.at(-1)
+        ...(sectionPull
           ? {
             pullRequest: {
-              number: childPullRequests.at(-1)!.number,
-              url: childPullRequests.at(-1)!.url,
-              branch: childPullRequests.at(-1)!.branch,
+              number: sectionPull.number,
+              url: sectionPull.url,
+              branch: sectionPull.branch,
             },
           }
           : {}),
       };
     }
 
-    if (childPullRequests.length > 0) {
-      stackParentBranch = parentBranch;
-      stackParentCommit = parentCommit;
-      stackParentPatchNodeId = parentPatchNodeId;
+    if (sectionPull) {
+      stackParentBranch = sectionPull.branch;
+      stackParentCommit = sectionPull.commit;
     }
 
     records.push(finalRecord ?? {

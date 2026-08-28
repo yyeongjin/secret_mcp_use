@@ -350,8 +350,10 @@ test("every PATCH_REQUIRED Section must publish a complete PR chain", () => {
       number: 1,
       url: "https://example.test/pr/1",
       branch: `auto/${sectionId}`,
-      baseBranch: "main",
+      baseBranch: `auto/${sectionId}-section`,
       requirementIds: [`${sectionId}-A`],
+      mergeBatch: 1,
+      mergedIntoSection: true,
     }],
     attempts: [],
   });
