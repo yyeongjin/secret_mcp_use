@@ -92,6 +92,7 @@
 
   .hero { position: relative; height: 674px; overflow: hidden; background: #111; color: #fff; }
   .hero__image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 58% 48%; }
+  .hero__image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 62% 43%; }
   .hero__veil { position: absolute; inset: 0; background: linear-gradient(90deg, rgb(0 0 0 / 72%) 0%, rgb(0 0 0 / 48%) 38%, rgb(0 0 0 / 12%) 76%), rgb(0 0 0 / 10%); }
   .hero__content { position: relative; z-index: 2; width: min(540px, calc(100% - 76px)); padding-top: 208px; margin-left: max(38px, calc((100% - 1200px) / 2 + 38px)); }
   .hero h1 { font-size: 52px; font-weight: 700; line-height: 1.18; }
