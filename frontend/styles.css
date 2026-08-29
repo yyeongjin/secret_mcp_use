@@ -38,6 +38,7 @@
     --button-height: 49px;
     --focus: 0 0 0 3px rgb(65 105 245 / 32%);
     --ease: cubic-bezier(.2, .8, .2, 1);
+    --shadow-focus: 0 0 0 3px rgb(65 105 245 / 30%);
   }
 }
 
