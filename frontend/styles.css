@@ -97,7 +97,9 @@
   .hero__veil { position: absolute; inset: 0; background: linear-gradient(90deg, rgb(0 0 0 / 72%) 0%, rgb(0 0 0 / 48%) 38%, rgb(0 0 0 / 12%) 76%), rgb(0 0 0 / 10%); }
   .hero__content { position: relative; z-index: 2; width: min(540px, calc(100% - 76px)); padding-top: 208px; margin-left: max(38px, calc((100% - 1200px) / 2 + 38px)); }
   .hero h1 { font-size: 52px; font-weight: 700; line-height: 1.18; }
+  .hero h1 { line-height: 1.55; }
   .hero__description { margin-top: 24px; font-size: 15px; font-weight: 500; line-height: 1.65; }
+  .hero__description { line-height: 1.55; }
   .hero__index { position: absolute; z-index: 2; right: 28px; bottom: 24px; display: flex; align-items: center; gap: 9px; color: #fff; font-size: 10px; }
   .hero__line { width: 54px; height: 1px; background: rgb(255 255 255 / 50%); }
 
