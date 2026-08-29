@@ -198,6 +198,7 @@
     .hero h1 { font-size: 46px; }
     .games__grid { grid-template-columns: 38% 1fr; gap: 42px; }
     .footer-sitemap { grid-template-columns: repeat(4, 1fr); row-gap: 28px; padding-right: 120px; }
+    .editorial-track { max-width: 826px; }
   }
 
   @media (max-width: 768px) {
