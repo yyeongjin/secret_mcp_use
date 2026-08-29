@@ -28,6 +28,8 @@
     --color-warning: #A86500;
     --color-disabled: #bbb;
     --color-overlay: rgb(0 0 0 / 52%);
+    --color-overlay: rgb(0 0 0 / 52%);
+    --space-1: 4px;
     --container-main: 1012px;
     --container-shell: 1144px;
     --gutter-desktop: 24px;
