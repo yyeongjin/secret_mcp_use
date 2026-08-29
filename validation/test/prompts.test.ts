@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   AUDIT_SYSTEM_PROMPT,
   PATCH_CONFLICT_PREFLIGHT_SYSTEM_PROMPT,
+  PATCH_PREFLIGHT_CHALLENGE_SYSTEM_PROMPT,
   PATCH_PREFLIGHT_SYSTEM_PROMPT,
   PATCH_REAUDIT_SYSTEM_PROMPT,
   PATCH_SYSTEM_PROMPT,
@@ -199,6 +200,10 @@ test("a missing custom property receives the exact root declaration block as its
 
 test("patch preflight independently owns one Requirement ID", () => {
   assert.match(PATCH_PREFLIGHT_SYSTEM_PROMPT, /Do not trust the earlier PATCH_REQUIRED judgment/);
+  assert.match(PATCH_PREFLIGHT_SYSTEM_PROMPT, /Do not invent direct DOM mutation/);
+  assert.match(PATCH_PREFLIGHT_SYSTEM_PROMPT, /Escape handler that only closes/);
+  assert.match(PATCH_PREFLIGHT_CHALLENGE_SYSTEM_PROMPT, /do not receive or trust it/);
+  assert.match(PATCH_PREFLIGHT_CHALLENGE_SYSTEM_PROMPT, /equivalent existing implementation/);
   const prompt = JSON.parse(patchPreflightUserPrompt({ auditInput, auditOutput })) as {
     requiredOutput: { ownedRequirementIds: string[] };
     claimedFinding: Array<{ requirementId: string }>;

@@ -46,6 +46,7 @@ import {
 import {
   canonicalizePatchOutput,
   guardPatch,
+  guardPatchedSourceQuality,
   isRetryablePatchCandidateError,
   type GuardedPatch,
 } from "./patch.ts";
@@ -54,6 +55,7 @@ import {
   AUDIT_SYSTEM_PROMPT,
   DOCUMENT_AUDIT_SYSTEM_PROMPT,
   PATCH_CONFLICT_PREFLIGHT_SYSTEM_PROMPT,
+  PATCH_PREFLIGHT_CHALLENGE_SYSTEM_PROMPT,
   PATCH_PREFLIGHT_SYSTEM_PROMPT,
   PATCH_REAUDIT_SYSTEM_PROMPT,
   PATCH_RETRY_SYSTEM_PROMPT,
@@ -129,6 +131,16 @@ interface AuditCallFailure {
 }
 
 type AuditCallResult = AuditCallSuccess | AuditCallFailure;
+
+function isFinalOwnedPreflight(
+  result: AuditCallResult,
+  requirementId: string,
+): result is AuditCallSuccess {
+  if (!result.ok || result.output.status === "UNKNOWN") return false;
+  if (result.output.status === "PASS") return result.output.findings.length === 0;
+  const ids = new Set(result.output.findings.map((finding) => finding.requirementId));
+  return ids.size === 1 && ids.has(requirementId);
+}
 
 interface DocumentAuditCallSuccess {
   ok: true;
@@ -1398,12 +1410,14 @@ async function runPatches(args: {
           currentInput,
           preflight,
         );
-        if (!preflight.ok) {
+        if (!isFinalOwnedPreflight(preflight, requirementId)) {
           const attemptRecord: PatchAttemptRecord = {
             attempt: 0,
             patchNodeId,
             status: "BLOCKED_MODEL",
-            reason: `${patchNodeId} preflight failed: ${preflight.error}`,
+            reason: preflight.ok
+              ? `${patchNodeId} preflight did not return a final judgment for exactly ${requirementId}.`
+              : `${patchNodeId} preflight failed: ${preflight.error}`,
           };
           attempts.push(attemptRecord);
           requirementFailures.push({ requirementId, record: {
@@ -1415,38 +1429,95 @@ async function runPatches(args: {
           childIndex += 1;
           continue;
         }
-        const preflightRequirementIds = new Set(
-          preflight.output.findings.map((finding) => finding.requirementId),
+        const challenge = await callAudit({
+          client: args.client,
+          input: currentInput,
+          kind: "reaudit",
+          requestId: `${args.runId}:patch-preflight-challenge:${patchNodeId}`,
+          maxAttempts: args.config.auditAttempts,
+          validate: args.validateAudit,
+          outputSchema: args.auditOutputSchema,
+          systemPrompt: PATCH_PREFLIGHT_CHALLENGE_SYSTEM_PROMPT,
+          userPrompt: patchPreflightUserPrompt({
+            auditInput: currentInput,
+            auditOutput: remainingAuditOutput,
+          }),
+        });
+        reauditCalls += challenge.attempts.length;
+        await saveAuditCall(
+          path.join(scratchDirectory, sectionId, patchNodeId, "preflight-challenge"),
+          currentInput,
+          challenge,
         );
-        if (
-          preflight.output.status === "UNKNOWN" ||
-          (preflight.output.status !== "PASS" && (
-            preflightRequirementIds.size !== 1 || !preflightRequirementIds.has(requirementId)
-          ))
-        ) {
+        if (!isFinalOwnedPreflight(challenge, requirementId)) {
           const attemptRecord: PatchAttemptRecord = {
             attempt: 0,
             patchNodeId,
             status: "BLOCKED_MODEL",
-            reason: `${patchNodeId} preflight did not return a final judgment for exactly ${requirementId}.`,
+            reason: challenge.ok
+              ? `${patchNodeId} challenge preflight did not return a final judgment for exactly ${requirementId}.`
+              : `${patchNodeId} challenge preflight failed: ${challenge.error}`,
           };
           attempts.push(attemptRecord);
-          requirementFailures.push({ requirementId, record: {
-            sectionId,
-            ...attemptRecord,
-            attempts,
-          } });
+          requirementFailures.push({ requirementId, record: { sectionId, ...attemptRecord, attempts } });
           failedRequirementIds.add(requirementId);
           childIndex += 1;
           continue;
         }
-        if (preflight.output.status !== "PATCH_REQUIRED") {
+
+        const votes: AuditCallSuccess[] = [preflight, challenge];
+        const firstPatchVote = preflight.output.status === "PATCH_REQUIRED";
+        const secondPatchVote = challenge.output.status === "PATCH_REQUIRED";
+        if (firstPatchVote !== secondPatchVote) {
+          const tieBreak = await callAudit({
+            client: args.client,
+            input: currentInput,
+            kind: "reaudit",
+            requestId: `${args.runId}:patch-preflight-tiebreak:${patchNodeId}`,
+            maxAttempts: args.config.auditAttempts,
+            validate: args.validateAudit,
+            outputSchema: args.auditOutputSchema,
+            systemPrompt: PATCH_PREFLIGHT_CHALLENGE_SYSTEM_PROMPT,
+            userPrompt: patchPreflightUserPrompt({
+              auditInput: currentInput,
+              auditOutput: remainingAuditOutput,
+            }),
+          });
+          reauditCalls += tieBreak.attempts.length;
+          await saveAuditCall(
+            path.join(scratchDirectory, sectionId, patchNodeId, "preflight-tiebreak"),
+            currentInput,
+            tieBreak,
+          );
+          if (!isFinalOwnedPreflight(tieBreak, requirementId)) {
+            const attemptRecord: PatchAttemptRecord = {
+              attempt: 0,
+              patchNodeId,
+              status: "BLOCKED_MODEL",
+              reason: tieBreak.ok
+                ? `${patchNodeId} tie-break preflight did not return a final judgment for exactly ${requirementId}.`
+                : `${patchNodeId} tie-break preflight failed: ${tieBreak.error}`,
+            };
+            attempts.push(attemptRecord);
+            requirementFailures.push({ requirementId, record: { sectionId, ...attemptRecord, attempts } });
+            failedRequirementIds.add(requirementId);
+            childIndex += 1;
+            continue;
+          }
+          votes.push(tieBreak);
+        }
+        const patchVotes = votes.filter((vote) => vote.output.status === "PATCH_REQUIRED");
+        const finalPreflight = patchVotes.length >= 2
+          ? patchVotes.at(-1)!
+          : votes.filter((vote) => vote.output.status !== "PATCH_REQUIRED").at(-1)!;
+        const preflightVoteSummary = votes.map((vote) => vote.output.status).join("/");
+        if (finalPreflight.output.status !== "PATCH_REQUIRED") {
           resolvedWithoutPatchRequirementIds.add(requirementId);
           const attemptRecord: PatchAttemptRecord = {
             attempt: 0,
             patchNodeId,
             status: "AUDIT_RECLASSIFIED",
-            reason: `${patchNodeId} independent preflight reclassified ${requirementId} as ${preflight.output.status}.`,
+            reason: `${patchNodeId} independent preflight consensus (${preflightVoteSummary}) reclassified ${requirementId} as ${finalPreflight.output.status}.`,
           };
           attempts.push(attemptRecord);
           await writeJson(
@@ -1457,10 +1528,10 @@ async function runPatches(args: {
           continue;
         }
         remainingAuditOutput = {
-          ...preflight.output,
+          ...finalPreflight.output,
           fingerprint: currentInput.node.fingerprint,
         };
-        remainingFindings = preflight.output.findings;
+        remainingFindings = finalPreflight.output.findings;
 
         for (let attempt = 1; attempt <= args.config.patchGenerationAttempts; attempt += 1) {
           const attemptId = `${args.runId}:patch:${patchNodeId}:attempt:${attempt}`;
@@ -1688,6 +1759,32 @@ async function runPatches(args: {
 
           let retainAsParent = false;
           try {
+            try {
+              await guardPatchedSourceQuality({
+                beforeFiles: currentInput.implementation.files,
+                repositoryRoot: worktree.path,
+                changedPaths: guarded.changedPaths,
+              });
+            } catch (error) {
+              const reason = errorMessage(error);
+              const attemptRecord: PatchAttemptRecord = {
+                attempt,
+                patchNodeId,
+                status: "BLOCKED_GUARD",
+                reason,
+                patchHash: guarded.patchHash,
+                changedPaths: guarded.changedPaths,
+              };
+              attempts.push(attemptRecord);
+              await writeJson(path.join(attemptDirectory, "attempt-result.json"), attemptRecord);
+              if (attempt < args.config.patchGenerationAttempts) {
+                retryContext = { output, failure: { stage: "guard", reason } };
+                continue;
+              }
+              finalRecord = { sectionId, ...attemptRecord, attempts };
+              break;
+            }
+
             try {
               const checks = await verifyPatchedWorktree(args.config, worktree.path);
               await writeJson(

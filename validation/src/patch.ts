@@ -1,5 +1,6 @@
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import postcss from "postcss";
 import { sha256 } from "./hash.ts";
 import { matchesAnyPath } from "./manifest.ts";
 import { runCommand } from "./process.ts";
@@ -25,6 +26,7 @@ export interface GuardedPatch {
 export function isRetryablePatchCandidateError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   if (message.startsWith("COMMENT_ONLY_PATCH:")) return true;
+  if (message.startsWith("PATCH_QUALITY_GUARD:")) return true;
   if (message.startsWith("Exact replacement ") || message === "PATCH produced no changed lines.") return true;
   if (
     message === "Malformed unified diff file headers." ||
@@ -491,9 +493,9 @@ export function canonicalizePatchOutput(args: {
   if (status !== "PATCH" && replacements.length > 0) {
     throw new Error(`${status} must not include exact replacements.`);
   }
-  if (status === "PATCH" && rawDiff.trim() !== "" && replacements.length > 0) {
-    throw new Error("PATCH must use either a unified diff or exact replacements, not both.");
-  }
+  // Exact before/after text is a stronger, byte-verifiable source of truth than
+  // a redundant model-authored diff. When both are present, canonicalize only
+  // the replacements instead of discarding an otherwise grounded candidate.
   const diff = status === "PATCH"
     ? replacements.length > 0
       ? exactReplacementDiff(replacements, baseTextByPath)
@@ -562,6 +564,62 @@ export function canonicalizePatchOutput(args: {
     reason,
     diff,
   };
+}
+
+function cssRuleScopeCounts(content: string, pathname: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  const root = postcss.parse(content, { from: pathname });
+  root.walkRules((rule) => {
+    const ancestors: string[] = [];
+    let parent = rule.parent;
+    while (parent && parent.type !== "root") {
+      if (parent.type === "atrule") ancestors.push(`@${parent.name} ${parent.params}`.trim());
+      if (parent.type === "rule") ancestors.push(parent.selector);
+      parent = parent.parent;
+    }
+    const key = `${ancestors.reverse().join(" > ")}::${rule.selector}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  });
+  return counts;
+}
+
+function joinedCustomPropertyLines(content: string): Set<string> {
+  return new Set(content.replaceAll("\r\n", "\n").split("\n").filter((line) => (
+    /^\s+--[\w-]+\s*:[^{};]+;\s+--[\w-]+\s*:/.test(line)
+  )));
+}
+
+export async function guardPatchedSourceQuality(args: {
+  beforeFiles: NodeAuditInput["implementation"]["files"];
+  repositoryRoot: string;
+  changedPaths: string[];
+}): Promise<void> {
+  const beforeByPath = new Map(args.beforeFiles.map((file) => [file.path, file.content ?? ""]));
+  for (const changedPath of args.changedPaths.filter((candidate) => candidate.endsWith(".css"))) {
+    const before = beforeByPath.get(changedPath) ?? "";
+    const after = await readFile(path.join(args.repositoryRoot, changedPath), "utf8");
+
+    const priorJoinedLines = joinedCustomPropertyLines(before);
+    const introducedJoinedLines = [...joinedCustomPropertyLines(after)].filter(
+      (line) => !priorJoinedLines.has(line),
+    );
+    if (introducedJoinedLines.length > 0) {
+      throw new Error(
+        `PATCH_QUALITY_GUARD: ${changedPath} joins multiple custom properties on one new physical line.`,
+      );
+    }
+
+    const beforeCounts = cssRuleScopeCounts(before, changedPath);
+    const afterCounts = cssRuleScopeCounts(after, changedPath);
+    const introducedDuplicates = [...afterCounts].filter(([key, count]) => (
+      count > 1 && count > (beforeCounts.get(key) ?? 0)
+    ));
+    if (introducedDuplicates.length > 0) {
+      throw new Error(
+        `PATCH_QUALITY_GUARD: ${changedPath} introduces duplicate selector(s) in the same scope: ${introducedDuplicates.map(([key]) => key).join(", ")}.`,
+      );
+    }
+  }
 }
 
 async function exists(pathname: string): Promise<boolean> {

@@ -27,11 +27,13 @@
 15. GitHub가 막 생성된 child PR의 mergeability를 계산하는 동안 반환하는 405 `Pull Request is not mergeable`은 제한된 횟수로 다시 조회·병합한다. 보호 규칙 실패처럼 실제로 병합할 수 없는 오류는 재시도 대상으로 넓히지 않는다.
 16. 모델이 `BLOCKED_MISSING_EVIDENCE` 또는 `BLOCKED_CONTRACT_CONFLICT`를 반환하면서 `findings`만 비운 경우, 그 상태를 마지막 `UNKNOWN`으로 덮어쓰지 않는다. 오케스트레이터는 모델의 원래 상태, 해당 leaf의 고유 Requirement ID와 원문을 묶어 누락된 finding envelope만 결정적으로 복원하며, 값·좌표·색상·동작을 새로 만들지 않는다. 모든 독립 시도 뒤에는 마지막 응답이 아니라 마지막 schema-valid grounded 판정을 사용한다.
 17. 원문 leaf가 `**UNKNOWN**`으로 값을 명시한 경우 최소 5회의 독립 요청을 모두 수행한다. 전부 미판정이어도 이를 구현값으로 추측하거나 일반 모델 `UNKNOWN`으로 남기지 않고 `BLOCKED_MISSING_EVIDENCE`로 확정한다. 이 상태는 code PR을 만들지 않지만 다른 leaf, Section, PR 생성을 중단시키지 않는다. 원문에 `UNKNOWN` 선언이 없는 미판정은 계속 workflow 실패다.
-18. patch 모델은 기존 파일 수정에 대해 repository path와 원본에서 정확히 한 번 일치하는 `before`, 완전한 `after`를 반환할 수 있다. 오케스트레이터가 이를 실제 unified diff로 변환한 뒤 기존 guard·test·재감사·회귀 검사를 전부 수행한다. 자유형 diff와 exact replacement를 한 후보에서 함께 쓰거나, 원본 줄과 다른 `before`, 중복 anchor, no-op replacement, 변경 표식이 없는 설명성 diff는 후보 실패다. 오케스트레이터가 모델이 쓰지 않은 변경 줄을 추측해 복원하면 안 된다.
+18. patch 모델은 기존 파일 수정에 대해 repository path와 원본에서 정확히 한 번 일치하는 `before`, 완전한 `after`를 반환할 수 있다. 오케스트레이터가 이를 실제 unified diff로 변환한 뒤 기존 guard·test·재감사·회귀 검사를 전부 수행한다. 모델 계약은 자유형 diff와 exact replacement를 함께 쓰지 않도록 요구하지만, 응답에 둘이 함께 존재하면 byte 단위 검증이 가능한 exact replacement만 canonical source of truth로 사용하고 자유형 diff는 버린다. 원본 줄과 다른 `before`, 중복 anchor, no-op replacement, 변경 표식이 없는 설명성 diff는 후보 실패다. 오케스트레이터가 모델이 쓰지 않은 변경 줄을 추측해 복원하면 안 된다.
+19. 2차 primary 감사가 `PATCH_REQUIRED`로 올린 Requirement는 현재 누적 부모 소스에 대해 최소 두 개의 서로 독립된 preflight를 항상 받는다. 두 판정의 patch 필요 여부가 다르면 세 번째 독립 tie-break를 호출하고 2 대 1 다수결로만 patch 진행 또는 `AUDIT_RECLASSIFIED`를 확정한다. 단일 preflight의 `PASS`, `PATCH_REQUIRED` 또는 blocked 판정 하나만으로 코드 수정 여부를 확정하면 안 된다.
+20. preflight는 supplied source에 실제로 존재하는 caller, shared state-transition function, selector, cascade와 media scope만 추적한다. 존재하지 않는 직접 DOM 변경, 이벤트 경로, 상태 또는 사용자 행동을 상상해 누락으로 만들면 안 되며, 공통 함수에서 구현된 동작을 모든 caller에 중복 구현하도록 요구해서도 안 된다. patch guard는 새로 붙여 쓴 여러 CSS custom property와 같은 at-rule scope에 같은 selector를 새로 중복하는 변경을 거부한다.
 
 ## 문서 상태
 
-- 상태: V4 Bottom-up 전수 leaf 감사, 1차 통합 문서 PR/대표 Issue와 2차 재귀 correction PR의 첫 GitHub 원격 E2E 완료. 첫 실행에서 확인된 빈 non-PASS finding, 마지막 UNKNOWN 덮어쓰기와 자유형 diff 누락 표식 문제를 재현 테스트와 함께 보강했으며 재검증 진행 중
+- 상태: V4 Bottom-up 전수 leaf 감사, 1차 통합 문서 PR/대표 Issue와 2차 재귀 correction PR의 첫 GitHub 원격 E2E를 실행했다. 첫 hardening 실행은 1차 게시와 재귀 child PR 병합을 실제로 수행했지만 S05의 허구 control-flow 판정과 S07의 이중 형식 patch 응답 때문에 최종 실패했다. 두 원인을 2/3 독립 preflight 합의, exact replacement 우선, CSS 품질 guard와 재현 테스트로 보강했으며 깨끗한 원격 상태에서 재검증한다.
 - 실행 대상 저장소: `secret_mcp_use` 하나만 사용
 - 상위 생성기: `secret_mcp`는 작품별 `DESIGN_INDEX`, Request Contract와 Evidence를 생성해 전달하는 역할만 담당
 - 입력: `secret_mcp`가 생성한 작품별 `DESIGN_INDEX`, 공통 Specification, 작품별 Request Contract, Evidence와 `secret_mcp_use`의 프론트엔드 소스
@@ -236,9 +238,11 @@ S09 aggregate
 
 ```text
 현재 누적 parent source 재구성
--> 같은 leaf 하나의 독립 preflight
--> 이미 구현됨: AUDIT_RECLASSIFIED, PR 없음
--> 실제 누락: 같은 leaf와 관련 파일만 patch API로 전달
+-> 같은 leaf의 첫 번째 독립 preflight
+-> 같은 leaf의 두 번째 독립 반증 preflight
+-> 두 판정이 갈리면 세 번째 tie-break
+-> 2/3 합의가 이미 구현됨: AUDIT_RECLASSIFIED, PR 없음
+-> 2/3 합의가 실제 누락: 같은 leaf와 관련 파일만 patch API로 전달
 -> exact before/after 또는 unified diff 후보
 -> orchestrator가 실제 unified diff로 정규화
 -> unified diff guard
@@ -251,8 +255,9 @@ S09 aggregate
 - preflight와 patch 생성에 Section 전체 DESIGN_INDEX를 다시 전달하지 않는다.
 - 한 leaf 응답에 여러 독립 finding이 있으면 `...-01`, `...-02`로 재귀 분할해 각각 호출한다.
 - 한 Requirement 실패가 뒤 Requirement 호출을 막지 않는다.
-- 기존 파일은 exact replacement를 우선한다. `before`는 supplied base file에서 정확히 한 번 일치해야 하며 `after`는 해당 Requirement 하나만 구현해야 한다.
+- 기존 파일은 exact replacement를 우선한다. `before`는 supplied base file에서 정확히 한 번 일치해야 하며 `after`는 해당 Requirement 하나만 구현해야 한다. 같은 응답에 redundant model diff가 있어도 exact replacement가 유효하면 그것만 canonical diff로 변환한다.
 - 모델이 변경 설명만 하고 실제 `+/-` 줄 또는 exact replacement를 생략하면 후보를 거부한다. 원본 문맥을 근거로 모델이 쓰지 않은 추가 줄을 추측하지 않는다.
+- patch 적용 직후 CSS를 구조적으로 다시 파싱한다. 새 custom property를 기존 선언 뒤 같은 물리 줄에 붙이거나, 같은 at-rule scope에 같은 selector를 새로 중복한 후보는 test 전에 거부하고 같은 Requirement의 다음 독립 후보를 요청한다.
 - 실제 diff가 19개 Section 모두에서 나오면 Section 대표 PR도 19개가 남아야 한다.
 - 같은 파일을 연속 수정하면 직전 child commit에서 source slice와 fingerprint를 다시 계산한다.
 - 하위 code PR 역시 최대 5개씩 deepest-first Section branch로 자동 병합한다.
@@ -291,7 +296,7 @@ validator contract hash
 3. 실행 대상으로 선택된 모든 leaf가 API 결과 또는 유효한 V4 PASS cache를 가진다.
 4. `UNKNOWN` leaf가 없다.
 5. 1차 비-PASS Section이 있으면 Section report child PR, 대표 report PR과 대표 Issue 게시가 완전하다.
-6. 2차 `PATCH_REQUIRED` Requirement는 전부 preflight를 받는다.
+6. 2차 `PATCH_REQUIRED` Requirement는 전부 최소 두 개의 서로 독립된 preflight를 받고, 불일치하면 세 번째 tie-break까지 받아 2 대 1 다수결을 확정한다.
 7. 실제 누락으로 확정된 Requirement는 검증된 diff PR을 가지며, 실패 항목이 있으면 workflow가 실패한다.
 8. 모든 child PR은 최대 5개 묶음으로 상위 branch에 정리되고 최종 대표 PR만 열린다.
 9. trigger와 Specification diff가 0이다.
@@ -310,6 +315,28 @@ provider 상한 40 RPM 이론상 최소 전송 시간: 약 27.2분
 ```
 
 이는 고정 계약 수치가 아니다. 문서 내용이 늘거나 줄면 leaf와 요청 수도 자동으로 바뀐다. 재시도, preflight, patch, patched-code re-audit와 regression audit는 1,088회에 추가된다.
+
+## 첫 원격 hardening 실행 기록
+
+[GitHub Actions run 33203422926](https://github.com/yyeongjin/secret_mcp_use/actions/runs/33203422926)은 실제 NVIDIA API와 GitHub 게시 권한을 사용한 첫 V4 hardening E2E다. 이 실행은 성공 기록이 아니라 다음 결함을 찾아낸 실패 기록이며, 결과를 숨기거나 `PASS`로 간주하지 않는다.
+
+```text
+1차 primary leaf: 327
+2차 primary leaf: 761
+전체 primary leaf: 1,088
+patch 후보 호출: 34
+재감사 호출: 89
+Requirement patch record: 19
+미해결 Requirement: S05-IMPL-U0045-R001, S07-IMPL-U0055-R001
+workflow 결과: failure
+```
+
+- 1차 Section 보고서 child PR, byte 보존 통합 문서, 대표 Issue 게시 경로는 실제로 동작했다.
+- 2차 검증 child PR은 가장 깊은 자식부터 Section 브랜치로 자동 병합됐고 Section 대표 draft PR만 남기는 경로가 실제로 동작했다.
+- S05 실패는 공통 `setMenu(open)`이 이미 `document.body.style.overflow`를 관리하는데도 모델이 supplied source에 없는 “Escape로 메뉴 열기” 경로를 발명한 거짓 양성이었다.
+- S07 실패는 모델이 정확한 `height: 674px`에서 `height: clamp(480px, 56vw, 600px)` 교체를 반환했지만 redundant `diff`와 `replacements`를 함께 보냈다는 이유로 유효한 exact replacement까지 폐기한 canonicalization 결함이었다.
+- 이 실행에서 드러난 한 줄 custom property 결합과 같은-scope selector 중복은 코드가 동작하더라도 최소 diff 품질 계약 위반이다. 후속 guard는 이 두 형태를 test 전에 거부한다.
+- 재검증은 이 실행이 만든 PR, Issue와 자동화 branch를 먼저 모두 폐기한 뒤 `main`만 남은 상태에서 시작한다. 새 실행이 성공하기 전에는 이 문서에 전체 성공을 기록하지 않는다.
 
 ## V3 보존 기록 (비규범)
 

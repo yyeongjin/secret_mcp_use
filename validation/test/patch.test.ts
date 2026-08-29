@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import {
   canonicalizePatchOutput,
   guardPatch,
+  guardPatchedSourceQuality,
   inspectUnifiedDiff,
   isCommentOnlyPatch,
   isRetryablePatchCandidateError,
@@ -393,6 +394,87 @@ test("exact before/after replacements become a valid repository diff", () => {
     additions: 1,
     deletions: 1,
   });
+});
+
+test("exact replacements take precedence over a redundant model diff", () => {
+  const fingerprint = `sha256:${"b".repeat(64)}` as Sha256;
+  const source = ".hero { height: 674px; }\n";
+  const auditInput = {
+    node: { sectionId: "S07", fingerprint },
+    implementation: { files: [{
+      path: "frontend/styles.css",
+      contentHash: sha256(source),
+      byteLength: Buffer.byteLength(source),
+      encoding: "utf8",
+      content: source,
+    }] },
+    policy: { allowedWriteGlobs: ["frontend/**"] },
+  } as unknown as NodeAuditInput;
+  const auditOutput = {
+    findings: [{
+      requirementId: "S07-HERO-HEIGHT",
+      evidenceRefs: [],
+      implementationRefs: ["frontend/styles.css"],
+    }],
+  } as unknown as NodeAuditOutput;
+
+  const output = canonicalizePatchOutput({
+    value: {
+      status: "PATCH",
+      addressedRequirementIds: ["S07-HERO-HEIGHT"],
+      reason: "Apply the exact documented clamp.",
+      diff: "diff --git a/wrong b/wrong\n--- a/wrong\n+++ b/wrong\n@@ -1 +1 @@\n-x\n+y\n",
+      replacements: [{
+        path: "frontend/styles.css",
+        before: "height: 674px",
+        after: "height: clamp(480px, 56vw, 600px)",
+      }],
+    },
+    auditInput,
+    auditOutput,
+  });
+
+  assert.deepEqual(output.writeSet.map((entry) => entry.path), ["frontend/styles.css"]);
+  assert.match(output.diff, /^-\.hero \{ height: 674px; \}$/m);
+  assert.match(output.diff, /^\+\.hero \{ height: clamp\(480px, 56vw, 600px\); \}$/m);
+  assert.doesNotMatch(output.diff, /wrong/);
+});
+
+test("patched CSS quality guard rejects joined custom properties and duplicate scoped selectors", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "secret-mcp-css-quality-"));
+  try {
+    await mkdir(path.join(root, "frontend"), { recursive: true });
+    const before = [
+      ":root {",
+      "  --color-primary: #4169f5;",
+      "}",
+      "@media (min-width: 769px) {",
+      "  .hero h1 { line-height: 1.18; }",
+      "}",
+      "",
+    ].join("\n");
+    await writeFile(path.join(root, "frontend/styles.css"), before.replace(
+      "  --color-primary: #4169f5;",
+      "  --color-primary: #4169f5;    --bp-lg: 1024px;",
+    ));
+    await assert.rejects(() => guardPatchedSourceQuality({
+      beforeFiles: [{ path: "frontend/styles.css", content: before }] as NodeAuditInput["implementation"]["files"],
+      repositoryRoot: root,
+      changedPaths: ["frontend/styles.css"],
+    }), /joins multiple custom properties/);
+
+    await writeFile(path.join(root, "frontend/styles.css"), before.replace(
+      "  .hero h1 { line-height: 1.18; }",
+      "  .hero h1 { line-height: 1.18; }\n  .hero h1 { line-height: 1.55; }",
+    ));
+    await assert.rejects(() => guardPatchedSourceQuality({
+      beforeFiles: [{ path: "frontend/styles.css", content: before }] as NodeAuditInput["implementation"]["files"],
+      repositoryRoot: root,
+      changedPaths: ["frontend/styles.css"],
+    }), /introduces duplicate selector/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("patch canonicalization does not guess omitted change markers", () => {

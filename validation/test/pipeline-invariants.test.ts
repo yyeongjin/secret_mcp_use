@@ -23,6 +23,11 @@ test("PATCH_REQUIRED scheduling cannot regain dependency or write-set wait gates
   assert.doesNotMatch(runPatches, /if \(finalRecord\) break/);
   assert.doesNotMatch(runPatches, /finalRecord \|\| \(!childPublished/);
   assert.match(runPatches, /PATCH_PREFLIGHT_SYSTEM_PROMPT/);
+  assert.match(runPatches, /PATCH_PREFLIGHT_CHALLENGE_SYSTEM_PROMPT/);
+  assert.match(runPatches, /patch-preflight-challenge/);
+  assert.match(runPatches, /patch-preflight-tiebreak/);
+  assert.match(runPatches, /firstPatchVote !== secondPatchVote/);
+  assert.match(runPatches, /patchVotes\.length >= 2/);
   assert.match(runPatches, /AUDIT_RECLASSIFIED/);
   assert.match(runPatches, /patch-conflict-preflight/);
   assert.match(runPatches, /PATCH_CONFLICT_PREFLIGHT_SYSTEM_PROMPT/);
@@ -132,6 +137,9 @@ test("V4 audits source leaves bottom-up and publishes one verbatim Stage 1 repor
   assert.match(document, /모든 물리 HTTP 시작에 적용/);
   assert.match(document, /마지막 `UNKNOWN`으로 덮어쓰지 않는다/);
   assert.match(document, /exact before\/after 또는 unified diff 후보/);
+  assert.match(document, /최소 두 개의 서로 독립된 preflight/);
+  assert.match(document, /2 대 1 다수결/);
+  assert.match(document, /같은 at-rule scope에 같은 selector를 새로 중복/);
 });
 
 test("patch candidates use exact replacements without guessing omitted code", async () => {
