@@ -26,6 +26,7 @@
     --color-primary: #4169f5;
     --color-primary-pressed: #2748be;
     --color-overlay: rgb(0 0 0 / 52%);
+    --color-primary-hover: #3157DD;
     --container-main: 1012px;
     --container-shell: 1144px;
     --gutter-desktop: 24px;
