@@ -96,7 +96,7 @@
   .mobile-menu__top { display: flex; align-items: center; justify-content: space-between; min-height: 44px; }
   .icon-button { display: inline-grid; width: 44px; height: 44px; place-items: center; background: transparent; color: #111; cursor: pointer; }
   .mobile-menu__links { margin-top: 34px; list-style: none; border-top: 1px solid var(--color-border); }
-  .mobile-menu__links a { display: flex; min-height: 56px; align-items: center; border-bottom: 1px solid var(--color-border); font-size: 17px; font-weight: 600; }
+  .mobile-menu__links a { display: flex; min-height: 56px; align-items: center; border-bottom: 1px solid var(--color-border); font-size: 17px; font-weight: 600; padding-left: 20px; }
   .mobile-menu__locale { display: flex; width: 100%; min-height: 52px; margin-top: 20px; align-items: center; gap: 8px; background: transparent; color: #111; cursor: pointer; }
   .mobile-menu__locale svg:last-child { margin-left: auto; }
 
