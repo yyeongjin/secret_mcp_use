@@ -41,6 +41,10 @@
     --motion-slow: 280ms;
     --ease: cubic-bezier(.2, .8, .2, 1);
     --shadow-focus: 0 0 0 3px rgb(65 105 245 / 30%);
+    --font-size-game-item: 22px;
+    --font-weight-game-item: 700;
+    --line-height-game-item: 1.55;
+    --letter-spacing-game-item: -0.04em;
   }
 }
 
