@@ -113,6 +113,7 @@ test("the normative pipeline document permanently forbids dependency blocking", 
 test("V4 audits source leaves bottom-up and publishes one verbatim Stage 1 report boundary", async () => {
   const orchestrator = await readFile(new URL("../src/orchestrator.ts", import.meta.url), "utf8");
   const github = await readFile(new URL("../src/github.ts", import.meta.url), "utf8");
+  const reports = await readFile(new URL("../src/document-reports.ts", import.meta.url), "utf8");
   const document = await readFile(
     new URL("../../IDEA_VALIDATION_AND_PR_PIPELINE.ko.md", import.meta.url),
     "utf8",
@@ -129,7 +130,13 @@ test("V4 audits source leaves bottom-up and publishes one verbatim Stage 1 repor
   assert.match(github, /issues\?state=all&per_page=100/);
   assert.match(github, /issue\.state === "open" && issue\.body\?\.includes\(marker\)/);
   assert.match(github, /Stage 1 report publication refused unresolved Sections/);
+  assert.match(github, /MANIFEST\.md/);
+  assert.doesNotMatch(github, /manifest\.json/);
   assert.doesNotMatch(github, /publishDocumentGapIssues/);
+  assert.match(reports, /명세서 원문/);
+  assert.match(reports, /누락 판정 원문/);
+  assert.doesNotMatch(reports, /```json/);
+  assert.doesNotMatch(reports, /Verbatim normalized Section output/);
   assert.match(document, /모든 leaf가 PASS일 때만 Section이 PASS/);
   assert.match(document, /대표 Issue는 작품당 하나만 연다/);
   assert.match(document, /최대 55,000 UTF-8 byte 단위 댓글/);

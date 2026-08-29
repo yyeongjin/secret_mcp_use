@@ -30,6 +30,7 @@
 18. patch 모델은 기존 파일 수정에 대해 repository path와 원본에서 정확히 한 번 일치하는 `before`, 완전한 `after`를 반환할 수 있다. 오케스트레이터가 이를 실제 unified diff로 변환한 뒤 기존 guard·test·재감사·회귀 검사를 전부 수행한다. 모델 계약은 자유형 diff와 exact replacement를 함께 쓰지 않도록 요구하지만, 응답에 둘이 함께 존재하면 byte 단위 검증이 가능한 exact replacement만 canonical source of truth로 사용하고 자유형 diff는 버린다. 원본 줄과 다른 `before`, 중복 anchor, no-op replacement, 변경 표식이 없는 설명성 diff는 후보 실패다. 오케스트레이터가 모델이 쓰지 않은 변경 줄을 추측해 복원하면 안 된다.
 19. 2차 primary 감사가 `PATCH_REQUIRED`로 올린 Requirement는 현재 누적 부모 소스에 대해 최소 두 개의 서로 독립된 preflight를 항상 받는다. 두 판정의 patch 필요 여부가 다르면 세 번째 독립 tie-break를 호출하고 2 대 1 다수결로만 patch 진행 또는 `AUDIT_RECLASSIFIED`를 확정한다. 단일 preflight의 `PASS`, `PATCH_REQUIRED` 또는 blocked 판정 하나만으로 코드 수정 여부를 확정하면 안 된다.
 20. preflight는 supplied source에 실제로 존재하는 caller, shared state-transition function, selector, cascade와 media scope만 추적한다. 존재하지 않는 직접 DOM 변경, 이벤트 경로, 상태 또는 사용자 행동을 상상해 누락으로 만들면 안 되며, 공통 함수에서 구현된 동작을 모든 caller에 중복 구현하도록 요구해서도 안 된다. patch guard는 새로 붙여 쓴 여러 CSS custom property와 같은 at-rule scope에 같은 selector를 새로 중복하는 변경을 거부한다.
+21. 1차 Section 보고서, 통합 `DOCUMENT_GAPS.md`, 대표 PR과 대표 Issue에는 normalized audit JSON, leaf-record JSON 또는 `manifest.json`을 게시하지 않는다. 각 누락 항목은 Requirement ID, 명세서 원문, 누락 판정 원문과 검증 hash를 사람이 읽는 Markdown 평문으로 기록한다. 통합 단계는 이 평문 Section bytes를 Section 순서대로 이어 붙일 뿐 요약하거나 JSON으로 다시 직렬화하지 않으며, 게시 manifest도 `MANIFEST.md` 평문 표로 작성한다. 기계 검증용 API JSON은 비공개 실행 artifact 경계 안에서만 사용할 수 있다.
 
 ## 문서 상태
 
@@ -184,13 +185,31 @@ report-root branch
 ```
 
 - Section report child PR 하나는 `reports/document-gaps/<target>/<hash>/sections/SXX.md` 하나만 추가한다.
-- `DOCUMENT-GAPS` child는 `DOCUMENT_GAPS.md`와 `manifest.json`을 추가한다.
+- `DOCUMENT-GAPS` child는 JSON이 없는 `DOCUMENT_GAPS.md`와 평문 표 형식의 `MANIFEST.md`를 추가한다.
 - child PR은 최대 5개씩 자동 병합하고 child branch를 삭제한다.
 - 대표 report draft PR은 자동 병합하지 않는다.
 - `DOCUMENT_GAPS.md`는 Section report bytes를 Section 번호순으로 BEGIN/END marker 사이에 그대로 이어 붙인다.
 - Section report는 검증된 normalized JSON을 그대로 담고 원문 hash와 byte length를 기록한다.
 - 대표 Issue는 작품당 하나만 연다. 본문 한도를 넘으면 최대 55,000 UTF-8 byte 단위 댓글로 나누며 댓글 payload를 순서대로 연결하면 원본 `DOCUMENT_GAPS.md`가 복원되어야 한다.
 - 기존 V3 Section Issue는 본문을 바꾸지 않는다. 대표 Issue에 기존 본문을 verbatim block으로 복제하고 hash를 남긴 뒤, 기존 Issue에 대표 Issue 포인터 댓글을 추가하고 닫는다.
+
+### 1차 보고서 표시 형식
+
+게시되는 Section 문서는 다음처럼 사람이 바로 읽을 수 있어야 한다.
+
+```text
+## 1. S01-DOC-...
+- 판정: DOCUMENT_GAP / MISSING
+- 원문 위치: DESIGN_INDEX_SPECIFICATION.md:...
+
+### 명세서 원문
+<명세서의 해당 원문을 그대로 기록>
+
+### 누락 판정 원문
+<독립 감사가 반환한 누락 설명을 그대로 기록>
+```
+
+`Verbatim normalized Section output`, `Verbatim normalized leaf records`, JSON code fence와 `schemaVersion` dump는 사용자용 보고서에 존재하면 안 된다. 원문 보존은 JSON 객체를 보존한다는 뜻이 아니라, 사람이 검토해야 하는 명세서 본문과 누락 판정 본문을 변형·요약하지 않는다는 뜻이다.
 
 ## 2차 구현 감사 입력과 출력
 
@@ -337,6 +356,8 @@ workflow 결과: failure
 - S07 실패는 모델이 정확한 `height: 674px`에서 `height: clamp(480px, 56vw, 600px)` 교체를 반환했지만 redundant `diff`와 `replacements`를 함께 보냈다는 이유로 유효한 exact replacement까지 폐기한 canonicalization 결함이었다.
 - 이 실행에서 드러난 한 줄 custom property 결합과 같은-scope selector 중복은 코드가 동작하더라도 최소 diff 품질 계약 위반이다. 후속 guard는 이 두 형태를 test 전에 거부한다.
 - 재검증은 이 실행이 만든 PR, Issue와 자동화 branch를 먼저 모두 폐기한 뒤 `main`만 남은 상태에서 시작한다. 새 실행이 성공하기 전에는 이 문서에 전체 성공을 기록하지 않는다.
+
+후속 [GitHub Actions run 33224800546](https://github.com/yyeongjin/secret_mcp_use/actions/runs/33224800546)은 약 2시간 동안 audit step을 수행하다 GitHub runner shutdown 신호로 취소됐다. validator가 성공 또는 실패 summary를 생성하기 전의 외부 취소였고 artifact 업로드 step도 실행되지 않았으므로, 이 실행에서 누락 여부나 구현 완료 여부를 결론 내리면 안 된다. 또한 이 실행 전에 사용한 JSON 기반 Stage 1 보고서 형식은 위 평문 게시 규칙으로 폐기한다.
 
 ## V3 보존 기록 (비규범)
 

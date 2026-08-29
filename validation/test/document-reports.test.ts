@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildDocumentGapReportBundle,
   chunkVerbatimReport,
+  type DocumentLeafReportRecord,
 } from "../src/document-reports.ts";
 import { hashJson, sha256 } from "../src/hash.ts";
 import type { AtomicRequirementLeaf, DocumentAuditOutput, SectionId } from "../src/types.ts";
@@ -27,38 +28,43 @@ function output(sectionId: SectionId, status: DocumentAuditOutput["status"]): Do
   };
 }
 
-test("the combined Stage 1 report embeds every non-PASS Section report byte-for-byte", () => {
+function leafRecord(runId: string): DocumentLeafReportRecord {
+  const leafOutput = output("S01", "DOCUMENT_GAP");
   const leaf: AtomicRequirementLeaf = {
-    requirementId: "S01-DOC-U0002-R001",
+    requirementId: "S01-DOC-U0001-R001",
     stage: "document",
     sectionId: "S01",
-    sourceUnitId: "S01-U0002",
+    sourceUnitId: "S01-U0001",
     sourcePath: "DESIGN_INDEX_SPECIFICATION.md",
     sourceKind: "section",
     startOffset: 17,
-    endOffset: 39,
+    endOffset: 43,
     startLine: 2,
     endLine: 2,
-    statement: "Exact source requirement",
-    sourceHash: sha256("Exact source requirement\n"),
+    statement: "- Exact source requirement",
+    sourceHash: sha256("- Exact source requirement\n"),
     fingerprint: sha256("leaf"),
   };
-  const leafOutput = output("S01", "DOCUMENT_GAP");
+  return {
+    leaf,
+    requestId: `${runId}:document-audit:S01:S01-DOC-U0001-R001`,
+    attemptRequestIds: [`${runId}:document-audit:S01:S01-DOC-U0001-R001`],
+    output: leafOutput,
+    outputHash: hashJson(leafOutput),
+    rawResponseHash: sha256(`raw-${runId}`),
+  };
+}
+
+test("the combined Stage 1 report embeds every non-PASS Section report byte-for-byte", () => {
+  const record = leafRecord("run-test");
   const bundle = buildDocumentGapReportBundle({
     targetId: "gdweb-test",
     triggerPath: "trigger/DESIGN_INDEX_gdweb-test.md",
     runId: "run-test",
-    outputs: [output("S01", "DOCUMENT_GAP"), output("S02", "PASS"), output("S03", "UNKNOWN")],
-    leafRecords: [{
-      leaf,
-      requestId: "run-test:document-audit:S01:S01-DOC-U0002-R001",
-      attemptRequestIds: ["run-test:document-audit:S01:S01-DOC-U0002-R001"],
-      output: leafOutput,
-      outputHash: hashJson(leafOutput),
-      rawResponseHash: sha256("raw"),
-    }],
+    outputs: [output("S01", "DOCUMENT_GAP"), output("S02", "PASS")],
+    leafRecords: [record],
   });
-  assert.deepEqual(bundle.sectionReports.map((report) => report.sectionId), ["S01", "S03"]);
+  assert.deepEqual(bundle.sectionReports.map((report) => report.sectionId), ["S01"]);
   for (const report of bundle.sectionReports) {
     const begin = `<!-- BEGIN VERBATIM ${report.sectionId} ${report.contentHash} ${report.byteLength} -->\n`;
     const end = `<!-- END VERBATIM ${report.sectionId} -->`;
@@ -69,9 +75,35 @@ test("the combined Stage 1 report embeds every non-PASS Section report byte-for-
     assert.equal(bundle.combinedContent.slice(start + begin.length, finish), report.content);
     assert.equal(sha256(report.content), report.contentHash);
   }
-  assert.match(bundle.combinedContent, /run-test:document-audit:S01:S01-DOC-U0002-R001/);
-  assert.match(bundle.combinedContent, /Exact source requirement/);
-  assert.match(bundle.combinedContent, new RegExp(leaf.sourceHash));
+  assert.match(bundle.combinedContent, /- Exact source requirement/);
+  assert.match(bundle.combinedContent, /S01 exact original finding/);
+  assert.match(bundle.combinedContent, new RegExp(record.leaf.sourceHash));
+  assert.match(bundle.combinedContent, /### 명세서 원문/);
+  assert.match(bundle.combinedContent, /### 누락 판정 원문/);
+  const sourceMarker = `<!-- BEGIN EXACT SPECIFICATION SOURCE ${record.leaf.requirementId} ${sha256(record.leaf.statement)} -->\n`;
+  const sourceEnd = `\n<!-- END EXACT SPECIFICATION SOURCE ${record.leaf.requirementId} -->`;
+  const sourceStart = bundle.combinedContent.indexOf(sourceMarker);
+  assert.notEqual(sourceStart, -1);
+  assert.equal(
+    bundle.combinedContent.slice(sourceStart + sourceMarker.length, bundle.combinedContent.indexOf(sourceEnd, sourceStart)),
+    record.leaf.statement,
+  );
+  const finding = record.output.findings[0].finding;
+  const findingMarker = `<!-- BEGIN EXACT GAP FINDING ${record.leaf.requirementId} ${sha256(finding)} -->\n`;
+  const findingEnd = `\n<!-- END EXACT GAP FINDING ${record.leaf.requirementId} -->`;
+  const findingStart = bundle.combinedContent.indexOf(findingMarker);
+  assert.notEqual(findingStart, -1);
+  assert.equal(
+    bundle.combinedContent.slice(findingStart + findingMarker.length, bundle.combinedContent.indexOf(findingEnd, findingStart)),
+    finding,
+  );
+  assert.doesNotMatch(bundle.combinedContent, /run-test:document-audit/);
+  assert.doesNotMatch(bundle.combinedContent, /```json/);
+  assert.doesNotMatch(bundle.combinedContent, /"schemaVersion"/);
+  assert.doesNotMatch(bundle.combinedContent, /Verbatim normalized Section output/);
+  assert.doesNotMatch(bundle.combinedContent, /normalized leaf records/i);
+  assert.doesNotMatch(bundle.manifestContent, /[{}\[\]"]/);
+  assert.match(bundle.manifestContent, /\| S01 \| DOCUMENT_GAP \| 1 \|/);
   assert.doesNotMatch(bundle.combinedContent, /summary generated by/i);
 });
 
@@ -90,12 +122,14 @@ test("the same validated findings produce the same report hash across workflow r
     triggerPath: "trigger/DESIGN_INDEX_gdweb-test.md",
     runId: "run-one",
     outputs: [output("S01", "DOCUMENT_GAP")],
+    leafRecords: [leafRecord("run-one")],
   });
   const second = buildDocumentGapReportBundle({
     targetId: "gdweb-test",
     triggerPath: "trigger/DESIGN_INDEX_gdweb-test.md",
     runId: "run-two",
     outputs: [output("S01", "DOCUMENT_GAP")],
+    leafRecords: [leafRecord("run-two")],
   });
   assert.equal(first.combinedHash, second.combinedHash);
   assert.equal(first.combinedContent, second.combinedContent);

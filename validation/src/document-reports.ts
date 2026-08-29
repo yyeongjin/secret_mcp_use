@@ -32,6 +32,7 @@ export interface DocumentGapReportBundle {
   sectionReports: DocumentSectionReport[];
   combinedContent: string;
   combinedHash: Sha256;
+  manifestContent: string;
   manifest: {
     schemaVersion: "design-validation/document-gap-report/v1";
     targetId: string;
@@ -56,8 +57,16 @@ export interface VerbatimReportChunk {
   byteLength: number;
 }
 
-function normalizedOutput(output: DocumentAuditOutput): string {
-  return `${JSON.stringify(output, null, 2)}\n`;
+function exactTextBlock(args: {
+  label: "SPECIFICATION SOURCE" | "GAP FINDING";
+  requirementId: string;
+  content: string;
+}): string {
+  return [
+    `<!-- BEGIN EXACT ${args.label} ${args.requirementId} ${sha256(args.content)} -->`,
+    args.content,
+    `<!-- END EXACT ${args.label} ${args.requirementId} -->`,
+  ].join("\n");
 }
 
 export function buildDocumentSectionReport(args: {
@@ -66,40 +75,61 @@ export function buildDocumentSectionReport(args: {
   output: DocumentAuditOutput;
   leafRecords?: DocumentLeafReportRecord[];
 }): DocumentSectionReport {
-  const rawOutput = normalizedOutput(args.output);
   const leafRecords = [...(args.leafRecords ?? [])]
     .sort((left, right) => (
       left.leaf.startOffset - right.leaf.startOffset ||
       left.leaf.requirementId.localeCompare(right.leaf.requirementId)
     ));
-  const rawLeafRecords = `${JSON.stringify(leafRecords, null, 2)}\n`;
+  const gapEntries = leafRecords.flatMap((record) => (
+    record.output.status === "PASS"
+      ? []
+      : record.output.findings.map((finding) => ({ record, finding }))
+  ));
+  const aggregateFindingIds = new Set(args.output.findings.map((finding) => finding.requirementId));
+  const reportFindingIds = new Set(gapEntries.map(({ finding }) => finding.requirementId));
+  const missingFindingIds = [...aggregateFindingIds].filter((requirementId) => !reportFindingIds.has(requirementId));
+  if (missingFindingIds.length > 0) {
+    throw new Error(
+      `PLAIN_REPORT_SOURCE_MISSING: ${args.output.sectionId} has no source leaf for ${missingFindingIds.join(", ")}.`,
+    );
+  }
   const content = [
-    `# ${args.output.sectionId} Stage 1 document audit`,
+    `# ${args.output.sectionId} 1차 문서 누락 보고서`,
     "",
-    `- Target: \`${args.targetId}\``,
-    `- Trigger: \`${args.triggerPath}\``,
-    `- Status: \`${args.output.status}\``,
-    `- Fingerprint: \`${args.output.fingerprint}\``,
-    `- Normalized output SHA-256: \`${sha256(rawOutput)}\``,
-    `- Leaf records: \`${leafRecords.length}\``,
-    `- Leaf records SHA-256: \`${sha256(rawLeafRecords)}\``,
+    `- 대상: \`${args.targetId}\``,
+    `- 입력 문서: \`${args.triggerPath}\``,
+    `- Section 상태: \`${args.output.status}\``,
+    `- Section fingerprint: \`${args.output.fingerprint}\``,
+    `- 누락 항목: \`${gapEntries.length}\``,
     "",
-    "## Verbatim normalized Section output",
+    "아래 내용은 JSON 직렬화나 LLM 요약이 아닙니다. 각 항목의 명세서 원문과 누락 판정 원문을 읽을 수 있는 Markdown 평문으로 그대로 기록합니다.",
     "",
-    "The JSON block below is copied byte-for-byte from the validated normalized Section output. It is not summarized or rewritten.",
-    "",
-    "```json",
-    rawOutput.trimEnd(),
-    "```",
-    "",
-    "## Verbatim normalized leaf records",
-    "",
-    "Each record preserves the owned source span, source hash, request ID, retry lineage, validated leaf output, output hash, and raw response hash. The JSON block is not summarized or rewritten.",
-    "",
-    "```json",
-    rawLeafRecords.trimEnd(),
-    "```",
-    "",
+    ...gapEntries.flatMap(({ record, finding }, index) => [
+      `## ${index + 1}. ${finding.requirementId}`,
+      "",
+      `- 판정: \`${record.output.status}\` / \`${finding.status}\``,
+      `- 원문 위치: \`${record.leaf.sourcePath}:${record.leaf.startLine}\``,
+      `- 원본 source span SHA-256: \`${record.leaf.sourceHash}\``,
+      `- 표시 원문 SHA-256: \`${sha256(record.leaf.statement)}\``,
+      `- 판정 SHA-256: \`${sha256(finding.finding)}\``,
+      "",
+      "### 명세서 원문",
+      "",
+      exactTextBlock({
+        label: "SPECIFICATION SOURCE",
+        requirementId: finding.requirementId,
+        content: record.leaf.statement,
+      }),
+      "",
+      "### 누락 판정 원문",
+      "",
+      exactTextBlock({
+        label: "GAP FINDING",
+        requirementId: finding.requirementId,
+        content: finding.finding,
+      }),
+      "",
+    ]),
   ].join("\n");
   return {
     sectionId: args.output.sectionId,
@@ -108,7 +138,7 @@ export function buildDocumentSectionReport(args: {
     content,
     contentHash: sha256(content),
     byteLength: Buffer.byteLength(content),
-    leafCount: leafRecords.length,
+    leafCount: gapEntries.length,
   };
 }
 
@@ -135,7 +165,7 @@ export function buildDocumentGapReportBundle(args: {
     `- Trigger: \`${args.triggerPath}\``,
     `- Section reports: \`${sectionReports.length}\``,
     "",
-    "Every embedded Section report is preserved verbatim between its BEGIN and END markers. This file contains no LLM-generated summary.",
+    "각 Section 보고서는 명세서 원문과 누락 판정 원문을 JSON 없이 읽을 수 있는 Markdown 평문으로 보존합니다. 모델에게 통합 요약을 요청하지 않습니다.",
     "",
   ].join("\n");
   const combinedContent = `${header}${sectionReports.map((report) => (
@@ -158,6 +188,20 @@ export function buildDocumentGapReportBundle(args: {
       leafCount: report.leafCount,
     })),
   };
+  const manifestContent = [
+    "# Stage 1 문서 누락 보고서 목록",
+    "",
+    `- 대상: \`${args.targetId}\``,
+    `- 입력 문서: \`${args.triggerPath}\``,
+    `- 통합 보고서 SHA-256: \`${combinedHash}\``,
+    "",
+    "| Section | 상태 | 누락 항목 | 보고서 SHA-256 | UTF-8 bytes |",
+    "| --- | --- | ---: | --- | ---: |",
+    ...sectionReports.map((report) => (
+      `| ${report.sectionId} | ${report.status} | ${report.leafCount} | ${report.contentHash} | ${report.byteLength} |`
+    )),
+    "",
+  ].join("\n");
   return {
     targetId: args.targetId,
     triggerPath: args.triggerPath,
@@ -165,6 +209,7 @@ export function buildDocumentGapReportBundle(args: {
     sectionReports,
     combinedContent,
     combinedHash,
+    manifestContent,
     manifest: manifestBase,
   };
 }

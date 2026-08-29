@@ -2576,7 +2576,11 @@ async function runTrigger(args: {
     documentReportBundle.combinedContent,
     "utf8",
   );
-  await writeJson(path.join(documentReportsDirectory, "manifest.json"), documentReportBundle.manifest);
+  await writeFile(
+    path.join(documentReportsDirectory, "MANIFEST.md"),
+    documentReportBundle.manifestContent,
+    "utf8",
+  );
   for (const report of documentReportBundle.sectionReports) {
     await writeFile(
       path.join(documentReportsDirectory, "sections", `${report.sectionId}.md`),

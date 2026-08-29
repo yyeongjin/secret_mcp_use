@@ -115,14 +115,14 @@ function buildDocumentNodeCheckOutput(args: {
       `- Independent request prefix: \`${args.summary.runId}:document-audit:${args.node.sectionId}:<leaf-id>\``,
       "- Source code included: `false`",
       "- Frontend writes: `forbidden`",
-      `- Verbatim report publication: \`${args.node.documentAuditStatus === "DOCUMENT_GAP" ? "included in representative report PR and Issue" : "not required"}\``,
+      `- Plain-text report publication: \`${args.node.documentAuditStatus === "DOCUMENT_GAP" ? "included in representative report PR and Issue" : "not required"}\``,
     ].join("\n"),
     text: [
       "## Document completeness findings",
       "",
       renderFindings(args.node.documentFindings ?? []),
       "",
-      "Stage 1 cannot edit DESIGN_INDEX or frontend code. Non-PASS Section outputs are preserved verbatim in report-only child PRs, one representative report PR, and one representative Issue per work.",
+      "Stage 1 cannot edit DESIGN_INDEX or frontend code. Non-PASS findings are published as readable Markdown containing the exact Specification source and exact finding text, never as a normalized JSON dump.",
     ].join("\n"),
   };
 }
@@ -341,7 +341,7 @@ function reportChildBody(args: {
   contentHash: Sha256;
 }): string {
   return [
-    "## Stage 1 verbatim report child",
+    "## Stage 1 plain-text report child",
     "",
     `- Target: \`${args.bundle.targetId}\``,
     `- Child: \`${args.childId}\``,
@@ -368,7 +368,7 @@ async function publishReportChild(args: {
   const commit = await createGitCommitWithFiles({
     config: args.config,
     parentCommit: args.baseCommit,
-    message: `docs(${args.childId.toLowerCase()}): add verbatim Stage 1 report`,
+    message: `docs(${args.childId.toLowerCase()}): add plain-text Stage 1 report`,
     files: args.files,
   });
   await createAutomationBranch({ config: args.config, branch, commit });
@@ -377,7 +377,7 @@ async function publishReportChild(args: {
     "POST",
     `/repos/${args.config.repository}/pulls`,
     {
-      title: `docs(${args.childId.toLowerCase()}): preserve Stage 1 report`,
+      title: `docs(${args.childId.toLowerCase()}): preserve plain-text Stage 1 report`,
       head: branch,
       base: args.baseBranch,
       body: reportChildBody(args),
@@ -404,13 +404,13 @@ function representativeReportBody(args: {
     "",
     `- Target: \`${args.bundle.targetId}\``,
     `- Trigger: \`${args.bundle.triggerPath}\``,
-    `- Verbatim Section reports: \`${args.bundle.sectionReports.length}\``,
+    `- Plain-text Section reports: \`${args.bundle.sectionReports.length}\``,
     `- Consolidated report: \`${args.reportPath}/DOCUMENT_GAPS.md\``,
     `- Report hash: \`${args.bundle.combinedHash}\``,
     `- Internal child PRs: \`${args.children.length}\``,
     "- Maximum children merged per batch: `5`",
     "",
-    "Every Section report is embedded byte-for-byte in DOCUMENT_GAPS.md. No LLM summary or paraphrase is used. Internal child PRs were merged deepest-first into this branch; this draft PR is the only human merge boundary.",
+    "DOCUMENT_GAPS.md contains readable Markdown only: the exact Specification source text and the exact gap finding text. It contains no normalized JSON dump and no LLM-generated combined summary. Internal child PRs were merged deepest-first into this branch; this draft PR is the only human merge boundary.",
     "",
     ...args.children.map((child) => `- [${child.patchNodeId} PR #${child.number}](${child.url})`),
     "",
@@ -444,10 +444,10 @@ async function publishRepresentativeDocumentIssue(args: {
     `- Representative report PR: [#${args.pull.number}](${args.pull.html_url})`,
     `- Repository report: \`${args.reportPath}/DOCUMENT_GAPS.md\``,
     `- Exact report hash: \`${args.bundle.combinedHash}\``,
-    `- Verbatim chunks below: \`${chunks.length}\``,
+    `- Plain-text chunks below: \`${chunks.length}\``,
     `- Migrated legacy Section Issues: \`${legacyIssues.length}\``,
     "",
-    "The following comments preserve the consolidated report as exact UTF-8 chunks. Concatenating chunk payloads in index order reproduces DOCUMENT_GAPS.md and its SHA-256 hash. Nothing is summarized.",
+    "The following comments contain the same readable Markdown report in exact UTF-8 chunks. Concatenating them in index order reproduces DOCUMENT_GAPS.md and its SHA-256 hash. No JSON report envelope or combined LLM summary is used.",
     "",
     marker,
     documentReportHashMarker(args.bundle.combinedHash),
@@ -603,7 +603,7 @@ export async function publishDocumentGapReports(args: {
         contentHash: bundle.combinedHash,
         files: [
           { path: `${reportPath}/DOCUMENT_GAPS.md`, content: bundle.combinedContent },
-          { path: `${reportPath}/manifest.json`, content: `${JSON.stringify(bundle.manifest, null, 2)}\n` },
+          { path: `${reportPath}/MANIFEST.md`, content: bundle.manifestContent },
         ],
       },
     ];
