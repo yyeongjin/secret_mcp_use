@@ -11,6 +11,7 @@ const gameImage = document.querySelector('[data-game-image]');
 const gameTitle = document.querySelector('[data-game-title]');
 const gamePlatform = document.querySelector('[data-game-platform]');
 const relatedSites = document.querySelector('[data-related-sites]');
+const brandedPlaceholder = './assets/hero-world.jpg';
 
 const games = {
   odin: {
