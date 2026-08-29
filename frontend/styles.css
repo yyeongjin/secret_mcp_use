@@ -130,7 +130,7 @@
 
   .news { min-height: 625px; padding-top: 80px; }
   .editorial-track { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 29px; margin-top: 52px; }
-  .editorial-card { min-width: 0; }
+  .editorial-card { min-width: 0; width: 318px; }
   .editorial-card a { display: block; }
   .editorial-card img { width: 100%; aspect-ratio: 318 / 185; border-radius: 4px; object-fit: cover; }
   .editorial-card__body { padding-top: 16px; }
