@@ -201,6 +201,8 @@
   .related-sites[aria-expanded="true"] svg { transform: rotate(45deg); }
 }
 
+.page {
+}
 @layer responsive {
   @media (max-width: 1024px) {
     .site-header__inner { width: calc(100% - 40px); grid-template-columns: 130px 1fr 56px; }
