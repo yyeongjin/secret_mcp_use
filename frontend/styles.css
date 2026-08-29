@@ -34,7 +34,7 @@
     --header-desktop: 68px;
     --button-height: 49px;
     --space-10: 64px;
-    --focus: 0 0 0 3px rgb(65 105 245 / 32%);
+    --focus: 0 0 0 3px rgb(65 105 245 / 32%);    --shadow-focus: 0 0 0 3px rgb(65 105 245 / 30%);    --bp-sm: 360px;
     --ease: cubic-bezier(.2, .8, .2, 1);
   }
 }
