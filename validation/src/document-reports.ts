@@ -80,14 +80,16 @@ export function buildDocumentSectionReport(args: {
       left.leaf.startOffset - right.leaf.startOffset ||
       left.leaf.requirementId.localeCompare(right.leaf.requirementId)
     ));
-  const gapEntries = leafRecords.flatMap((record) => (
-    record.output.status === "PASS"
-      ? []
-      : record.output.findings.map((finding) => ({ record, finding }))
-  ));
-  const aggregateFindingIds = new Set(args.output.findings.map((finding) => finding.requirementId));
-  const reportFindingIds = new Set(gapEntries.map(({ finding }) => finding.requirementId));
-  const missingFindingIds = [...aggregateFindingIds].filter((requirementId) => !reportFindingIds.has(requirementId));
+  const gapEntries = args.output.findings.map((finding) => {
+    const record = leafRecords.find(({ leaf }) => (
+      finding.requirementId === leaf.requirementId ||
+      finding.requirementId.startsWith(`${leaf.requirementId}-`)
+    ));
+    return { record, finding };
+  });
+  const missingFindingIds = gapEntries
+    .filter(({ record }) => !record)
+    .map(({ finding }) => finding.requirementId);
   if (missingFindingIds.length > 0) {
     throw new Error(
       `PLAIN_REPORT_SOURCE_MISSING: ${args.output.sectionId} has no source leaf for ${missingFindingIds.join(", ")}.`,
@@ -104,32 +106,35 @@ export function buildDocumentSectionReport(args: {
     "",
     "아래 내용은 JSON 직렬화나 LLM 요약이 아닙니다. 각 항목의 명세서 원문과 누락 판정 원문을 읽을 수 있는 Markdown 평문으로 그대로 기록합니다.",
     "",
-    ...gapEntries.flatMap(({ record, finding }, index) => [
-      `## ${index + 1}. ${finding.requirementId}`,
-      "",
-      `- 판정: \`${record.output.status}\` / \`${finding.status}\``,
-      `- 원문 위치: \`${record.leaf.sourcePath}:${record.leaf.startLine}\``,
-      `- 원본 source span SHA-256: \`${record.leaf.sourceHash}\``,
-      `- 표시 원문 SHA-256: \`${sha256(record.leaf.statement)}\``,
-      `- 판정 SHA-256: \`${sha256(finding.finding)}\``,
-      "",
-      "### 명세서 원문",
-      "",
-      exactTextBlock({
-        label: "SPECIFICATION SOURCE",
-        requirementId: finding.requirementId,
-        content: record.leaf.statement,
-      }),
-      "",
-      "### 누락 판정 원문",
-      "",
-      exactTextBlock({
-        label: "GAP FINDING",
-        requirementId: finding.requirementId,
-        content: finding.finding,
-      }),
-      "",
-    ]),
+    ...gapEntries.flatMap(({ record: sourceRecord, finding }, index) => {
+      const record = sourceRecord!;
+      return [
+        `## ${index + 1}. ${finding.requirementId}`,
+        "",
+        `- 판정: \`${record.output.status}\` / \`${finding.status}\``,
+        `- 원문 위치: \`${record.leaf.sourcePath}:${record.leaf.startLine}\``,
+        `- 원본 source span SHA-256: \`${record.leaf.sourceHash}\``,
+        `- 표시 원문 SHA-256: \`${sha256(record.leaf.statement)}\``,
+        `- 판정 SHA-256: \`${sha256(finding.finding)}\``,
+        "",
+        "### 명세서 원문",
+        "",
+        exactTextBlock({
+          label: "SPECIFICATION SOURCE",
+          requirementId: finding.requirementId,
+          content: record.leaf.statement,
+        }),
+        "",
+        "### 누락 판정 원문",
+        "",
+        exactTextBlock({
+          label: "GAP FINDING",
+          requirementId: finding.requirementId,
+          content: finding.finding,
+        }),
+        "",
+      ];
+    }),
   ].join("\n");
   return {
     sectionId: args.output.sectionId,
