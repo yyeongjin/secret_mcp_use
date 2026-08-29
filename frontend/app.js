@@ -56,6 +56,10 @@ function setMenu(open) {
   menuOpen.setAttribute('aria-expanded', String(open));
   menuOpen.setAttribute('aria-label', open ? '메뉴 닫기' : '메뉴 열기');
   document.body.style.overflow = open ? 'hidden' : '';
+  if (header) {
+    header.style.transform = open ? 'translateY(367px)' : '';
+    header.style.transition = 'transform 160ms cubic-bezier(.2, .8, .2, 1)';
+  }
   if (open) {
     menuPanel?.querySelector('button, a')?.focus();
   } else if (document.activeElement && menu.contains(document.activeElement)) {
