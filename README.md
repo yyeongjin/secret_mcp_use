@@ -1,0 +1,1 @@
+# Secret MCP validation state
