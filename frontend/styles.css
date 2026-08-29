@@ -38,6 +38,7 @@
     --button-height: 49px;
     --bp-xl: 1280px;
     --focus: 0 0 0 3px rgb(65 105 245 / 32%);
+    --motion-slow: 280ms;
     --ease: cubic-bezier(.2, .8, .2, 1);
     --shadow-focus: 0 0 0 3px rgb(65 105 245 / 30%);
   }
